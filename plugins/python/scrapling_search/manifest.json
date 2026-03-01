@@ -1,0 +1,46 @@
+{
+    "name": "scrapling_search",
+    "version": "1.0.0",
+    "description": "Web search using Scrapling to scrape search engine results (DuckDuckGo, Google, Bing)",
+    "author": "gorkbot",
+    "entry_point": "tool.py",
+    "parameters": {
+        "query": {
+            "type": "string",
+            "description": "Search query",
+            "required": true
+        },
+        "engine": {
+            "type": "string",
+            "description": "Search engine: duckduckgo, google, or bing",
+            "required": false,
+            "default": "duckduckgo"
+        },
+        "num_results": {
+            "type": "number",
+            "description": "Number of results to return",
+            "required": false,
+            "default": 10
+        },
+        "safe_search": {
+            "type": "boolean",
+            "description": "Enable safe search",
+            "required": false,
+            "default": true
+        },
+        "time_range": {
+            "type": "string",
+            "description": "Time filter: d (day), w (week), m (month), y (year)",
+            "required": false,
+            "default": ""
+        },
+        "locale": {
+            "type": "string",
+            "description": "Locale for search (e.g., us-en, uk-en)",
+            "required": false,
+            "default": "en-us"
+        }
+    },
+    "requires": ["scrapling[fetchers]"],
+    "category": "web"
+}

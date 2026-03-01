@@ -1,0 +1,59 @@
+{
+    "name": "scrapling_spider",
+    "version": "1.0.0",
+    "description": "Full-featured web crawler with concurrency, pause/resume, and proxy rotation",
+    "author": "gorkbot",
+    "entry_point": "tool.py",
+    "parameters": {
+        "urls": {
+            "type": "array",
+            "description": "Starting URLs for the crawl",
+            "required": true,
+            "items": {"type": "string"}
+        },
+        "max_pages": {
+            "type": "number",
+            "description": "Maximum pages to crawl",
+            "required": false,
+            "default": 10
+        },
+        "concurrency": {
+            "type": "number",
+            "description": "Number of concurrent requests",
+            "required": false,
+            "default": 5
+        },
+        "parse_selector": {
+            "type": "string",
+            "description": "CSS selector for items to extract",
+            "required": false,
+            "default": ""
+        },
+        "output": {
+            "type": "string",
+            "description": "Output file for results (JSON)",
+            "required": false,
+            "default": ""
+        },
+        "crawldir": {
+            "type": "string",
+            "description": "Crawl directory for pause/resume",
+            "required": false,
+            "default": ""
+        },
+        "session_type": {
+            "type": "string",
+            "description": "Session type: fast, stealth, or dynamic",
+            "required": false,
+            "default": "fast"
+        },
+        "follow_external": {
+            "type": "boolean",
+            "description": "Allow following external links",
+            "required": false,
+            "default": false
+        }
+    },
+    "requires": ["scrapling[fetchers]"],
+    "category": "web"
+}

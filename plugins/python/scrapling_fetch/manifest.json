@@ -1,0 +1,58 @@
+{
+    "name": "scrapling_fetch",
+    "version": "1.0.0",
+    "description": "Fetch and parse web pages using Scrapling's fast HTTP Fetcher with CSS/XPath selection",
+    "author": "gorkbot",
+    "entry_point": "tool.py",
+    "parameters": {
+        "url": {
+            "type": "string",
+            "description": "URL to fetch",
+            "required": true
+        },
+        "selector": {
+            "type": "string",
+            "description": "CSS or XPath selector to extract elements",
+            "required": false,
+            "default": ""
+        },
+        "method": {
+            "type": "string",
+            "description": "HTTP method (GET, POST, etc.)",
+            "required": false,
+            "default": "GET"
+        },
+        "impersonate": {
+            "type": "string",
+            "description": "Browser to impersonate (chrome, firefox, etc.)",
+            "required": false,
+            "default": "chrome"
+        },
+        "headers": {
+            "type": "object",
+            "description": "HTTP headers as key-value pairs",
+            "required": false,
+            "default": {}
+        },
+        "timeout": {
+            "type": "number",
+            "description": "Request timeout in seconds",
+            "required": false,
+            "default": 30
+        },
+        "get_text": {
+            "type": "boolean",
+            "description": "Extract text content only (vs HTML)",
+            "required": false,
+            "default": false
+        },
+        "get_all": {
+            "type": "boolean",
+            "description": "Get all matches (vs first match only)",
+            "required": false,
+            "default": true
+        }
+    },
+    "requires": ["scrapling[fetchers]"],
+    "category": "web"
+}

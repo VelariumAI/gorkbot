@@ -1,0 +1,58 @@
+{
+    "name": "scrapling_extract",
+    "version": "1.0.0",
+    "description": "Command-line extraction tool - scrape URLs without writing code",
+    "author": "gorkbot",
+    "entry_point": "tool.py",
+    "parameters": {
+        "url": {
+            "type": "string",
+            "description": "URL to extract from",
+            "required": true
+        },
+        "output": {
+            "type": "string",
+            "description": "Output file path (optional, returns as output if not provided)",
+            "required": false,
+            "default": ""
+        },
+        "selector": {
+            "type": "string",
+            "description": "CSS selector to extract",
+            "required": false,
+            "default": ""
+        },
+        "impersonate": {
+            "type": "string",
+            "description": "Browser to impersonate",
+            "required": false,
+            "default": "chrome"
+        },
+        "fetch_mode": {
+            "type": "string",
+            "description": "Fetch mode: get, fetch, or stealthy-fetch",
+            "required": false,
+            "default": "get"
+        },
+        "headless": {
+            "type": "boolean",
+            "description": "Run in headless mode",
+            "required": false,
+            "default": true
+        },
+        "solve_cloudflare": {
+            "type": "boolean",
+            "description": "Solve Cloudflare challenges",
+            "required": false,
+            "default": false
+        },
+        "timeout": {
+            "type": "number",
+            "description": "Timeout in seconds",
+            "required": false,
+            "default": 30
+        }
+    },
+    "requires": ["scrapling[shell]"],
+    "category": "web"
+}

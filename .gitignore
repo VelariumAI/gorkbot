@@ -1,0 +1,35 @@
+# Build artifacts
+bin/
+*.exe
+*.out
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+*.json.log
+
+# Go
+vendor/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime / cache
+pkg/tools/custom/*.go
+~/.config/gorkbot/
+
+# Claude Code internals
+.claude/
+
+# Worktrees
+.agent-worktrees/
+
+# Dist
+dist/
+*.tar.gz
+*.zip
