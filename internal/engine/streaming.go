@@ -339,6 +339,22 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		toolRequests := tools.ParseToolRequests(response)
 
 		if len(toolRequests) == 0 {
+			// Safety net: if the response contained [TOOL_CALL] blocks but the
+			// parser extracted nothing from them (malformed names etc.), inject a
+			// one-time format correction instead of letting SENSE retry blindly.
+			if senseInjections == 0 && containsMalformedToolCall(response) {
+				o.Logger.Warn("Detected unsupported tool call format — injecting correction", "turn", turn+1)
+				formatMsg := "Your previous response used an unsupported tool call format " +
+					"(e.g. [TOOL_CALL] tags or arrow syntax). " +
+					"You MUST use markdown JSON code blocks only:\n" +
+					"```json\n{\"tool\": \"tool_name\", \"parameters\": {\"key\": \"value\"}}\n```\n" +
+					"Please retry with the correct format."
+				o.ConversationHistory.AddUserMessage(formatMsg)
+				o.ConversationHistory.TruncateToTokenLimit(maxContextTokens)
+				fullResponse.Reset()
+				continue
+			}
+
 			// No tools requested, we're done
 			o.Logger.Info("No tool requests found, task complete", "turn", turn+1)
 
@@ -504,6 +520,15 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 	}
 
 	return nil
+}
+
+// containsMalformedToolCall returns true when a response contains tool-call
+// attempts in a format that ParseToolRequests cannot handle, such as [TOOL_CALL]
+// tags, <tool_call> XML, or <tool_use> tags.
+func containsMalformedToolCall(response string) bool {
+	return strings.Contains(response, "[TOOL_CALL]") ||
+		strings.Contains(response, "<tool_call>") ||
+		strings.Contains(response, "<tool_use>")
 }
 
 // streamCallbackWriter implements io.Writer and calls the callback for each write

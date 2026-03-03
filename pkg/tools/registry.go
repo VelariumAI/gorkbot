@@ -542,7 +542,10 @@ func (r *Registry) GetSystemPrompt() string {
 	}
 
 	sb.WriteString("### HOW TO USE A TOOL:\n")
-	sb.WriteString("Output a JSON block in this exact format:\n")
+	sb.WriteString("CRITICAL: Output tool calls ONLY as markdown JSON code blocks (```json ... ```). " +
+		"Do NOT use [TOOL_CALL] tags, XML/HTML tags, arrow syntax (=>), or any other format. " +
+		"The system can ONLY parse the JSON block format shown below.\n\n")
+	sb.WriteString("Correct format — use this EXACTLY:\n")
 	sb.WriteString("```json\n")
 	sb.WriteString("{\n")
 	sb.WriteString("  \"tool\": \"tool_name\",\n")
@@ -551,6 +554,8 @@ func (r *Registry) GetSystemPrompt() string {
 	sb.WriteString("  }\n")
 	sb.WriteString("}\n")
 	sb.WriteString("```\n")
+	sb.WriteString("To call multiple tools, output multiple separate JSON blocks. " +
+		"Never wrap tool calls in [TOOL_CALL] tags or any other delimiter.\n\n")
 
 	return sb.String()
 }

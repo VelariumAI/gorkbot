@@ -1400,15 +1400,21 @@ func (m *Model) callOrchestrator(prompt string) tea.Cmd {
 		inJSONBlock := false
 
 		streamCallback := func(token string) {
-			// 1. If we are definitely inside a tool call block, drop tokens.
+			// 1. If we are inside a tool call block, drop tokens.
+			// Check for the closing marker so we exit the blocked state after it.
 			if inJSONBlock {
+				if strings.Contains(token, "[/TOOL_CALL]") {
+					inJSONBlock = false
+				}
 				return
 			}
 
-			// 2. Heuristic detection: If a chunk looks like the start of a tool call, enter blocked state.
-			// Typical leaks start with `{"tool_calls":` or similar.
-			if strings.Contains(token, "\"tool_calls\"") || strings.Contains(token, "\"function\"") {
-				// Strong signal of raw JSON leak
+			// 2. Heuristic detection: enter blocked state on known tool call markers.
+			// Covers native xAI format ("tool_calls"/"function") and the arrow-syntax
+			// [TOOL_CALL] format emitted by some other AI models.
+			if strings.Contains(token, "\"tool_calls\"") ||
+				strings.Contains(token, "\"function\"") ||
+				strings.Contains(token, "[TOOL_CALL]") {
 				inJSONBlock = true
 				return
 			}

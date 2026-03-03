@@ -1095,7 +1095,7 @@ func (o *Orchestrator) getToolContextInternal(useNative bool) string {
 
 	sb.WriteString("### CRITICAL GUIDELINES:\n")
 	sb.WriteString("1. **Reason First**: Before taking action, briefly explain your reasoning. Why are you choosing a specific tool?\n")
-	sb.WriteString("2. **Consult Gemini**: For complex planning, reasoning, or if you are unsure, use the `consult_gemini` tool to get expert advice.\n")
+	sb.WriteString("2. **Consult Specialist**: For complex planning, reasoning, or if you are unsure, use the `consultation` tool to get expert advice.\n")
 	sb.WriteString("3. **Verify Facts**: If asked for current events or specific data, use `web_search` or `web_fetch`. Do not hallucinate.\n")
 	sb.WriteString("4. **Tool Usage**: Use tools only when necessary. If a simple answer suffices, just answer.\n")
 	if useNative {
