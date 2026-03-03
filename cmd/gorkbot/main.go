@@ -538,6 +538,14 @@ func main() {
 		for _, cat := range saved.DisabledCategories {
 			toolRegistry.SetCategoryEnabled(tools.ToolCategory(cat), false)
 		}
+		// Restore session-disabled providers (user persisted these).
+		if len(saved.DisabledProviders) > 0 {
+			if pm := providers.GetGlobalProviderManager(); pm != nil {
+				for _, id := range saved.DisabledProviders {
+					pm.DisableForSession(id)
+				}
+			}
+		}
 	}
 
 	if memMgr != nil {
@@ -903,6 +911,34 @@ func runTUI(orch *engine.Orchestrator, pm *process.Manager, reg *registry.ModelR
 			GetDiagnosticReport: func() string {
 				return orch.GetSystemState()
 			},
+			ToggleProvider: func(providerID string) (bool, string) {
+				pm := engine.GetProviderManager()
+				if pm == nil {
+					return false, "provider manager unavailable"
+				}
+				if pm.IsSessionDisabled(providerID) {
+					pm.EnableForSession(providerID)
+					st := appState.Get()
+					filtered := removeFromSlice(st.DisabledProviders, providerID)
+					_ = appState.SetDisabledProviders(filtered)
+					return true, providers.ProviderName(providerID) + " enabled"
+				}
+				pm.DisableForSession(providerID)
+				st := appState.Get()
+				_ = appState.SetDisabledProviders(append(st.DisabledProviders, providerID))
+				return false, providers.ProviderName(providerID) + " disabled"
+			},
+			GetProviderEnabled: func() map[string]bool {
+				pm := engine.GetProviderManager()
+				result := map[string]bool{}
+				for _, id := range providers.AllProviders() {
+					result[id] = pm == nil || !pm.IsSessionDisabled(id)
+				}
+				return result
+			},
+			PersistDisabledProviders: func(ids []string) error {
+				return appState.SetDisabledProviders(ids)
+			},
 		}
 
 		// Wire extras: scheduler, telegram, user-defined commands.
@@ -1020,6 +1056,17 @@ func buildCommandModelInfo(models []registry.ModelDefinition) []commands.ModelIn
 	return result
 }
 
+// removeFromSlice returns a new slice with all occurrences of item removed.
+func removeFromSlice(slice []string, item string) []string {
+	result := make([]string, 0, len(slice))
+	for _, s := range slice {
+		if s != item {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
 // handleSetup runs the interactive setup wizard
 func handleSetup(configDir string) {
 	reader := bufio.NewReader(os.Stdin)
@@ -1090,10 +1137,6 @@ func handleStatus() {
 
 	xaiKey := os.Getenv("XAI_API_KEY")
 	geminiKey := os.Getenv("GEMINI_API_KEY")
-	geminiIsDefault := false
-	if geminiKey == "" {
-		geminiIsDefault = true
-	}
 
 	if xaiKey != "" {
 		masked := xaiKey
@@ -1110,11 +1153,7 @@ func handleStatus() {
 		if len(geminiKey) > 8 {
 			masked = geminiKey[:4] + "..." + geminiKey[len(geminiKey)-4:]
 		}
-		if geminiIsDefault {
-			fmt.Printf("Gemini API Key:  ✅ Embedded default (%s)\n", masked)
-		} else {
-			fmt.Printf("Gemini API Key:  ✅ Set (%s)\n", masked)
-		}
+		fmt.Printf("Gemini API Key:  ✅ Set (%s)\n", masked)
 	} else {
 		fmt.Printf("Gemini API Key:  ❌ Not set (Consultant features disabled)\n")
 	}

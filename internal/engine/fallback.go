@@ -1,0 +1,194 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/velariumai/gorkbot/pkg/ai"
+	"github.com/velariumai/gorkbot/pkg/providers"
+)
+
+// providerPriority is the canonical failover order for the cascade.
+var providerPriority = []string{
+	providers.ProviderXAI,
+	providers.ProviderGoogle,
+	providers.ProviderAnthropic,
+	providers.ProviderMiniMax,
+	providers.ProviderOpenAI,
+	providers.ProviderOpenRouter,
+}
+
+// isProviderOutage returns true for errors that warrant trying another provider.
+// Does NOT match ErrContextExceeded (model limit, not outage).
+func isProviderOutage(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ai.ErrUnauthorized) ||
+		errors.Is(err, ai.ErrProviderDown) ||
+		errors.Is(err, ai.ErrBadGateway) ||
+		errors.Is(err, ai.ErrRateLimit) ||
+		errors.Is(err, ai.ErrNoCredits) {
+		return true
+	}
+	// Also detect raw error message patterns from providers that haven't been
+	// updated to use sentinel errors yet.
+	msg := strings.ToLower(err.Error())
+	for _, kw := range []string{"credit", "billing", "payment", "quota", "insufficient_quota"} {
+		if strings.Contains(msg, kw) {
+			return true
+		}
+	}
+	// Detect raw HTTP status codes in error messages.
+	for _, code := range []string{"status 401", "status 402", "status 403", "status 429",
+		"status 500", "status 502", "status 503", "status 504",
+		"(401)", "(402)", "(403)", "(429)", "(500)", "(502)", "(503)", "(504)"} {
+		if strings.Contains(msg, code) {
+			return true
+		}
+	}
+	return false
+}
+
+// bestModelFor returns the top safe-fallback model ID for a provider.
+func bestModelFor(providerID string) string {
+	models := ai.SafeModelDefs(providerID)
+	if len(models) == 0 {
+		return ""
+	}
+	return string(models[0].ID)
+}
+
+// secondModelFor returns the 2nd safe model for a provider.
+// Used when primary and secondary must share the same API key.
+func secondModelFor(providerID string) string {
+	models := ai.SafeModelDefs(providerID)
+	if len(models) < 2 {
+		return bestModelFor(providerID)
+	}
+	return string(models[1].ID)
+}
+
+// RunProviderCascade pings providers in priority order, disables failures,
+// then hot-swaps Primary + Consultant.
+// Returns (retryable, statusMsg).
+func (o *Orchestrator) RunProviderCascade(ctx context.Context, failedID string) (bool, string) {
+	pm := globalProvMgr
+	if pm == nil {
+		return false, "Provider manager not available"
+	}
+
+	// 1. Disable the failed provider for this session.
+	pm.DisableForSession(failedID)
+	if o.Logger != nil {
+		o.Logger.Info("Provider cascade started", "failed", failedID)
+	}
+
+	// 2. Build probe order: start one position after failedID, wrap around.
+	startIdx := 0
+	for i, id := range providerPriority {
+		if id == failedID {
+			startIdx = i + 1
+			break
+		}
+	}
+	probeOrder := make([]string, 0, len(providerPriority))
+	for i := 0; i < len(providerPriority); i++ {
+		probeOrder = append(probeOrder, providerPriority[(startIdx+i)%len(providerPriority)])
+	}
+
+	// 3. Find first reachable provider.
+	newPrimary := ""
+	newPrimaryModel := ""
+	for _, id := range probeOrder {
+		if pm.IsSessionDisabled(id) {
+			continue
+		}
+		base, err := pm.GetBase(id)
+		if err != nil {
+			// No key or already disabled.
+			continue
+		}
+		pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
+		pingErr := base.Ping(pingCtx)
+		pingCancel()
+		if pingErr != nil {
+			pm.DisableForSession(id)
+			if o.Logger != nil {
+				o.Logger.Info("Provider ping failed, disabling for session",
+					"provider", id, "error", pingErr)
+			}
+			continue
+		}
+		newPrimary = id
+		newPrimaryModel = bestModelFor(id)
+		break
+	}
+
+	if newPrimary == "" {
+		return false, "All providers unreachable — check API keys/credits"
+	}
+
+	// 4. Switch primary provider.
+	if err := o.SetPrimary(ctx, newPrimary, newPrimaryModel); err != nil {
+		return false, fmt.Sprintf("Failed to switch to %s: %v", providers.ProviderName(newPrimary), err)
+	}
+
+	// 5. Find a secondary (next available after newPrimary in probe order).
+	newPrimaryIdx := -1
+	for i, id := range probeOrder {
+		if id == newPrimary {
+			newPrimaryIdx = i
+			break
+		}
+	}
+
+	newSecondary := ""
+	newSecondaryModel := ""
+	for i := newPrimaryIdx + 1; i < len(probeOrder); i++ {
+		id := probeOrder[i]
+		if pm.IsSessionDisabled(id) {
+			continue
+		}
+		base, err := pm.GetBase(id)
+		if err != nil {
+			continue
+		}
+		pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
+		pingErr := base.Ping(pingCtx)
+		pingCancel()
+		if pingErr != nil {
+			pm.DisableForSession(id)
+			continue
+		}
+		newSecondary = id
+		newSecondaryModel = bestModelFor(id)
+		break
+	}
+
+	// Edge case: only one provider works — use 2nd model of the same provider.
+	if newSecondary == "" {
+		newSecondary = newPrimary
+		newSecondaryModel = secondModelFor(newPrimary)
+	}
+
+	_ = o.SetSecondary(ctx, newSecondary, newSecondaryModel)
+
+	primaryName := providers.ProviderName(newPrimary) + "/" + newPrimaryModel
+	secondaryName := providers.ProviderName(newSecondary) + "/" + newSecondaryModel
+	failedName := providers.ProviderName(failedID)
+
+	if o.Logger != nil {
+		o.Logger.Info("Provider cascade complete",
+			"new_primary", primaryName,
+			"new_secondary", secondaryName,
+			"disabled", failedName,
+		)
+	}
+
+	return true, fmt.Sprintf("Switched to %s (secondary: %s). %s disabled for session.",
+		primaryName, secondaryName, failedName)
+}

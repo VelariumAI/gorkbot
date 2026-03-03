@@ -149,6 +149,13 @@ type Model struct {
 	streamChunkCount    int
 	streamChunkInterval int // set once in NewModel
 
+	// Tool-interleave tracking: after a tool result is inserted, post-tool tokens
+	// must go into a NEW assistant message rather than updating the pre-tool one.
+	// responseSegStart is the byte offset into currentResponse where the current
+	// segment begins; streamAfterTool signals that the next token starts a new segment.
+	streamAfterTool  bool
+	responseSegStart int
+
 	// Header logo — pre-rendered block-art lines from gorkbot.png.
 	logoLines []string
 	logoWidth int
@@ -776,16 +783,16 @@ func (m *Model) updateViewportContent() {
 	content := m.renderMessages()
 	m.viewport.SetContent(content)
 
-	// Only auto-scroll to bottom if user hasn't scrolled up to read older messages
-	// This preserves the user's scroll position when they're viewing history
+	// Auto-scroll to bottom unless the user has manually scrolled up.
+	// When content fits entirely in the viewport the GotoBottom call is a no-op
+	// so we always keep the newest messages anchored at the bottom.
 	if !m.userScrolledUp {
 		m.viewport.GotoBottom()
 	}
-
-	// If viewport is taller than content, ensure we're at top
+	// When all content fits on screen there is nothing to scroll; allow
+	// auto-scroll again on the next message.
 	if m.viewport.TotalLineCount() <= m.viewport.Height {
-		m.viewport.GotoTop()
-		m.userScrolledUp = false // Reset flag when content fits
+		m.userScrolledUp = false
 	}
 }
 
@@ -956,18 +963,22 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 			debugOn = m.debugMode
 		}
 		var appStateSetter func(cats []string) error
-		// Wire appState setter if available via the adapter
+		var providerSetter func(ids []string) error
+		// Wire appState setters if available via the adapter
 		if m.commands != nil && m.commands.Orch != nil {
 			adapter := m.commands.Orch
 			if adapter.PersistDisabledCategories != nil {
 				appStateSetter = adapter.PersistDisabledCategories
+			}
+			if adapter.PersistDisabledProviders != nil {
+				providerSetter = adapter.PersistDisabledProviders
 			}
 		}
 		var toolReg *tools.Registry
 		if m.commands != nil {
 			toolReg = m.commands.GetToolRegistry()
 		}
-		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn)
+		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn, providerSetter)
 		return nil
 
 	case strings.HasPrefix(result, "SKILL_INVOKE:"):

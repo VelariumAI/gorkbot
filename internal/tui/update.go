@@ -717,14 +717,20 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			debugOn = m.debugMode
 		}
 		var appStateSetter func(cats []string) error
-		if m.commands != nil && m.commands.Orch != nil && m.commands.Orch.PersistDisabledCategories != nil {
-			appStateSetter = m.commands.Orch.PersistDisabledCategories
+		var providerSetter func(ids []string) error
+		if m.commands != nil && m.commands.Orch != nil {
+			if m.commands.Orch.PersistDisabledCategories != nil {
+				appStateSetter = m.commands.Orch.PersistDisabledCategories
+			}
+			if m.commands.Orch.PersistDisabledProviders != nil {
+				providerSetter = m.commands.Orch.PersistDisabledProviders
+			}
 		}
 		var toolReg *tools.Registry
 		if m.commands != nil {
 			toolReg = m.commands.GetToolRegistry()
 		}
-		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn)
+		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn, providerSetter)
 		return m, nil
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "cloud brains"))):
@@ -1053,6 +1059,33 @@ func (m *Model) handleHITLRequest(msg HITLRequestMsg) (tea.Model, tea.Cmd) {
 
 // handleToolExecution handles tool execution notifications
 func (m *Model) handleToolExecution(msg ToolExecutionMsg) (tea.Model, tea.Cmd) {
+	// ── P2 fix: flush the current streaming segment before inserting the tool box.
+	// Without this, the viewport throttle (every 8 tokens) can leave the last
+	// partial tokens invisible when the tool box renders.
+	if m.generating && m.currentResponse.Len() > m.responseSegStart {
+		role := "assistant"
+		if m.isConsultant {
+			role = "consultant"
+		}
+		seg := m.currentResponse.String()[m.responseSegStart:]
+		for i := len(m.messages) - 1; i >= 0; i-- {
+			if m.messages[i].Role == "user" {
+				break
+			}
+			if m.messages[i].Role == role {
+				m.messages[i].Content = seg
+				break
+			}
+		}
+	}
+
+	// Record where the post-tool segment begins in currentResponse.
+	m.responseSegStart = m.currentResponse.Len()
+	// Signal that the next streaming token must open a new assistant message.
+	m.streamAfterTool = true
+	// Reset throttle so the first post-tool token triggers an immediate render.
+	m.streamChunkCount = 0
+
 	// Compute elapsed time from start time recorded in ToolProgressMsg.
 	elapsed := time.Duration(0)
 	if m.toolStartTimes != nil {
@@ -1086,23 +1119,41 @@ func (m *Model) updateStreamingMessage() {
 		role = "consultant"
 	}
 
-	foundIndex := -1
-	for i := len(m.messages) - 1; i >= 0; i-- {
-		if m.messages[i].Role == role {
-			foundIndex = i
-			break
-		}
-	}
+	// Only show content from the current segment (post-tool content goes into a
+	// separate message so the display order is: pre-tool text → tool box → post-tool text).
+	seg := m.currentResponse.String()[m.responseSegStart:]
 
-	// Always keep the message content current in memory
-	if foundIndex != -1 {
-		m.messages[foundIndex].Content = m.currentResponse.String()
-	} else {
+	if m.streamAfterTool {
+		// A tool result was just inserted.  Start a fresh assistant message so
+		// post-tool tokens appear AFTER the tool box, not merged into the pre-tool message.
+		m.streamAfterTool = false
 		m.messages = append(m.messages, Message{
 			Role:         role,
-			Content:      m.currentResponse.String(),
+			Content:      seg,
 			IsConsultant: m.isConsultant,
 		})
+	} else {
+		// Normal case: update the latest assistant message in the current turn.
+		foundIndex := -1
+		for i := len(m.messages) - 1; i >= 0; i-- {
+			// Never look past a user message into a previous turn.
+			if m.messages[i].Role == "user" {
+				break
+			}
+			if m.messages[i].Role == role {
+				foundIndex = i
+				break
+			}
+		}
+		if foundIndex != -1 {
+			m.messages[foundIndex].Content = seg
+		} else {
+			m.messages = append(m.messages, Message{
+				Role:         role,
+				Content:      seg,
+				IsConsultant: m.isConsultant,
+			})
+		}
 	}
 
 	// Only re-render viewport every streamChunkInterval tokens to avoid
@@ -1155,7 +1206,9 @@ func (m *Model) handleStartGeneration(msg StartGenerationMsg) (tea.Model, tea.Cm
 	m.isConsultant = msg.IsConsultant
 	m.currentPhrase = GetRandomPhrase(msg.IsConsultant)
 	m.currentResponse.Reset()
-	m.streamChunkCount = 0 // Reset throttle counter for new generation
+	m.streamChunkCount = 0    // Reset throttle counter for new generation
+	m.responseSegStart = 0    // New turn starts a fresh segment
+	m.streamAfterTool = false // No pending tool transition
 
 	return m, tea.Batch(
 		m.spinner.Tick,
@@ -1167,10 +1220,37 @@ func (m *Model) handleStartGeneration(msg StartGenerationMsg) (tea.Model, tea.Cm
 func (m *Model) handleEndGeneration(msg EndGenerationMsg) (tea.Model, tea.Cmd) {
 	m.generating = false
 
-	// Add any remaining content
-	if m.currentResponse.Len() > 0 {
-		m.addAssistantMessage(m.currentResponse.String(), m.isConsultant)
+	// Flush the final segment into the streaming message already in m.messages.
+	// Use responseSegStart so we only show content for the current segment
+	// (post-tool tokens are never merged back into the pre-tool message).
+	if m.currentResponse.Len() > m.responseSegStart || m.streamAfterTool {
+		role := "assistant"
+		if m.isConsultant {
+			role = "consultant"
+		}
+		seg := m.currentResponse.String()[m.responseSegStart:]
+		if m.streamAfterTool {
+			// Tool fired but no post-tool tokens came — skip the empty message.
+			m.streamAfterTool = false
+		} else {
+			foundIndex := -1
+			for i := len(m.messages) - 1; i >= 0; i-- {
+				if m.messages[i].Role == "user" {
+					break
+				}
+				if m.messages[i].Role == role {
+					foundIndex = i
+					break
+				}
+			}
+			if foundIndex != -1 {
+				m.messages[foundIndex].Content = seg
+			} else {
+				m.addAssistantMessage(seg, m.isConsultant)
+			}
+		}
 		m.currentResponse.Reset()
+		m.responseSegStart = 0
 		m.updateViewportContent()
 	}
 

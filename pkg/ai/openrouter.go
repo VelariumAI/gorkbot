@@ -280,7 +280,7 @@ func (o *OpenRouterProvider) StreamWithHistory(ctx context.Context, history *Con
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
+		return MapStatusError(resp.StatusCode, body)
 	}
 
 	scanner := bufio.NewScanner(resp.Body)

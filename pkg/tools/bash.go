@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -98,21 +99,44 @@ func (t *BashTool) Execute(ctx context.Context, params map[string]interface{}) (
 
 	err := cmd.Run()
 
+	// Determine exit code. -1 means the process never started (bad command,
+	// permission denied, context timeout before exec). Any value ≥ 0 means
+	// bash ran the command — including non-zero exits that are legitimate
+	// (e.g. grep returning 1 for "no match", test returning 1, diff finding
+	// differences). Treat ≥ 0 as a tool success; the AI reads exit_code to
+	// decide whether the result is what it expected.
+	exitCode := -1
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+
+	// A process-level exec error with exit code -1 means the shell never ran.
+	var execErr *exec.ExitError
+	couldNotRun := err != nil && exitCode == -1
+
 	result := &ToolResult{
-		Success:      err == nil,
+		Success:      !couldNotRun,
 		Output:       stdout.String(),
 		OutputFormat: FormatText,
 		Data: map[string]interface{}{
 			"stdout":    stdout.String(),
 			"stderr":    stderr.String(),
-			"exit_code": cmd.ProcessState.ExitCode(),
+			"exit_code": exitCode,
 		},
 	}
 
 	if err != nil {
-		result.Error = err.Error()
-		if stderr.Len() > 0 {
-			result.Error = stderr.String()
+		if couldNotRun {
+			// Process failed to launch — surface the exec error.
+			result.Error = err.Error()
+		} else if !errors.As(err, &execErr) {
+			// Unexpected non-ExitError: surface it.
+			result.Error = err.Error()
+		}
+		// ExitError with exit_code >= 0: non-zero exit is not a tool failure.
+		// Populate stderr so the AI can inspect the output.
+		if stderr.Len() > 0 && result.Error == "" {
+			result.Data["stderr"] = stderr.String()
 		}
 	}
 

@@ -143,37 +143,29 @@ func (r *Registry) GetConsultantProvider() interface{} {
 }
 
 // ResolveConsultantProvider resolves the consultant to use for a task.
-// It returns the explicitly set consultant if available, otherwise uses the
-// orchestrator's intelligent selection (auto mode).
+// It checks the orchestrator's live secondary model first (so the model
+// selector and failover cascade are always respected), then falls back to the
+// startup-time cached consultantProvider.
 func (r *Registry) ResolveConsultantProvider(ctx context.Context, task string) interface{} {
-	// First try explicit consultant
-	r.mu.RLock()
-	explicit := r.consultantProvider
-	r.mu.RUnlock()
-
-	if explicit != nil {
-		return explicit
-	}
-
-	// Auto mode: try to get orchestrator from context to use intelligent selection
-	// We use a simple interface to avoid circular imports with internal/engine
-	orch := ctx.Value(orchestratorContextKey)
-	if orch == nil {
-		// No orchestrator in context, return nil
-		return nil
-	}
-
-	// Use reflection-like approach: try to call ResolveConsultant method
-	// The orchestrator has this method which returns ai.AIProvider
+	// Primary: ask the live orchestrator for the current secondary model.
+	// This ensures /model selections and provider failover are honoured.
 	type resolver interface {
 		ResolveConsultant(ctx context.Context, task string) interface{}
 	}
-	if res, ok := orch.(resolver); ok {
-		return res.ResolveConsultant(ctx, task)
+	orch := ctx.Value(orchestratorContextKey)
+	if orch != nil {
+		if res, ok := orch.(resolver); ok {
+			if p := res.ResolveConsultant(ctx, task); p != nil {
+				return p
+			}
+		}
 	}
 
-	// No auto selection available, return nil
-	return nil
+	// Fallback: use the startup-cached provider (set via SetConsultantProvider).
+	r.mu.RLock()
+	explicit := r.consultantProvider
+	r.mu.RUnlock()
+	return explicit
 }
 
 // GetPermissionManager returns the permission manager

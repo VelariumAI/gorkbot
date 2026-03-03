@@ -1,7 +1,3 @@
-> **This document is superseded.**
->
-> See [ARCHITECTURE.md](ARCHITECTURE.md) for the current system design.
-
 # Grokster Tool & A2A System Design
 
 ## 🎯 Overview

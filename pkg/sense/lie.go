@@ -48,7 +48,7 @@ type LIEEvaluator struct {
 // NewLIEEvaluator creates a LIEEvaluator with production-safe defaults.
 func NewLIEEvaluator() *LIEEvaluator {
 	return &LIEEvaluator{
-		MinComprehensiveTokens: 80,
+		MinComprehensiveTokens: 150,
 		LengthWeight:           0.5,
 		RedundancyWeight:       0.3,
 		StructureWeight:        0.2,

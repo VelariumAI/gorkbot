@@ -11,18 +11,19 @@ import (
 	"github.com/velariumai/gorkbot/pkg/tools"
 )
 
-// settingsTab enumerates the three settings sections.
+// settingsTab enumerates the settings sections.
 type settingsTab int
 
 const (
 	tabModels    settingsTab = iota // 0 — Model routing summary
 	tabVerbosity                    // 1 — Debug / logging toggles
 	tabTools                        // 2 — Tool group enable/disable
+	tabProviders                    // 3 — API provider enable/disable
 )
 
-var tabLabels = []string{"Model Routing", "Verbosity", "Tool Groups"}
+var tabLabels = []string{"Model Routing", "Verbosity", "Tool Groups", "API Providers"}
 
-// SettingsOverlay is a three-tab modal for configuring runtime preferences.
+// SettingsOverlay is a four-tab modal for configuring runtime preferences.
 // It implements the Overlay interface and persists changes immediately via
 // the OrchestratorAdapter and tools.Registry.
 type SettingsOverlay struct {
@@ -44,6 +45,10 @@ type SettingsOverlay struct {
 	// Tool groups: sorted slice of category names + enabled state
 	toolGroups []toolGroupRow
 
+	// Provider rows: one row per known provider
+	providerRows    []providerRow
+	providerSetter  func(ids []string) error // persists disabled provider list
+
 	// Status line shown at the bottom of the modal after an action
 	statusMsg   string
 	statusIsErr bool
@@ -54,14 +59,21 @@ type toolGroupRow struct {
 	enabled bool
 }
 
+type providerRow struct {
+	id      string
+	name    string
+	enabled bool
+}
+
 // NewSettingsOverlay constructs a SettingsOverlay. Pass nil for appStateSetter
-// to skip disk persistence of tool-group changes.
+// or providerSetter to skip disk persistence of those sections.
 func NewSettingsOverlay(
 	w, h int,
 	orch *commands.OrchestratorAdapter,
 	toolReg *tools.Registry,
 	appStateSetter func(cats []string) error,
 	initialDebug bool,
+	providerSetter func(ids []string) error,
 ) *SettingsOverlay {
 	s := &SettingsOverlay{
 		width:          w,
@@ -70,8 +82,10 @@ func NewSettingsOverlay(
 		toolReg:        toolReg,
 		appStateSetter: appStateSetter,
 		debugMode:      initialDebug,
+		providerSetter: providerSetter,
 	}
 	s.refreshToolGroups()
+	s.refreshProviderRows()
 	return s
 }
 
@@ -89,6 +103,36 @@ func (s *SettingsOverlay) refreshToolGroups() {
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].name < rows[j].name })
 	s.toolGroups = rows
+}
+
+func (s *SettingsOverlay) refreshProviderRows() {
+	if s.orch == nil || s.orch.GetProviderEnabled == nil {
+		return
+	}
+	enabled := s.orch.GetProviderEnabled()
+	// Use a fixed display order matching providerPriority.
+	ordered := []string{"xai", "google", "anthropic", "minimax", "openai", "openrouter"}
+	names := map[string]string{
+		"xai":        "xAI",
+		"google":     "Google",
+		"anthropic":  "Anthropic",
+		"minimax":    "MiniMax",
+		"openai":     "OpenAI",
+		"openrouter": "OpenRouter",
+	}
+	rows := make([]providerRow, 0, len(ordered))
+	for _, id := range ordered {
+		e, ok := enabled[id]
+		if !ok {
+			e = true // default to enabled if not in map
+		}
+		rows = append(rows, providerRow{
+			id:      id,
+			name:    names[id],
+			enabled: e,
+		})
+	}
+	s.providerRows = rows
 }
 
 // ── Overlay interface ─────────────────────────────────────────────────────────
@@ -140,6 +184,11 @@ func (s *SettingsOverlay) maxCursor() int {
 			return 0
 		}
 		return len(s.toolGroups) - 1
+	case tabProviders:
+		if len(s.providerRows) == 0 {
+			return 0
+		}
+		return len(s.providerRows) - 1
 	default:
 		return 0
 	}
@@ -178,6 +227,29 @@ func (s *SettingsOverlay) handleAction() {
 				}
 			}
 			if err := s.appStateSetter(disabled); err != nil {
+				s.statusMsg += " (save failed)"
+				s.statusIsErr = true
+			}
+		}
+
+	case tabProviders:
+		if s.orch == nil || s.orch.ToggleProvider == nil || s.cursor >= len(s.providerRows) {
+			return
+		}
+		row := &s.providerRows[s.cursor]
+		enabled, msg := s.orch.ToggleProvider(row.id)
+		row.enabled = enabled
+		s.statusMsg = msg
+		s.statusIsErr = false
+		// Persist full disabled list via providerSetter.
+		if s.providerSetter != nil {
+			var disabled []string
+			for _, r := range s.providerRows {
+				if !r.enabled {
+					disabled = append(disabled, r.id)
+				}
+			}
+			if err := s.providerSetter(disabled); err != nil {
 				s.statusMsg += " (save failed)"
 				s.statusIsErr = true
 			}
@@ -239,6 +311,8 @@ func (s *SettingsOverlay) View() string {
 		lines = append(lines, s.renderVerbositySection(cursorStyle, checkStyle, uncheckStyle)...)
 	case tabTools:
 		lines = append(lines, s.renderToolsSection(cursorStyle, checkStyle, uncheckStyle, dimStyle)...)
+	case tabProviders:
+		lines = append(lines, s.renderProvidersSection(cursorStyle, checkStyle, uncheckStyle, dimStyle)...)
 	}
 
 	// Status
@@ -338,4 +412,20 @@ func (s *SettingsOverlay) renderToggleRow(idx int, label string, enabled bool, c
 		box = check.Render("[x]")
 	}
 	return fmt.Sprintf("%s%s %-22s", arrow, box, label)
+}
+
+func (s *SettingsOverlay) renderProvidersSection(cur, check, uncheck, dim lipgloss.Style) []string {
+	var lines []string
+	if len(s.providerRows) == 0 {
+		lines = append(lines, dim.Render("  No providers registered."))
+		return lines
+	}
+	hdr := fmt.Sprintf("  %-20s  %s", "Provider", "Status")
+	lines = append(lines, dim.Render(hdr))
+	for i, row := range s.providerRows {
+		lines = append(lines, s.renderToggleRow(i, row.name, row.enabled, cur, check, uncheck))
+	}
+	lines = append(lines, "")
+	lines = append(lines, dim.Render("  Disabled providers are skipped during failover cascade."))
+	return lines
 }

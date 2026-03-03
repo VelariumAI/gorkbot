@@ -1,314 +1,290 @@
-# Gorkbot Security Guide
+# Security Best Practices for Grokster
 
-**Version:** 3.4.0
+## 🔒 Handling OAuth Secrets
 
-This document covers API key security, encrypted credential storage, the tool permission model, shell execution safety, and recommended security practices.
+### ✅ What's Safe to Share
 
----
+**OAuth Client ID** - This is PUBLIC:
+```
+YOUR_CLIENT_ID.apps.googleusercontent.com
+```
 
-## Table of Contents
+✅ Safe to:
+- Embed in source code
+- Share in documentation
+- Commit to GitHub
+- Show in browser URLs
 
-1. [API Key Security](#1-api-key-security)
-2. [Encrypted Credential Storage](#2-encrypted-credential-storage)
-3. [Tool Permission System](#3-tool-permission-system)
-4. [Shell Execution Safety](#4-shell-execution-safety)
-5. [Security Tool Category](#5-security-tool-category)
-6. [Secret Scanning](#6-secret-scanning)
-7. [Network Security](#7-network-security)
-8. [Security Checklist](#8-security-checklist)
+Why? The Client ID just **identifies** your app - it doesn't grant access.
 
----
+### ❌ What Must Stay Private
 
-## 1. API Key Security
+**OAuth Client Secret** - This is PRIVATE:
+```
+GOCSPX-YOUR_CLIENT_SECRET_HERE  ⚠️ NEVER share this!
+```
 
-### What to Keep Secret
+❌ **NEVER:**
+- Embed in source code
+- Commit to git (even private repos)
+- Share in chat/email
+- Include in screenshots
+- Hardcode in applications
 
-All five provider API keys must be kept private:
+✅ **ONLY store in:**
+- `.env` file (gitignored)
+- Environment variables
+- Secret managers (AWS Secrets Manager, etc.)
+- Secure credential stores
 
-| Key | Prefix | Never share |
-|-----|--------|-------------|
-| xAI | `xai-` | Yes |
-| Google Gemini | `AIzaSy` | Yes |
-| Anthropic | `sk-ant-` | Yes |
-| OpenAI | `sk-` | Yes |
-| MiniMax | varies | Yes |
+## 🚨 What Happens if Secret is Exposed?
 
-If any key is exposed, revoke it immediately in the respective provider's console and generate a new one.
+If someone gets your client secret, they can:
 
-### Safe Storage Locations
+1. **Impersonate your app** - Make API calls pretending to be your application
+2. **Use your quota** - Consume your API quota/billing
+3. **Access user data** - If users authorized your app
+4. **Bypass restrictions** - Circumvent rate limits you set
+5. **Damage reputation** - Make malicious requests under your app's name
 
-✅ **Acceptable:**
-- `.env` file in the project root (gitignored by default)
-- Shell profile (`~/.bashrc`, `~/.zshrc`) via `export KEY=value`
-- OS keyring / secret manager
-- `~/.config/gorkbot/api_keys.json` (0600 permissions, encrypted at rest)
+## 🔧 Immediate Response if Secret is Compromised
 
-❌ **Never:**
-- Hardcoded in source code
-- Committed to any git repository (public or private)
-- Included in logs, error messages, or screenshots
-- Sent in chat, email, or issue tracker comments
+### Step 1: Regenerate Secret (NOW!)
 
-### Verifying .env is Gitignored
+1. **Go to** [Google Cloud Console](https://console.cloud.google.com)
+2. **Navigate to:** APIs & Services → Credentials
+3. **Find your OAuth client** in the list
+4. **Click the name** to edit
+5. **Click "RESET SECRET"** or create new credentials
+6. **Copy the new secret**
+7. **Update your `.env` file** with the new secret
+8. **Delete old credentials** (if you created new ones)
+
+### Step 2: Update Your Configuration
 
 ```bash
-# Check that .env is in .gitignore
-grep -E '^\.env$' .gitignore
+# Edit .env
+nano .env
 
-# Verify git does not track .env
-git status --ignored | grep '\.env'
+# Update the secret
+GOOGLE_CLIENT_SECRET=NEW_SECRET_HERE
 
-# Search git history for accidental commits
-git log -S 'xai-' --all
-git log -S 'AIzaSy' --all
+# Test it works
+./grokster.sh login
 ```
 
-If a key was accidentally committed, rotate it immediately in the provider console, then use `git filter-branch` or `git filter-repo` to scrub the history.
+### Step 3: If Already Committed to Git
 
----
+If you **already committed** the secret to git:
 
-## 2. Encrypted Credential Storage
+```bash
+# ⚠️ This rewrites git history - use with caution!
 
-### .env Value Encryption
+# Remove secret from ALL commits
+git filter-branch --force --index-filter \
+  "git rm --cached --ignore-unmatch pkg/auth/oauth.go" \
+  --prune-empty --tag-name-filter cat -- --all
 
-Values in `.env` prefixed with `ENC_` are decrypted at startup. The encryption module (`pkg/security`) uses **AES-GCM** (256-bit) with a locally managed key.
-
-Encryption can be triggered from within a session to protect keys at rest:
-
-```
-/key encrypt xai    # encrypt the current xAI key value in .env
-```
-
-Encrypted values look like:
-
-```env
-XAI_API_KEY=ENC_base64encodedciphertext==
+# Force push (if already pushed to GitHub)
+git push origin --force --all
 ```
 
-### api_keys.json
+**Better approach:** Start a new repo:
+```bash
+# Backup current code
+cp -r grokster grokster-backup
 
-**Path:** `~/.config/gorkbot/api_keys.json`
-**Permissions:** 0600 (owner read/write only — created with `os.O_WRONLY|os.CREATE, 0600`)
+# Create fresh repo
+cd grokster
+rm -rf .git
+git init
+git add .
+git commit -m "Initial commit (with secrets removed)"
+```
 
-Keys are stored after validation. If a key fails validation, it is stored with status `invalid` and not used for API calls.
+### Step 4: Verify Protection
 
-### Pre-commit Hook (Recommended)
+```bash
+# Check .gitignore includes .env
+cat .gitignore | grep ".env"
 
-Add this to `.git/hooks/pre-commit` to prevent accidental key commits:
+# Should output:
+# .env
+# .env.local
+# .env.*.local
 
+# Verify .env is not tracked
+git status --ignored | grep ".env"
+
+# Should show .env as ignored
+```
+
+## 📋 Current Configuration (Safe)
+
+Your current setup is now **secure**:
+
+### Code (Public - Safe to commit):
+```go
+// pkg/auth/oauth.go
+const (
+    DefaultClientID = "200519342786-...apps.googleusercontent.com"  // ✅ Public
+    DefaultClientSecret = ""  // ✅ Empty (uses env var)
+)
+```
+
+### Environment Variables (Private - NOT committed):
+```bash
+# .env (in .gitignore)
+GOOGLE_CLIENT_ID=200519342786-...apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-YOUR_CLIENT_SECRET_HERE  # ⚠️ Private!
+```
+
+## 🛡️ Defense in Depth
+
+### Layer 1: .gitignore
+
+Prevents accidental commits:
+```
+.env
+.env.local
+*.secret
+credentials.json
+```
+
+### Layer 2: Pre-commit Hook
+
+Add to `.git/hooks/pre-commit`:
 ```bash
 #!/bin/bash
-set -e
-
-patterns=(
-    'xai-[A-Za-z0-9]'
-    'AIzaSy[A-Za-z0-9]'
-    'sk-ant-[A-Za-z0-9]'
-    'sk-[A-Za-z0-9]{20}'
-)
-
-for pattern in "${patterns[@]}"; do
-    if git diff --cached | grep -qE "$pattern"; then
-        echo "ERROR: Detected potential API key in staged changes: $pattern"
-        echo "Remove the secret before committing."
-        exit 1
-    fi
-done
+if git diff --cached | grep -i "GOCSPX-\|client.*secret\|api.*key"; then
+    echo "⚠️  ERROR: Detected potential secret in commit!"
+    echo "Please remove secrets before committing."
+    exit 1
+fi
 ```
 
+Make executable:
 ```bash
 chmod +x .git/hooks/pre-commit
 ```
 
----
+### Layer 3: Environment Variables Only
 
-## 3. Tool Permission System
+Never hardcode secrets:
 
-All tools that modify state, execute commands, or make network requests are gated by the permission system. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) for the full reference.
-
-### Principle of Least Privilege
-
-Default permissions are conservative:
-
-| Risk Level | Default Permission | Examples |
-|------------|-------------------|---------|
-| Read-only, safe | `always` | `read_file`, `list_directory`, `git_status`, `system_info` |
-| Modifying, limited impact | `session` | `web_fetch`, `grep_content` |
-| Modifying, significant impact | `once` | `bash`, `write_file`, `git_commit`, `git_push` |
-| Destructive | `once` | `delete_file`, `kill_process` |
-
-### Security Tool Category
-
-The security and pentesting tool categories (`security`, `pentest`) are **disabled by default**. Enable them explicitly via `/settings → Tool Groups` only when you need them for authorized testing.
-
-### Rule Engine
-
-For automation workflows where you want to pre-approve certain tools without interactive prompts, use the rule engine:
-
-```
-/rules add allow "read_*"           # allow all read tools
-/rules add allow "git_status"       # allow git status specifically
-/rules add deny "delete_*"          # block all delete tools
-/rules add deny "kill_process"      # block kill_process
-```
-
-Rules use glob patterns and are evaluated before the standard permission check.
-
----
-
-## 4. Shell Execution Safety
-
-### Shell Escaping
-
-Every bash tool call passes user-provided parameters through `shellescape()` before substituting them into command templates. This prevents shell injection attacks where a crafted parameter value could escape the intended command context.
-
+❌ **Bad:**
 ```go
-// pkg/tools/bash.go
-func shellescape(s string) string {
-    // Wraps the string in single quotes and escapes internal single quotes
-    return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+clientSecret := "GOCSPX-abc123"
+```
+
+✅ **Good:**
+```go
+clientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
+if clientSecret == "" {
+    return fmt.Errorf("GOOGLE_CLIENT_SECRET not set")
 }
 ```
 
-### Execution Timeouts
+### Layer 4: Secret Scanning
 
-Every tool call has a hard timeout (configurable per tool, default 30 seconds). This prevents runaway commands from hanging the orchestrator.
+Use tools like:
+- **git-secrets** - AWS tool to prevent committing secrets
+- **gitleaks** - Scan repos for secrets
+- **TruffleHog** - Find secrets in git history
+- **GitHub secret scanning** - Automatic on public repos
 
-### Sandboxing Considerations
-
-Gorkbot is not a container or VM — it runs tools in the same user context as the process. For maximum isolation:
-
-- Run Gorkbot in a separate user account
-- Use the `--allow-tools` flag in one-shot mode to whitelist only necessary tools
-- Use `spawn_sub_agent` with `isolated=true` to run sub-agents in separate git worktrees
-
-### Dynamic Tool Safety
-
-Tools created via `create_tool` execute shell commands via the same `bash` execution path with the same escaping and timeout protections. User review of dynamically created tool commands is recommended before granting `always` permission.
-
----
-
-## 5. Security Tool Category
-
-Gorkbot includes a comprehensive pentesting and security assessment suite (30+ tools). These tools are:
-
-- **Disabled by default** — must be explicitly enabled via `/settings`
-- **Authorized use only** — intended for penetration testing, CTF challenges, authorized security research, and defensive analysis
-- **Permission-gated** — all require at least `once` permission (prompt each call)
-
-### Enabling Security Tools
-
-```
-/settings
-→ Tool Groups
-→ Enable: Security Recon, Security Pentest
-```
-
-Or via the `disabledCategories` field in `app_state.json` (remove the category from the list).
-
-### Authorized Use Statement
-
-These tools must only be used against systems you own or have explicit written authorization to test. Misuse may violate computer fraud laws. The Gorkbot project and Velarium AI accept no liability for unauthorized use.
-
----
-
-## 6. Secret Scanning
-
-### gitleaks (Recommended)
-
+Install git-secrets:
 ```bash
-# Install
-brew install gitleaks  # macOS
-# or
-go install github.com/gitleaks/gitleaks/v8@latest
+# macOS
+brew install git-secrets
 
-# Scan repo
-gitleaks detect --source . --verbose
-
-# Scan git history
-gitleaks detect --source . --log-opts="--all"
-```
-
-### git-secrets (AWS Tool)
-
-```bash
+# Linux
 git clone https://github.com/awslabs/git-secrets
-cd git-secrets && make install
+cd git-secrets
+make install
 
-cd /path/to/gorkbot
+# Configure
+cd /path/to/grokster
 git secrets --install
 git secrets --register-aws
-git secrets --add 'xai-[A-Za-z0-9]+'
-git secrets --add 'AIzaSy[A-Za-z0-9]+'
-git secrets --add 'sk-ant-[A-Za-z0-9]+'
+git secrets --add 'GOCSPX-[0-9A-Za-z_-]+'
 ```
 
-### TruffleHog
+## 📊 OAuth Security Checklist
+
+Before committing code:
+
+- [ ] ✅ Client ID in code? (OK - it's public)
+- [ ] ❌ Client Secret in code? (NEVER!)
+- [ ] ✅ `.env` in `.gitignore`?
+- [ ] ✅ Secrets only in environment variables?
+- [ ] ✅ No secrets in comments/docs?
+- [ ] ✅ No secrets in error messages?
+- [ ] ✅ No secrets in logs?
+
+## 🔍 How to Check if You're Safe
+
+### Check 1: Search Code for Secrets
 
 ```bash
-trufflehog git file://. --only-verified
+# Search for potential secrets
+grep -r "GOCSPX-" . --exclude-dir=.env
+grep -r "client.*secret.*=" . --exclude="*.md"
+
+# Should return NOTHING (or only .env which is gitignored)
 ```
 
----
+### Check 2: Verify .env is Ignored
 
-## 7. Network Security
+```bash
+git status --ignored | grep -E "\.env$"
 
-### API Endpoints
+# Should show:
+# .env
+```
 
-All provider API calls use HTTPS. Gorkbot does not support plain HTTP for AI provider communication.
+### Check 3: Check Git History
 
-| Provider | Endpoint |
-|----------|---------|
-| xAI | `https://api.x.ai/v1` |
-| Google Gemini | `https://generativelanguage.googleapis.com/v1beta` |
-| Anthropic | `https://api.anthropic.com/v1` |
-| OpenAI | `https://api.openai.com/v1` |
-| MiniMax | `https://api.minimax.io/anthropic/v1` |
+```bash
+# Search git history for secrets
+git log -S "GOCSPX-" --all
 
-### A2A Gateway
+# Should return NOTHING (or only this commit removing it)
+```
 
-The A2A HTTP gateway (`--a2a`) binds to `127.0.0.1` by default — loopback only, not accessible from the network. To expose it on the network (for multi-agent setups), use `--a2a-addr 0.0.0.0:18890` only on trusted networks and behind appropriate firewall rules.
+## 📚 Additional Resources
 
-### SSE Relay
+- [OWASP API Security](https://owasp.org/www-project-api-security/)
+- [Google OAuth Best Practices](https://developers.google.com/identity/protocols/oauth2/best-practices)
+- [GitHub Secret Scanning](https://docs.github.com/en/code-security/secret-scanning)
+- [12-Factor App: Config](https://12factor.net/config)
 
-The `--share` relay listens on a random localhost port and is accessible only within the local network. Do not expose it to the public internet without appropriate security measures (authentication, TLS).
+## ✅ Current Status
 
-### web_fetch and http_request Tools
+Your Grokster installation is now **secure**:
 
-These tools can make arbitrary HTTP/S requests. Ensure they are not misused for:
-- SSRF (Server-Side Request Forgery) attacks against internal services
-- Exfiltration of sensitive data
+1. ✅ Client Secret removed from code
+2. ✅ Secret stored in `.env` (gitignored)
+3. ✅ `.gitignore` protecting secrets
+4. ✅ Code uses environment variables
+5. ✅ Not committed to git yet
 
-Use the `/rules` and `--deny-tools` mechanisms to restrict web tools in untrusted contexts.
+**Keep it this way!** 🔒
 
----
+## 🎯 Remember
 
-## 8. Security Checklist
+> **Golden Rule:** If you wouldn't publish it on Twitter, don't put it in code!
 
-### API Keys
+Secrets belong in:
+- ✅ Environment variables
+- ✅ `.env` files (gitignored)
+- ✅ Secret managers
+- ✅ Encrypted storage
 
-- [ ] `.env` is listed in `.gitignore`
-- [ ] `git status --ignored` shows `.env` as ignored
-- [ ] No API keys in source code or comments
-- [ ] Keys rotated if previously exposed
-- [ ] Pre-commit hook installed for key detection
-
-### Permissions
-
-- [ ] Security tool category disabled (default)
-- [ ] Destructive tools (`delete_file`, `git_push`, `kill_process`) at `once` permission
-- [ ] `bash` at `once` permission unless in fully trusted session
-- [ ] `/permissions` audited for unexpected `always` grants
-
-### Process
-
-- [ ] Running as non-root user
-- [ ] `--allow-tools` filter applied in automated/CI contexts
-- [ ] One-shot mode used for scripted automation (no interactive permission prompts)
-- [ ] Execution traces (`--trace`) not stored in world-readable locations
-
-### Updates
-
-- [ ] Gorkbot updated to latest version
-- [ ] `go mod tidy` run to update dependencies
-- [ ] Dependency vulnerabilities checked with `govulncheck ./...`
+Secrets DO NOT belong in:
+- ❌ Source code
+- ❌ Git repositories
+- ❌ Documentation
+- ❌ Screenshots
+- ❌ Error messages
+- ❌ Log files

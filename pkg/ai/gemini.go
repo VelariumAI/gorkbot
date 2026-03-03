@@ -415,7 +415,7 @@ func (g *GeminiProvider) StreamWithHistory(ctx context.Context, history *Convers
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(bodyBytes))
+		return MapStatusError(resp.StatusCode, bodyBytes)
 	}
 
 	scanner := bufio.NewScanner(resp.Body)

@@ -1,280 +1,298 @@
-# Tool Permissions Guide
+# Tool Permissions Management Guide
 
-**Version:** 3.4.0
+## Overview
 
-Gorkbot includes a comprehensive four-level permission system for controlling tool access. Permissions can be managed via slash commands, the permission prompt overlay, and the rule engine.
+Grokster includes a comprehensive permission system for managing tool access. The `/permissions` command allows you to view and reset tool permissions at any time.
 
 ---
 
 ## Permission Levels
 
-### `always`
-- **Permanently approved** — no confirmation prompt shown
-- Stored in `~/.config/gorkbot/tool_permissions.json`
-- Use for: safe read-only tools you use frequently
+### ✅ Always
+- Tool is permanently approved
+- No prompts on future executions
+- Stored in `~/.config/grokster/tool_permissions.json`
+- **Use for:** Trusted, frequently-used tools
 
-### `session`
-- **Approved for the current session only**
-- Cleared when Gorkbot exits
-- Not stored to disk
-- Use for: tools you want to approve in bulk for a specific task
+### 🔓 Session
+- Approved for current session only
+- Cleared when you exit Grokster
+- No persistent storage
+- **Use for:** Temporary access during this session
 
-### `once` (Default)
-- **Prompts every single call**
-- Most secure option for tools that modify state
-- Use for: `bash`, `write_file`, `git_push`, `delete_file`
+### ❓ Once (Default)
+- Ask every time (recommended for new/unknown tools)
+- Most secure option
+- **Use for:** Untrusted or rarely-used tools
 
-### `never`
-- **Permanently blocked** — will not prompt or execute
-- Stored in `~/.config/gorkbot/tool_permissions.json`
-- Use for: tools you want to disable entirely
-
----
-
-## Permission Prompt Overlay
-
-When a tool requires a permission check, a centered overlay appears:
-
-```
-┌──────────────────────────────────────────────┐
-│  Permission Request                          │
-│                                              │
-│  Tool: bash                                  │
-│  Description: Execute shell commands         │
-│                                              │
-│  Parameters:                                 │
-│    • command: ls -la /home/user              │
-│                                              │
-│  Allow this tool to execute?                 │
-│                                              │
-│  ▶ [Always]   Grant permanent permission     │
-│    [Session]  Allow for this session         │
-│    [Once]     Ask next time (recommended)    │
-│    [Never]    Block permanently              │
-│                                              │
-│  ↑/↓ to select · Enter to confirm           │
-│  Esc to deny this execution                  │
-└──────────────────────────────────────────────┘
-```
-
-**Navigation:**
-- `↑` / `↓` or `k` / `j` — move selection
-- `Enter` — confirm selected level
-- `Esc` — deny this specific execution (does not change stored permission)
+### ❌ Never
+- Tool is permanently blocked
+- Will not prompt or execute
+- Stored persistently
+- **Use for:** Tools you want to disable
 
 ---
 
-## `/permissions` Commands
+## Commands
 
 ### View All Permissions
-
 ```
 /permissions
+```
+or
+```
 /permissions list
 ```
 
-**Output:**
+**Shows:**
+- Summary of permissions by level
+- List of tools in each category
+- Quick reset instructions
+
+**Example Output:**
 ```
-Tool Permissions
+🔐 Tool Permissions
 
-Total Tools: 162
-  Always:  14
-  Session:  2
-  Once:   144
-  Never:    2
+Total Tools: 44
+- ✅ Always: 8
+- 🔓 Session: 2
+- ❓ Once: 32
+- ❌ Never: 2
 
-Always Allowed
-  read_file, list_directory, file_info, git_status,
-  git_diff, git_log, system_info, disk_usage, …
-
-Never Allowed
-  metasploit_rpc, linpeas_run
+## ✅ Always Allowed
+- read_file
+- list_directory
+- git_status
+...
 ```
+
+---
 
 ### Reset All Permissions
-
 ```
 /permissions reset
 ```
 
-Clears ALL stored permissions (both `always` and `never`). All tools return to the `once` default. Deletes `tool_permissions.json`.
+**Effect:**
+- Clears ALL persistent permissions (always/never)
+- Clears session permissions
+- All tools return to default "once" (ask every time)
+- Deletes `~/.config/grokster/tool_permissions.json`
 
-### Reset One Tool
+**Use when:**
+- You want a fresh start
+- You've granted too many "always" permissions
+- Testing permission flows
 
+---
+
+### Reset Specific Tool
+```
+/permissions reset <tool_name>
+```
+
+**Examples:**
 ```
 /permissions reset bash
 /permissions reset git_push
 /permissions reset web_fetch
 ```
 
-Removes only that tool's stored permission. The tool will prompt on next use.
+**Effect:**
+- Removes permission for that specific tool
+- Clears both persistent and session permissions
+- Tool will ask for permission on next use
+
+**Use when:**
+- You want to re-evaluate a specific tool's access
+- You accidentally granted "always" to a dangerous tool
+- Testing a single tool's permission flow
 
 ---
 
-## Rule Engine
+## Permission Prompt UI
 
-The rule engine provides glob-pattern-based permission rules that are evaluated **before** the standard permission check. First matching rule wins.
-
-### View Rules
+When a tool requires permission, you'll see a **centered overlay** with:
 
 ```
-/rules list
+┌──────────────────────────────────┐
+│ 🔐 Permission Request            │
+│                                  │
+│ Tool: bash                       │
+│ Description: Execute shell cmds  │
+│                                  │
+│ Parameters:                      │
+│   • command: ls -la              │
+│                                  │
+│ Allow this tool to execute?      │
+│                                  │
+│ ▶ [Always] Grant permanent perm  │
+│   [Session] Allow for session    │
+│   [Once] Ask every time (rec.)   │
+│   [Never] Block permanently      │
+│                                  │
+│ Use ↑/↓ to select, Enter to     │
+│ confirm, Esc to deny             │
+└──────────────────────────────────┘
 ```
 
-### Add Rules
-
-```
-/rules add allow "read_*"         # permanently allow all read tools
-/rules add allow "git_status"     # permanently allow git_status
-/rules add ask "git_push"         # always prompt for git_push
-/rules add deny "delete_*"        # block all delete tools
-/rules add deny "metasploit_*"    # block all metasploit tools
-```
-
-### Remove Rules
-
-```
-/rules remove allow "read_*"
-/rules remove deny "delete_*"
-```
-
-### Rule Priority
-
-1. Rule engine (glob patterns) — evaluated first
-2. Standard permission store (`tool_permissions.json`) — evaluated if no rule matches
-3. Default permission level (per-tool) — used if neither applies
+**Navigation:**
+- `↑/↓` or `k/j` - Select option
+- `Enter` - Confirm selection
+- `Esc` - Deny permission (blocks this execution)
 
 ---
 
 ## Storage
 
 ### Persistent Permissions
+- **File:** `~/.config/grokster/tool_permissions.json`
+- **Permissions:** 0600 (owner read/write only)
+- **Format:** JSON
+- **Contains:** always/never permissions
 
-**File:** `~/.config/gorkbot/tool_permissions.json`
-**Permissions:** 0600 (owner read/write only)
-
+**Example:**
 ```json
 {
   "permissions": {
     "read_file": "always",
-    "list_directory": "always",
-    "file_info": "always",
-    "git_status": "always",
-    "git_diff": "always",
-    "git_log": "always",
-    "system_info": "always",
-    "bash": "once",
     "write_file": "once",
-    "delete_file": "once",
-    "git_push": "once",
-    "metasploit_rpc": "never"
+    "git_push": "never"
   },
   "version": "1.0"
 }
 ```
 
-Only `always` and `never` are persisted. `session` lives in memory only.
-
 ### Session Permissions
-
-Held in `Registry.sessionPerms` (in-memory `map[string]bool`). Cleared when Gorkbot exits or when `/permissions reset` is run.
-
----
-
-## Category-Level Enable/Disable
-
-Disable entire tool categories via `/settings → Tool Groups`. Disabled categories block all tools in that category regardless of individual permissions.
-
-Categories disabled in `app_state.json` (`disabled_categories` field) are restored on next startup.
-
-**Categories:**
-- `shell` — bash
-- `file` — read/write/delete/search
-- `git` — all git operations
-- `web` — HTTP requests, fetch, download
-- `system` — processes, env vars, system info
-- `android` — Android/Termux device tools
-- `security` — recon tools (disabled by default)
-- `pentest` — exploitation tools (disabled by default)
-- `devops` — Docker, Kubernetes, CI/CD
-- `media` — ffmpeg, audio, video
-- `ai` — consultation, image generation, ML
-- `data_science` — CSV, plotting, arxiv
-- `vision` — screen capture and vision analysis
+- **Storage:** In-memory only
+- **Lifetime:** Current Grokster session
+- **Reset:** On exit or with `/permissions reset`
 
 ---
 
-## Recommended Permission Settings
+## Best Practices
 
-### Grant `always` (safe read-only)
+### 🛡️ Security
+1. **Start restrictive:** Default to "once" for new tools
+2. **Review regularly:** Use `/permissions` to audit granted permissions
+3. **Reset periodically:** Clear unused permissions with `/permissions reset`
+4. **Block dangerous tools:** Use "never" for tools you don't want available
 
-```
-read_file             list_directory        file_info
-grep_content          search_files          git_status
-git_diff              git_log               system_info
-disk_usage            check_port            list_processes
-list_tools            tool_info             git_blame_analyze
-arxiv_search          whois_lookup          cve_lookup
-hash_identify         jwt_decode            netstat_analysis
-```
+### 🚀 Productivity
+1. **Grant "always" to safe tools:** `read_file`, `list_directory`, `git_status`
+2. **Use "session" for batch operations:** Temporary access for current task
+3. **Keep "once" for destructive tools:** `delete_file`, `git_push`, `kill_process`
 
-### Keep as `once` (prompt each time — modify state)
+### 📋 Recommended Settings
 
-```
-bash                  write_file            edit_file
-delete_file           git_commit            git_push
-git_pull              http_request          download_file
-kill_process          docker_manager        k8s_kubectl
-create_tool           schedule_task         intent_broadcast
-notification_send
-```
+**Safe to grant "always":**
+- `read_file` - Read-only file access
+- `list_directory` - List directory contents
+- `file_info` - File metadata
+- `git_status` - View git status
+- `git_diff` - View changes
+- `git_log` - View commit history
+- `list_processes` - View running processes
+- `system_info` - System information
+- `disk_usage` - Disk space information
 
-### Consider `never` (high-risk or unused)
+**Keep as "once" (ask each time):**
+- `bash` - Execute arbitrary shell commands
+- `write_file` - Create/modify files
+- `edit_file` - Edit files
+- `delete_file` - Delete files/directories
+- `git_commit` - Create commits
+- `git_push` - Push to remote
+- `git_pull` - Pull from remote
+- `kill_process` - Terminate processes
+- `http_request` - Make HTTP requests
+- `download_file` - Download files
 
-```
-metasploit_rpc        linpeas_run           hydra_run
-hashcat_run           sqlmap_scan           packet_capture
-```
+**Consider "session" for:**
+- Temporary bulk operations
+- Development sessions with frequent tool use
+- Testing and debugging
 
 ---
 
 ## Troubleshooting
 
-### Permission prompt not appearing
+### Permission prompt not showing
+- Check if tool has "always" or "never" permission
+- Use `/permissions` to view current permissions
+- Reset with `/permissions reset <tool>`
 
-The tool has a stored `always` or `never` permission:
-```
-/permissions         # check current state
-/permissions reset <tool>
-```
+### Permission prompt cut off
+- ✅ Fixed in latest version - prompt now appears as centered overlay
+- If issue persists, resize terminal or use `/bug` to report
 
-### Accidentally granted `always` to a dangerous tool
-
+### Accidentally granted "always"
 ```
-/permissions reset bash
-/permissions reset write_file
-```
-
-### Tool silently blocked
-
-Check for `never` permission or a deny rule:
-```
-/permissions
-/rules list
+/permissions reset <tool_name>
 ```
 
-### Want to start completely fresh
-
+### Want to start fresh
 ```
-/permissions reset       # clears tool_permissions.json
-/rules list              # check and manually remove any deny rules
+/permissions reset
 ```
 
-### Related Commands
+### Can't find permissions file
+```
+/settings
+```
+Shows the path to `tool_permissions.json`
 
+---
+
+## Related Commands
+
+- `/tools` - List all available tools
+- `/settings` - View configuration and file paths
+- `/help` - Show all commands
+
+---
+
+## Examples
+
+### Example 1: Audit Permissions
 ```
-/tools                   # list all tools and their categories
-/settings                # open settings overlay (tool group enable/disable)
-/rules list              # show glob-pattern rules
-/permissions             # show all tool permissions
+> /permissions
+
+🔐 Tool Permissions
+
+Total Tools: 44
+- ✅ Always: 12
+- 🔓 Session: 0
+- ❓ Once: 30
+- ❌ Never: 2
+...
 ```
+
+### Example 2: Reset Dangerous Tool
+```
+> /permissions reset bash
+
+✅ Permission reset for `bash`
+
+You will be asked for permission next time this tool is used.
+```
+
+### Example 3: Clean Slate
+```
+> /permissions reset
+
+✅ All permissions reset
+
+All tools will require permission approval on next use.
+```
+
+---
+
+## Summary
+
+The `/permissions` command gives you full control over tool access:
+- 📋 **List** permissions with `/permissions`
+- 🔄 **Reset all** with `/permissions reset`
+- 🎯 **Reset specific** with `/permissions reset <tool>`
+
+Combined with the improved **centered permission prompt UI**, you now have complete visibility and control over tool permissions! 🎉

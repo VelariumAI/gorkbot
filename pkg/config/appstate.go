@@ -18,6 +18,9 @@ type AppState struct {
 
 	// Tool groups disabled by the user via /settings
 	DisabledCategories []string `json:"disabled_categories,omitempty"`
+
+	// Providers disabled by the user (persist across sessions).
+	DisabledProviders []string `json:"disabled_providers,omitempty"`
 }
 
 // AppStateManager loads and saves AppState to a JSON file in the config directory.
@@ -85,6 +88,14 @@ func (m *AppStateManager) SetSecondaryAuto() error {
 func (m *AppStateManager) SetDisabledCategories(cats []string) error {
 	m.mu.Lock()
 	m.st.DisabledCategories = cats
+	m.mu.Unlock()
+	return m.save()
+}
+
+// SetDisabledProviders persists the list of session-disabled provider IDs.
+func (m *AppStateManager) SetDisabledProviders(ids []string) error {
+	m.mu.Lock()
+	m.st.DisabledProviders = ids
 	m.mu.Unlock()
 	return m.save()
 }

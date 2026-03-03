@@ -345,13 +345,13 @@ func (g *GrokProvider) Stream(ctx context.Context, prompt string, out io.Writer)
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(bodyBytes))
+		return MapStatusError(resp.StatusCode, bodyBytes)
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
-		
+
 		// Parse SSE
 		if !strings.HasPrefix(line, "data: ") {
 			continue

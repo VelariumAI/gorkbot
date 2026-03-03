@@ -77,6 +77,16 @@ type OrchestratorAdapter struct {
 	GetToolCallStats func() string
 	// GetDiagnosticReport returns a full system diagnostic snapshot for display in settings.
 	GetDiagnosticReport func() string
+
+	// ToggleProvider toggles a provider's session-disabled state and persists the change.
+	// Returns (nowEnabled bool, statusMsg string).
+	ToggleProvider func(providerID string) (bool, string)
+
+	// GetProviderEnabled returns a map of providerID → enabled for all known providers.
+	GetProviderEnabled func() map[string]bool
+
+	// PersistDisabledProviders writes the list of disabled provider IDs to disk.
+	PersistDisabledProviders func(ids []string) error
 }
 
 // Registry holds all available commands

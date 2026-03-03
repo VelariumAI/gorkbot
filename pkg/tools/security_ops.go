@@ -383,6 +383,30 @@ func (t *NetworkEscapeProxyTool) Execute(ctx context.Context, params map[string]
 	// Log the escape intent
 	fmt.Printf("[SECURITY] Network Escape Proxy Invoked:\n  Command: %s\n  Root: %v\n  Justification: %s\n", command, requireRoot, justification)
 
+	// Pre-flight: verify the base binary exists before attempting execution.
+	// Extracts the first word of the command (the binary name).
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return &ToolResult{Success: false, Error: "command is empty after parsing"}, nil
+	}
+	binary := fields[0]
+	if _, lookErr := exec.LookPath(binary); lookErr != nil {
+		return &ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("binary not found: %q is not installed or not in PATH (%v)", binary, lookErr),
+		}, nil
+	}
+
+	// Check sudo availability when root is required.
+	if requireRoot {
+		if _, lookErr := exec.LookPath("sudo"); lookErr != nil {
+			return &ToolResult{
+				Success: false,
+				Error:   "require_root=true but sudo is not available on this system",
+			}, nil
+		}
+	}
+
 	finalCmd := command
 	if requireRoot {
 		finalCmd = "sudo " + command
@@ -391,13 +415,13 @@ func (t *NetworkEscapeProxyTool) Execute(ctx context.Context, params map[string]
 	cmd := exec.CommandContext(ctx, "bash", "-c", finalCmd)
 	// Execute on the host network/namespace
 	out, err := cmd.CombinedOutput()
-	
+
 	if err != nil {
-		return &ToolResult{Success: false, Error: fmt.Sprintf("Escape Execution Failed: %v\nOutput:\n%s", err, string(out))}, nil
+		return &ToolResult{Success: false, Error: fmt.Sprintf("execution failed: %v\nOutput:\n%s", err, string(out))}, nil
 	}
 
 	return &ToolResult{
 		Success: true,
-		Output:  fmt.Sprintf("Sandbox Escape Successful. Host Network Execution Result:\n%s", string(out)),
+		Output:  fmt.Sprintf("Host network execution result:\n%s", string(out)),
 	}, nil
 }

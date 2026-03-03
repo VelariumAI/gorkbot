@@ -25,6 +25,10 @@ type Manager struct {
 	// Key: modelID, value: failure rate 0.0 (perfect) → 1.0 (always fails).
 	failureRates   map[string]float64
 	failureMu      sync.RWMutex
+
+	// Session-level disable: cleared on restart, not persisted.
+	sessionDisabled map[string]bool
+	sdMu            sync.RWMutex
 }
 
 // NewManager creates a Manager from the given KeyStore and initialises any
@@ -34,10 +38,11 @@ func NewManager(keys *KeyStore, logger *slog.Logger) *Manager {
 		logger = slog.Default()
 	}
 	m := &Manager{
-		keys:         keys,
-		bases:        make(map[string]ai.AIProvider),
-		logger:       logger,
-		failureRates: make(map[string]float64),
+		keys:            keys,
+		bases:           make(map[string]ai.AIProvider),
+		logger:          logger,
+		failureRates:    make(map[string]float64),
+		sessionDisabled: make(map[string]bool),
 	}
 	for _, p := range AllProviders() {
 		m.initProvider(p)
@@ -102,8 +107,34 @@ func (m *Manager) buildBase(provider, key string) ai.AIProvider {
 	}
 }
 
+// DisableForSession marks a provider as session-disabled (not persisted).
+func (m *Manager) DisableForSession(id string) {
+	m.sdMu.Lock()
+	m.sessionDisabled[id] = true
+	m.sdMu.Unlock()
+}
+
+// EnableForSession clears a provider's session-disabled state.
+func (m *Manager) EnableForSession(id string) {
+	m.sdMu.Lock()
+	delete(m.sessionDisabled, id)
+	m.sdMu.Unlock()
+}
+
+// IsSessionDisabled returns true if the provider is disabled for this session.
+func (m *Manager) IsSessionDisabled(id string) bool {
+	m.sdMu.RLock()
+	v := m.sessionDisabled[id]
+	m.sdMu.RUnlock()
+	return v
+}
+
 // GetBase returns the base instance for the provider, or an error if unavailable.
+// Returns an error if the provider is session-disabled.
 func (m *Manager) GetBase(provider string) (ai.AIProvider, error) {
+	if m.IsSessionDisabled(provider) {
+		return nil, fmt.Errorf("provider %q is disabled for this session", provider)
+	}
 	m.mu.RLock()
 	base, ok := m.bases[provider]
 	m.mu.RUnlock()

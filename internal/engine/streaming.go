@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/velariumai/gorkbot/internal/arc"
+	"github.com/velariumai/gorkbot/pkg/ai"
 	"github.com/velariumai/gorkbot/pkg/collab"
 	"github.com/velariumai/gorkbot/pkg/hooks"
 	"github.com/velariumai/gorkbot/pkg/router"
@@ -224,8 +225,29 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 	maxContextTokens := 100000
 	o.ConversationHistory.TruncateToTokenLimit(maxContextTokens)
 
+	// Capture current provider ID for cascade detection.
+	currentProviderID := ""
+	if o.Primary != nil {
+		currentProviderID = string(o.Primary.ID())
+	}
+
+	// ── ARC: classify prompt and compute platform-aware resource budget ──────
+	maxTurns := 10 // default: prevent infinite loops
+	if o.Intelligence != nil {
+		arcDecision := o.Intelligence.Route(prompt)
+		o.Logger.Info("ARC routing decision (streaming)",
+			"workflow", arcDecision.Classification.String(),
+			"max_tool_calls", arcDecision.Budget.MaxToolCalls,
+			"temperature", arcDecision.Budget.Temperature,
+		)
+		if arcDecision.Budget.MaxToolCalls > 0 {
+			maxTurns = arcDecision.Budget.MaxToolCalls
+		}
+	}
+
 	// Multi-turn tool execution loop
-	maxTurns := 10
+	const maxSENSEInjections = 2 // cap runaway SENSE chains per query
+	senseInjections := 0
 	var fullResponse strings.Builder
 
 	for turn := 0; turn < maxTurns; turn++ {
@@ -254,6 +276,26 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		streamErr := o.Primary.StreamWithHistory(ctxWithCancel, o.ConversationHistory, streamWriter)
 		cancel() // Release context resources for this turn immediately
 
+		// ── Context window + billing tracking ────────────────────────────────
+		// Mirror the updateContextMgr() logic from ExecuteTaskWithTools so the
+		// streaming path keeps the ContextManager and Billing in sync.
+		if ur, ok := o.Primary.(ai.UsageReporter); ok {
+			u := ur.LastUsage()
+			provID := string(o.Primary.ID())
+			modelID := o.Primary.GetMetadata().ID
+			if o.ContextMgr != nil {
+				o.ContextMgr.UpdateFromUsage(TokenUsage{
+					InputTokens:  u.PromptTokens,
+					OutputTokens: u.CompletionTokens,
+					ProviderID:   provID,
+					ModelID:      modelID,
+				})
+			}
+			if o.Billing != nil {
+				o.Billing.TrackTurn(provID, modelID, u.PromptTokens, u.CompletionTokens)
+			}
+		}
+
 		// ALWAYS commit whatever was streamed to history, even on partial / error.
 		// Without this, an interrupted response is silently dropped and the model
 		// starts the next turn with no recollection of what it was doing.
@@ -274,6 +316,21 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		}
 
 		if streamErr != nil {
+			// On first turn, try provider cascade for outage-type errors.
+			if isProviderOutage(streamErr) && turn == 0 && currentProviderID != "" {
+				retryable, msg := o.RunProviderCascade(ctx, currentProviderID)
+				if streamCallback != nil {
+					streamCallback(fmt.Sprintf("\n\n[%s]\n\n", msg))
+				}
+				if retryable {
+					// Update provider ID in case this turn also fails.
+					if o.Primary != nil {
+						currentProviderID = string(o.Primary.ID())
+					}
+					fullResponse.Reset()
+					continue
+				}
+			}
 			o.Logger.Error("Primary streaming failed", "error", streamErr, "turn", turn+1)
 			return streamErr
 		}
@@ -307,7 +364,13 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 				o.Logger.Warn("Agency analysis error", "error", err)
 			}
 			if injected {
-				o.Logger.Info("SENSE intervention triggered, continuing streaming execution loop")
+				senseInjections++
+				if senseInjections > maxSENSEInjections {
+					o.Logger.Info("SENSE injection cap reached, stopping early", "cap", maxSENSEInjections)
+					break
+				}
+				o.Logger.Info("SENSE intervention triggered, continuing streaming execution loop", "injection", senseInjections)
+				fullResponse.Reset()
 				continue
 			}
 

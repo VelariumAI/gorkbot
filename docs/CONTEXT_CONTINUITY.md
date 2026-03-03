@@ -1,377 +1,502 @@
-# Context Continuity & Memory Systems
+# Conversation Context Continuity
 
-**Version:** 3.4.0
+## Overview
 
-Gorkbot maintains context continuity across turns within a session, and across sessions via several persistent memory systems. This document explains all memory layers and how they interact.
-
----
-
-## Table of Contents
-
-1. [In-Session Conversation History](#1-in-session-conversation-history)
-2. [CCI — Three-Tier Project Memory](#2-cci--three-tier-project-memory)
-3. [SENSE AgeMem & Engrams](#3-sense-agemem--engrams)
-4. [MEL Heuristic Store](#4-mel-heuristic-store)
-5. [Goal Ledger](#5-goal-ledger)
-6. [Unified Memory API](#6-unified-memory-api)
-7. [Session Management](#7-session-management)
-8. [Context Window Management](#8-context-window-management)
-9. [Message Flow Example](#9-message-flow-example)
+Grokster now implements **robust conversation context management** that ensures Grok maintains full memory of the entire conversation across all prompts within a session.
 
 ---
 
-## 1. In-Session Conversation History
+## 🎯 Problem Solved
 
-`pkg/ai.ConversationHistory` maintains the complete message chain for the current session. It is passed to every AI API call, giving the model full context of the conversation.
+**Before:** Grok was losing context between prompts because only the current prompt was being sent to the API, with no conversation history.
 
-### Message Types
+**After:** Full conversation history is maintained and sent with every request, ensuring perfect continuity throughout the session.
+
+---
+
+## 🏗️ Architecture
+
+### 1. Conversation History Manager
+**File:** `pkg/ai/conversation.go`
+
+Manages the complete conversation state with thread-safe operations:
 
 ```go
+type ConversationHistory struct {
+    messages []ConversationMessage // All messages (system, user, assistant)
+    mu       sync.RWMutex          // Thread-safe access
+}
+
 type ConversationMessage struct {
-    Role        string       // "system" | "user" | "assistant" | "tool"
-    Content     string
-    Timestamp   time.Time
-    ToolCalls   []ToolCallEntry  // native function calling (xAI)
-    ToolCallID  string           // for "tool" role messages
-    ToolName    string           // for "tool" role messages
+    Role      string    // "system", "user", "assistant"
+    Content   string
+    Timestamp time.Time
 }
 ```
 
-### Thread Safety
+**Key Features:**
+- Thread-safe message storage
+- Automatic token estimation
+- Smart truncation to fit context limits
+- Preserves system messages + recent conversation
 
-`ConversationHistory` uses a `sync.RWMutex` — safe for concurrent access from multiple goroutines (streaming + tool execution).
+---
 
-### API
+### 2. Enhanced AI Provider Interface
+**File:** `pkg/ai/interface.go`
+
+Added conversation-aware methods:
 
 ```go
-// Adding messages
-history.AddSystemMessage("System context...")
-history.AddUserMessage("User question")
-history.AddAssistantMessage("AI response")
-history.AddToolCallMessage(toolCalls)           // native function calling
-history.AddToolResultMessage(id, name, result)  // tool results
+type AIProvider interface {
+    // Legacy (deprecated)
+    Generate(ctx context.Context, prompt string) (string, error)
 
-// Reading messages
-messages := history.GetMessages()
-recent := history.GetRecentMessages(10)
-count := history.Count()
-tokens := history.EstimateTokens()    // rough: len(content)/4
+    // New - with conversation context
+    GenerateWithHistory(ctx context.Context, history *ConversationHistory) (string, error)
+    StreamWithHistory(ctx context.Context, history *ConversationHistory, out io.Writer) error
 
-// Management
-history.Truncate(50)                  // keep last 50 messages
-history.TruncateToTokenLimit(100000)  // fit within token budget
-history.Clear()                       // reset (called by /clear)
-```
-
-### Clearing Context
-
-```
-/clear    # clears TUI messages + ConversationHistory + starts fresh
-```
-
----
-
-## 2. CCI — Three-Tier Project Memory
-
-**Package:** `pkg/cci`
-
-CCI (Codified Context Infrastructure) provides persistent project knowledge across sessions. It is injected into every system message, giving the AI awareness of the project's conventions, architecture, and subsystems without relying on in-session messages.
-
-### Tier 1 — Hot Memory (always loaded)
-
-**Path:** `~/.config/gorkbot/cci/hot/`
-
-- `CONVENTIONS.md` — Universal coding conventions, naming rules, workflow patterns
-- `SUBSYSTEM_POINTERS.md` — Index of all Tier 3 subsystem docs with one-line summaries
-
-`HotMemory.BuildBlock()` returns a compact string (< 2000 tokens) prepended to every system message. Includes conventions + subsystem index summary + ARC trigger table summary + any active drift warnings.
-
-**Edit directly** or via the `mcp_context_update_subsystem` tool to add project-specific conventions.
-
-### Tier 2 — Specialist Memory (on-demand)
-
-**Path:** `~/.config/gorkbot/cci/specialists/<domain>.md`
-
-Loaded when the ARC trigger table matches a file path or task description to a domain. Contains domain-specific patterns, failure mode tables, and known pitfalls.
-
-**Domains:** `security`, `frontend`, `backend`, `devops`, `data_science`, `mobile`, `database`, etc.
-
-Activate manually: `mcp_context_suggest_specialist` tool returns the best matching domain; the orchestrator loads it before the AI turn.
-
-### Tier 3 — Cold Memory (on-demand via tool)
-
-**Path:** `~/.config/gorkbot/cci/docs/<subsystem>.md`
-
-Queried by the AI via `mcp_context_get_subsystem("<subsystem>")`. On empty result, `HandleCCIGap()` triggers Plan mode — the AI stops and explicitly plans how to acquire the missing knowledge.
-
-**Living documents** — updated by `mcp_context_update_subsystem` as the project evolves. Auto-populated with drift warnings when git history shows the subsystem's source files changed.
-
-### CCI Tools
-
-| Tool | Purpose |
-|------|---------|
-| `mcp_context_list_subsystems` | List all Tier 3 docs |
-| `mcp_context_get_subsystem` | Retrieve a spec |
-| `mcp_context_suggest_specialist` | Recommend a Tier 2 domain |
-| `mcp_context_update_subsystem` | Write/update a Tier 3 doc |
-| `mcp_context_list_specialists` | List Tier 2 domains |
-| `mcp_context_status` | Full CCI status report |
-
-### Drift Detection
-
-`DriftDetector.Check()` runs `git log --since=<doc_updated_at> -- <subsystem_files>` to find files modified after the doc was last updated. Drift warnings appear in the Tier 1 block:
-
-```
-⚠️ DRIFT WARNING: pkg/auth/jwt.go modified 3 days after auth_system doc was last updated.
-   CCI docs may be stale. Consider running: mcp_context_update_subsystem auth_system
-```
-
----
-
-## 3. SENSE AgeMem & Engrams
-
-**Package:** `pkg/sense` (integrated via `internal/engine`)
-
-SENSE (Semantic Experience Neural Storage Engine) provides episodic memory with age-stratification.
-
-### AgeMem
-
-Age-stratified memory that retains "memories" with decreasing fidelity over time, similar to human memory consolidation:
-
-- **Hot memories** — recent experiences, high fidelity, quickly accessible
-- **Warm memories** — consolidated summaries, moderate fidelity
-- **Cold memories** — long-term abstractions, low fidelity, permanent
-
-AgeMem is initialized by `Orchestrator.InitSENSEMemory(configDir)` and populated during each session. Relevant memories are retrieved and injected into the system prompt.
-
-### Engrams
-
-`EngramStore` records specific experiences as structured knowledge entries:
-
-```
-record_engram(content="Discovered that batch tool execution requires WaitGroup", tags=["concurrency", "tools"])
-```
-
-Engrams persist across sessions and are recalled when similar tasks arise.
-
-### `code2world` Tool
-
-Translates code artifacts into semantic knowledge:
-
-```
-code2world(path="pkg/auth/jwt.go", notes="JWT implementation with refresh token rotation")
-```
-
-Creates an AgeMem entry linking the file's purpose and patterns to the SENSE knowledge graph.
-
----
-
-## 4. MEL Heuristic Store
-
-**Package:** `internal/mel`
-
-MEL (Meta-Experience Learning) derives heuristics from repeated tool failure/success patterns and injects them into the system prompt.
-
-### How Heuristics Form
-
-```
-ExecuteTool("write_file", {path: "auth.go", content: "..."})
-  → Failure: "file locked by another process"
-
-MEL.ObserveFailed("write_file", {path: "auth.go"}, error)
-
-# Later, same task succeeds differently:
-ExecuteTool("bash", {command: "flock -x auth.go -c 'cat > auth.go'"})
-  → Success
-
-MEL.ObserveSuccess("write_file-via-flock", {path: "auth.go"})
-
-# BifurcationAnalyzer detects divergence:
-→ Generates heuristic: "When writing auth.go, verify file lock with flock to avoid EWOULDBLOCK"
-→ VectorStore.Add(heuristic)
-→ Persisted to ~/.config/gorkbot/vector_store.json
-```
-
-### Heuristic Structure
-
-```go
-type Heuristic struct {
-    Context    string   // "When [ctx]"
-    Constraint string   // "verify [constraint]"
-    Avoid      string   // "avoid [error]"
-    Confidence float64  // 0.0-1.0; evicted when lowest at 500-entry cap
-    Tags       []string
+    // ... other methods
 }
 ```
 
-### Injection
-
-Before each AI turn, the top-N (default 3) heuristics most relevant to the current prompt are retrieved via Jaccard similarity and prepended to the system message.
-
-### Vector Store
-
-**Path:** `~/.config/gorkbot/vector_store.json`
-- Max capacity: 500 entries
-- Deduplication: entries > 70% similar are merged/updated
-- Eviction: lowest-confidence entry removed when at capacity
-
 ---
 
-## 5. Goal Ledger
+### 3. Grok Provider Implementation
+**File:** `pkg/ai/grok.go`
 
-**Package:** `pkg/memory`
-
-Cross-session prospective memory for multi-session goals and tasks.
-
-```
-add_goal(description="Refactor auth module to JWT", priority="high")
-list_goals()         # shows all open goals at session start
-close_goal(id, outcome="Completed JWT migration in PR #42")
-```
-
-**Path:** `~/.config/gorkbot/goal_ledger.json`
-
-Open goals are listed in the system prompt on each session start, giving the AI awareness of ongoing work across restarts.
-
----
-
-## 6. Unified Memory API
-
-`memory.UnifiedMemory` provides a single API wrapping all three memory systems:
+Converts conversation history to Grok's message format:
 
 ```go
-type UnifiedMemory struct {
-    AgeMem  *sense.AgeMem
-    Engrams *sense.EngramStore
-    Store   *mel.VectorStore
+func (g *GrokProvider) GenerateWithHistory(ctx context.Context, history *ConversationHistory) (string, error) {
+    messages := g.convertHistoryToMessages(history)
+
+    reqBody := GrokRequest{
+        Model: g.Model,
+        Messages: messages, // Full conversation!
+    }
+    // ... send to API
 }
-
-// Query all systems at once
-results := unifiedMem.Query(ctx, "auth module patterns")
-// Returns: relevant AgeMem entries + Engrams + MEL heuristics
-// ranked by relevance score
 ```
 
-The orchestrator uses `UnifiedMemory.Query` when building the system prompt to efficiently pull context from all persistent stores.
-
----
-
-## 7. Session Management
-
-### Automatic Checkpoints
-
-Gorkbot saves up to 20 conversation checkpoints automatically. Each checkpoint captures the full `ConversationHistory` at that moment.
-
-```
-/rewind last          # restore most recent checkpoint
-/rewind <id>          # restore specific checkpoint
-```
-
-After a rewind, the TUI clears its message list and shows a rewind notice.
-
-### Named Sessions
-
-```
-/save my-session      # serialize and write to session file
-/resume my-session    # deserialize and restore
-/resume list          # list all saved sessions
-```
-
-Session files are stored in `~/.config/gorkbot/sessions/` (JSON encoded with full message history).
-
-### Export
-
-```
-/export markdown                    # export to timestamped .md file
-/export json session.json           # export specific file
-/export plain                       # plain text
+**Message Conversion:**
+```go
+ConversationMessage{Role: "system", Content: "..."}   → GrokMessage{Role: "system", ...}
+ConversationMessage{Role: "user", Content: "..."}     → GrokMessage{Role: "user", ...}
+ConversationMessage{Role: "assistant", Content: "..."} → GrokMessage{Role: "assistant", ...}
 ```
 
 ---
 
-## 8. Context Window Management
+### 4. Gemini Provider Implementation
+**File:** `pkg/ai/gemini.go`
 
-**Package:** `internal/engine/context_manager.go`
+Similar implementation with Gemini-specific message format:
 
-### Token Tracking
-
-After each AI turn, `GrokProvider.GetLastUsage()` (or equivalent) returns token counts which are fed to `ContextMgr.UpdateFromUsage()`:
-
-```
-TokenUsage{PromptTokens: 12345, CompletionTokens: 456, TotalTokens: 12801}
-  → ContextMgr.UpdateFromUsage()
-  → StatusBar.SetContextStats(pct, costStr)
-  → BillingManager.Record(model, usage)
-  → Emits ContextUpdateMsg to TUI
+```go
+func (g *GeminiProvider) convertHistoryToContents(history *ConversationHistory) []GeminiContent {
+    // "assistant" → "model" (Gemini's terminology)
+    // "system" messages are skipped (Gemini handles them differently)
+    // "user" → "user"
+}
 ```
 
-The status bar shows: `[ 34% ctx ] [ $0.0087 ]`
+---
+
+### 5. Orchestrator Integration
+**File:** `internal/engine/orchestrator.go`
+
+The orchestrator now:
+1. **Maintains history** across the entire session
+2. **Adds messages** before/after each AI interaction
+3. **Manages context limits** automatically
+
+```go
+type Orchestrator struct {
+    Primary             ai.AIProvider
+    Consultant          ai.AIProvider
+    Registry            *tools.Registry
+    Logger              *slog.Logger
+    ConversationHistory *ai.ConversationHistory // NEW!
+}
+```
+
+**Flow:**
+```
+User sends prompt
+    ↓
+Add system message (tool context) on first message
+    ↓
+Add user message to history
+    ↓
+Call Primary.GenerateWithHistory(history) ← Full context!
+    ↓
+Receive response
+    ↓
+Add assistant response to history
+    ↓
+If tools requested:
+    - Execute tools
+    - Add tool results as user message
+    - Repeat with full context
+    ↓
+Return final response
+```
+
+---
+
+## 🔄 Message Flow Example
+
+### Turn 1: Initial Question
+```
+History: [empty]
+    ↓
+Add: SYSTEM "Tool definitions: ..."
+Add: USER "What is 2+2?"
+    ↓
+API receives: [SYSTEM, USER]
+    ↓
+Response: "2+2 equals 4"
+Add: ASSISTANT "2+2 equals 4"
+    ↓
+History: [SYSTEM, USER, ASSISTANT]
+```
+
+### Turn 2: Follow-up Question
+```
+History: [SYSTEM, USER₁, ASSISTANT₁]
+    ↓
+Add: USER "What about 3+3?"
+    ↓
+API receives: [SYSTEM, USER₁, ASSISTANT₁, USER₂]
+    ↓
+Response: "3+3 equals 6"
+Add: ASSISTANT "3+3 equals 6"
+    ↓
+History: [SYSTEM, USER₁, ASSISTANT₁, USER₂, ASSISTANT₂]
+```
+
+### Turn 3: Context-Dependent Question
+```
+History: [SYSTEM, USER₁, ASSISTANT₁, USER₂, ASSISTANT₂]
+    ↓
+Add: USER "What's the sum of those two answers?"
+    ↓
+API receives: [SYSTEM, USER₁, ASSISTANT₁, USER₂, ASSISTANT₂, USER₃]
+    ↓
+Grok can see: "2+2=4" and "3+3=6" from previous turns
+Response: "4 + 6 = 10"
+    ↓
+History: [SYSTEM, USER₁, ASSISTANT₁, USER₂, ASSISTANT₂, USER₃, ASSISTANT₃]
+```
+
+✅ **Perfect continuity!**
+
+---
+
+## 🧠 Smart Context Management
+
+### Token Limit Management
+
+**Default limit:** 100,000 tokens (80% of Grok-3's 128k context)
+
+```go
+// After adding each message
+history.TruncateToTokenLimit(100000)
+```
 
 ### Truncation Strategy
 
-`ConversationHistory.TruncateToTokenLimit(100000)` (called after each message addition):
-
-1. Separate system messages from conversation messages
-2. Calculate tokens used by system messages
-3. Starting from the most recent message, greedily include conversation messages until token budget is exhausted
-4. Rebuild: `systemMessages + keptConversationMessages`
-
-**Key invariant:** A very large individual message is **skipped** (not dropped), preserving older history — this was a deliberate fix from the original `break`-based implementation that would discard all older history when encountering one large message.
-
-### Context Commands
+When context exceeds limit:
+1. **Keep all system messages** (tool definitions)
+2. **Keep most recent conversation** that fits
+3. **Discard oldest messages** first
 
 ```
-/context    # show current usage breakdown
-/cost       # show session cost estimate by model
-/compact    # intelligent compression (summarize + retain recent)
-/compress   # alias for /compact
+Before truncation:
+[SYSTEM, USER₁, ASST₁, USER₂, ASST₂, ..., USER₉₉, ASST₉₉]
+                                              ↑
+                                        Too many tokens
+After truncation:
+[SYSTEM, USER₇₀, ASST₇₀, ..., USER₉₉, ASST₉₉]
+ ↑       ↑
+ Kept    Kept most recent that fit
 ```
 
-### Compression
+### Token Estimation
 
-`/compact [focus hint]` invokes `Orchestrator.CompactFocus(hint)`:
-1. Sends the current conversation history to the AI with instructions to compress it
-2. Replaces the history with a summary + the most recent N messages
-3. Emits a notice in the TUI indicating compression occurred and how many tokens were saved
+**Rough approximation:** ~4 characters per token
+
+```go
+func (ch *ConversationHistory) EstimateTokens() int {
+    totalChars := 0
+    for _, msg := range ch.messages {
+        totalChars += len(msg.Content)
+    }
+    return totalChars / 4
+}
+```
 
 ---
 
-## 9. Message Flow Example
+## 🔧 API Methods
 
-### Turn 1
+### Conversation History
 
-```
-State: history=[SYSTEM], goal_ledger=[Goal: Refactor auth], mel_heuristics=[1 match]
+```go
+// Create new history
+history := ai.NewConversationHistory()
 
-User: "Start refactoring the auth module"
+// Add messages
+history.AddSystemMessage("System context")
+history.AddUserMessage("User question")
+history.AddAssistantMessage("AI response")
 
-→ CCI.BuildCCISystemContext() → "Tier 1: conventions... Tier 2: security specialist..."
-→ MEL heuristic injected: "When touching auth, verify token expiry handling"
-→ Goal context injected: "Open goal: Refactor auth module to JWT (high priority)"
-→ ConvHistory.AddUserMessage("Start refactoring the auth module")
-→ Primary.GenerateWithTools(history, schemas)
-   → tool_calls: [{name: "read_file", params: {path: "pkg/auth/auth.go"}}]
-→ Execute read_file → content
-→ MEL.ObserveSuccess("read_file", {path: "pkg/auth/auth.go"})
-→ ConvHistory.AddToolResult(…)
-→ Primary.GenerateWithTools(history, schemas)
-   → response: "I can see the auth module uses sessions. Here's my refactoring plan..."
-→ ConvHistory.AddAssistantMessage("I can see...")
-→ StreamCompleteMsg → TUI renders
+// Get messages
+messages := history.GetMessages()          // All messages
+recent := history.GetRecentMessages(10)   // Last 10 messages
 
-State: history=[SYSTEM, USER, TOOL_RESULT, ASSISTANT], checkpoint saved
-```
+// Manage size
+count := history.Count()                  // Message count
+tokens := history.EstimateTokens()        // Estimate token usage
 
-### Turn 2
+// Truncate
+history.Truncate(50)                      // Keep last 50 messages
+history.TruncateToTokenLimit(100000)      // Fit within token limit
 
-```
-User: "Apply the changes"
-
-→ CCI context: same (always-loaded Tier 1)
-→ MEL heuristics: same + new ones if Turn 1 generated bifurcations
-→ ConvHistory.AddUserMessage("Apply the changes")
-→ AI has full context of Turn 1 (file content, plan discussed)
-→ Proceeds to write changes using write_file
+// Clear
+history.Clear()                           // Remove all messages
 ```
 
-The AI retains full context throughout — no re-explanation needed.
+### Orchestrator
+
+```go
+// Get history
+history := orchestrator.GetHistory()
+
+// Clear history (also done by /clear command)
+orchestrator.ClearHistory()
+```
+
+---
+
+## 🎮 User Commands
+
+### `/clear` - Reset Conversation
+
+```
+/clear
+```
+
+**Effect:**
+- Clears TUI message list
+- Clears orchestrator conversation history
+- Next prompt starts fresh
+
+**Use when:**
+- Starting a new topic
+- Context has become too long
+- Want to reset AI's "memory"
+
+---
+
+## 🔍 Debugging
+
+### Enable Watchdog Mode
+
+```bash
+./grokster.sh -watchdog
+```
+
+Shows:
+- Current turn number
+- History message count
+- Prompt preview
+
+**Example output:**
+```
+[WATCHDOG] Stage: Turn 3
+[WATCHDOG] Primary Provider: Grok
+[WATCHDOG] History messages: 7
+[WATCHDOG] Prompt Preview: User question about...
+```
+
+### Check Logs
+
+```bash
+cat ~/.config/grokster/grokster.json | jq -r '. | select(.msg == "Executing AI turn")'
+```
+
+Shows turn-by-turn execution with message counts.
+
+---
+
+## 📊 Performance Impact
+
+### Memory Usage
+- **Minimal:** Each message ~100 bytes (average)
+- **100 messages:** ~10 KB
+- **1000 messages:** ~100 KB (rare, would be truncated)
+
+### API Costs
+- ✅ **Efficient:** Only sends necessary context
+- ✅ **Truncates:** Automatically limits to 100k tokens
+- ✅ **Smart:** Keeps system messages + recent history
+
+### Latency
+- **Negligible:** Conversation history processing is < 1ms
+- **Network:** Same as before (depends on API response time)
+
+---
+
+## 🚨 Edge Cases Handled
+
+### 1. Empty History
+- System message added on first turn
+- No crashes or errors
+
+### 2. Context Overflow
+- Automatic truncation to token limit
+- System messages always preserved
+- Most recent conversation kept
+
+### 3. Tool Execution
+- Tool results added as user messages
+- AI can reference previous tool calls
+- Multi-turn tool workflows work correctly
+
+### 4. Concurrent Access
+- Thread-safe with RWMutex
+- Safe for async operations
+
+### 5. Session Boundaries
+- History persists for entire session
+- Cleared on `/clear` or restart
+- No leakage between sessions
+
+---
+
+## 🎯 Benefits
+
+### ✅ For Users
+1. **Natural conversations** - AI remembers everything
+2. **Follow-up questions** - No need to repeat context
+3. **Multi-turn tasks** - Complex workflows maintain state
+4. **Tool chaining** - AI remembers previous tool results
+
+### ✅ For Developers
+1. **Clean architecture** - Separation of concerns
+2. **Thread-safe** - Concurrent access supported
+3. **Extensible** - Easy to add features
+4. **Testable** - Clear interfaces
+
+### ✅ For Performance
+1. **Efficient** - Smart truncation
+2. **Scalable** - Handles long conversations
+3. **Robust** - No memory leaks
+
+---
+
+## 📝 Example Conversation
+
+```
+User: What's the capital of France?
+Grok: The capital of France is Paris.
+
+User: What's its population?
+Grok: Paris has a population of approximately 2.2 million people in the city proper...
+
+User: How does that compare to the first city I asked about?
+Grok: Both questions were about Paris, so the population is the same - about 2.2 million.
+
+User: No, I mean if I had asked about London instead
+Grok: Ah, I see! Well, you initially asked about Paris (population ~2.2 million).
+      If you had asked about London instead, the comparison would be:
+      - London: ~9 million in Greater London
+      - Paris: ~2.2 million in city proper
+      London would be about 4x larger.
+```
+
+✅ **Full context retained throughout!**
+
+---
+
+## 🔧 Technical Details
+
+### Thread Safety
+```go
+type ConversationHistory struct {
+    messages []ConversationMessage
+    mu       sync.RWMutex  // Concurrent read/write safe
+}
+
+func (ch *ConversationHistory) AddMessage(role, content string) {
+    ch.mu.Lock()         // Exclusive write lock
+    defer ch.mu.Unlock()
+    // ... modify messages
+}
+
+func (ch *ConversationHistory) GetMessages() []ConversationMessage {
+    ch.mu.RLock()        // Shared read lock
+    defer ch.mu.RUnlock()
+    // ... return copy (prevents external modification)
+}
+```
+
+### Message Format (Grok API)
+```json
+{
+  "model": "grok-3",
+  "messages": [
+    {"role": "system", "content": "Tool definitions..."},
+    {"role": "user", "content": "What is 2+2?"},
+    {"role": "assistant", "content": "2+2 equals 4"},
+    {"role": "user", "content": "What about 3+3?"}
+  ]
+}
+```
+
+### Truncation Algorithm
+```go
+func TruncateToTokenLimit(maxTokens int) {
+    // 1. Separate system from conversation
+    systemMessages := filter(role == "system")
+    conversationMessages := filter(role != "system")
+
+    // 2. Calculate available tokens
+    systemTokens := estimateTokens(systemMessages)
+    availableTokens := maxTokens - systemTokens
+
+    // 3. Keep most recent conversation that fits
+    kept := []
+    currentTokens := 0
+    for i := len(conversationMessages)-1; i >= 0; i-- {
+        msgTokens := estimate(conversationMessages[i])
+        if currentTokens + msgTokens > availableTokens {
+            break
+        }
+        kept.prepend(conversationMessages[i])
+        currentTokens += msgTokens
+    }
+
+    // 4. Rebuild: system + kept conversation
+    messages = systemMessages + kept
+}
+```
+
+---
+
+## 🎉 Summary
+
+Grokster now has **enterprise-grade conversation context management**:
+
+- ✅ **Full memory** across entire session
+- ✅ **Automatic truncation** to fit context limits
+- ✅ **Thread-safe** operations
+- ✅ **Smart preservation** of system messages
+- ✅ **Tool-aware** context management
+- ✅ **Easy to use** with `/clear` command
+- ✅ **Zero overhead** for single-turn queries
+- ✅ **Scales efficiently** for long conversations
+
+**Result:** Grok now maintains perfect conversational continuity, just like having a conversation with a human who remembers everything you've discussed! 🚀
