@@ -2,9 +2,9 @@
 
 **Multi-model AI orchestration in your terminal.**
 
-Gorkbot is an enterprise-grade, open-source AI agent CLI that combines five AI providers — xAI Grok, Google Gemini, Anthropic Claude, OpenAI, and MiniMax — in a unified full-screen terminal UI. A sophisticated orchestration engine, 150+ built-in tools, a three-tier persistent memory system, and an adaptive intelligence layer make Gorkbot capable of handling everything from quick queries to complex, multi-step autonomous agentic workflows.
+Gorkbot is an enterprise-grade, open-source AI agent CLI that combines five AI providers — xAI Grok, Google Gemini, Anthropic Claude, OpenAI, and MiniMax — in a unified full-screen terminal UI. A sophisticated orchestration engine, 162+ built-in tools, a three-tier persistent memory system, an adaptive intelligence layer, and automatic provider failover make Gorkbot capable of handling everything from quick queries to complex, multi-step autonomous agentic workflows.
 
-> **Version:** 3.4.0
+> **Version:** 3.5.1
 > **License:** MIT
 > **Author:** Todd Eddings / Velarium AI
 > **Module:** `github.com/velariumai/gorkbot`
@@ -15,6 +15,8 @@ Gorkbot is an enterprise-grade, open-source AI agent CLI that combines five AI p
 
 ### AI & Orchestration
 - **Five AI providers** — xAI (Grok), Google (Gemini), Anthropic (Claude), OpenAI, MiniMax; all switchable at runtime
+- **Provider failover cascade** — automatic failover through `xAI → Google → Anthropic → MiniMax → OpenAI → OpenRouter` on outage, quota exhaustion, or credential failure (v3.5.0)
+- **Manual provider toggles** — **API Providers** tab in Settings (`Ctrl+G`) enables/disables providers for the session; state persists across restarts (v3.5.0)
 - **Dynamic model discovery** — live model lists polled from all providers every 30 minutes; best model auto-selected per task
 - **Dual-model orchestration** — primary agent + specialist consultant with automatic routing for complex queries
 - **Native xAI function calling** — structured `tool_calls` via xAI API; falls back to text parsing for other providers
@@ -24,12 +26,13 @@ Gorkbot is an enterprise-grade, open-source AI agent CLI that combines five AI p
 - **Adaptive model routing** — JSONL-persisted feedback loop; `/rate 1-5` teaches the router which model performs best per task category
 
 ### Tool System
-- **150+ built-in tools** across 20+ categories: shell, file, git, web, system, security, Android/Termux, DevOps, media, data science, personal, AI/ML, database, vision, and more
+- **162+ built-in tools** across 33+ categories: shell, file, git, web, system, security, Android/Termux, DevOps, media, data science, personal, AI/ML, database, vision, and more
 - **Parallel tool execution** — up to 4 concurrent tool goroutines per turn; result collection preserves ordering
 - **Dynamic tool creation** — `create_tool` generates hot-loaded tools at runtime (no restart required); `rebuild` permanently compiles them into the binary
 - **Tool permission system** — four levels (always/session/once/never) with per-tool glob-pattern rules and persistent JSON storage
 - **Category-level enable/disable** — disable entire tool groups via `/settings` (persisted across sessions)
 - **MCP (Model Context Protocol)** — multi-server stdio client; tools prefixed `mcp_<server>_<toolname>` registered automatically
+- **RAG Memory plugin** — persistent semantic vector memory via ChromaDB + MiniLM-L6-v2; `store` / `search` / `stats` / `purge` actions; rolling 10k engram window; auto-installed on first use (v3.5.0)
 - **Tool analytics** — per-tool call counts, success rates, and latency stored in SQLite
 
 ### Memory & Context
@@ -48,8 +51,8 @@ Gorkbot is an enterprise-grade, open-source AI agent CLI that combines five AI p
 - **Full-screen TUI** built with Bubble Tea, Lip Gloss, and Glamour
 - **Markdown rendering** — full CommonMark with syntax-highlighted code blocks
 - **Touch-scroll** — works on Android/Termux with finger scrolling
-- **Tabs** — Chat, Tools (`Ctrl+E`), Models (`Ctrl+T`), Cloud Brains (`Ctrl+D`), Diagnostics (`Ctrl+\`)
-- **Settings overlay** (`Ctrl+G`) — model routing, verbosity, tool group enable/disable
+- **Tabs** — Chat, Models (`Ctrl+T`), Tools (`Ctrl+E`), Cloud Brains (`Ctrl+D`), Analytics (`Ctrl+A`), Diagnostics (`Ctrl+\`)
+- **Settings overlay** (`Ctrl+G`) — 4 tabs: model routing, verbosity, tool group enable/disable, API provider toggles (v3.5.0)
 - **Bookmarks** (`Ctrl+B`) — bookmark and jump to important conversation points
 - **Execution modes** — Normal, Plan, Auto (cycle with `Ctrl+P` or `/mode`)
 - **Debug mode** (`/debug`) — reveals raw AI output including tool JSON blocks
@@ -281,11 +284,11 @@ gorkbot/
 │   ├── skills/           Skill definition loader (YAML frontmatter markdown)
 │   ├── subagents/        Sub-agent system (spawn, delegate, worktree isolation)
 │   ├── theme/            JSON-based theme system (5 built-ins + custom)
-│   ├── tools/            Tool registry, 150+ tool implementations
+│   ├── tools/            Tool registry, 162+ tool implementations
 │   ├── tui/              (alias — tui lives in internal/tui)
 │   ├── usercommands/     User-defined slash command loader
 │   └── vision/           Vision pipeline (ADB, MediaProjection, Grok Vision API)
-├── plugins/python/       Python plugin bridge
+├── plugins/python/       Python plugin bridge (rag_memory, custom plugins)
 ├── scripts/              Setup and bridge scripts
 ├── docs/                 Reference documentation
 ├── gorkbot.sh            Launcher script (loads .env, passes all flags)
@@ -312,6 +315,7 @@ gorkbot/
 | `feedback.jsonl` | `~/.config/gorkbot/` | Adaptive router feedback history |
 | `usage_history.jsonl` | `~/.config/gorkbot/` | Per-model billing history |
 | `cci/` | `~/.config/gorkbot/` | CCI tier 1/2/3 memory files |
+| `rag_memory/` | `~/.config/gorkbot/` | RAG Memory plugin ChromaDB storage (v3.5.0) |
 | `hooks/` | `~/.config/gorkbot/` | Lifecycle hook scripts |
 | `gorkbot.json` | `~/.gorkbot/logs/` (Linux) | Structured JSON log |
 | `traces/` | `~/.gorkbot/traces/` | JSONL execution traces (--trace) |

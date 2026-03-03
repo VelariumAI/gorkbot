@@ -1,492 +1,578 @@
-# Tool System Integration - Complete
+# Gorkbot Tool System Integration
 
-## 🎉 Status: Integrated & Ready
+**Version:** 3.5.1
 
-The comprehensive tool system has been successfully integrated into Grokster's orchestrator and TUI! The AI agents (Grok and Gemini) now have access to **28 powerful tools** with a robust permission system.
-
----
-
-## ✅ What Was Completed
-
-### 1. Tool Registry Initialization
-**Location:** `cmd/grokster/main.go`
-
-The tool system is now initialized at startup:
-```go
-// 4.5. Tool System Setup
-permissionMgr, err := tools.NewPermissionManager(env.ConfigDir)
-if err != nil {
-    logger.Error("Failed to initialize permission manager", "error", err)
-    // Continues with manual approval mode
-}
-
-registry := tools.NewRegistry(permissionMgr)
-if err := registry.RegisterDefaultTools(); err != nil {
-    logger.Error("Failed to register default tools", "error", err)
-    os.Exit(1)
-}
-
-logger.Info("Tool system initialized", "tool_count", len(registry.List()))
-```
-
-**Features:**
-- Permission manager loads persistent permissions from `~/.config/grokster/tool_permissions.json`
-- Registry automatically registers all 28 default tools
-- Graceful fallback if permission storage fails
-- Logging confirms tool count on startup
+This document describes how the tool system is wired into the Gorkbot orchestration engine — initialization, registration, parallel dispatch, permission enforcement, caching, error recovery, and the full call flow from AI request to result.
 
 ---
 
-### 2. Orchestrator Integration
-**Location:** `internal/engine/orchestrator.go`
+## Table of Contents
 
-The orchestrator now manages tool execution:
-
-#### New Fields
-```go
-type Orchestrator struct {
-    Primary        ai.AIProvider
-    Consultant     ai.AIProvider
-    Registry       *tools.Registry  // ← NEW
-    Logger         *slog.Logger
-    EnableWatchdog bool
-}
-```
-
-#### New Methods
-
-**GetToolContext() - Generates tool definitions for AI**
-```go
-func (o *Orchestrator) GetToolContext() string
-```
-- Returns formatted tool definitions in XML
-- Includes all 28 tools with names, categories, descriptions, and parameters
-- Provides usage instructions with JSON format examples
-- AI providers can include this in their system prompts
-
-**ParseToolRequests() - Extracts tool requests from AI responses**
-```go
-func (o *Orchestrator) ParseToolRequests(response string) []tools.ToolRequest
-```
-- Uses regex to find JSON code blocks in AI responses
-- Parses tool name and parameters
-- Returns array of tool requests ready for execution
-- Handles malformed JSON gracefully
-
-**ExecuteTool() - Executes tools with permission checking**
-```go
-func (o *Orchestrator) ExecuteTool(ctx context.Context, req tools.ToolRequest) (*tools.ToolResult, error)
-```
-- Routes tool requests through the registry
-- Permission checking handled automatically
-- Returns structured results with success/failure status
-- Full logging of tool execution
+1. [Initialization & Registration](#1-initialization--registration)
+2. [Tool Interface](#2-tool-interface)
+3. [Registry Architecture](#3-registry-architecture)
+4. [Permission Pipeline](#4-permission-pipeline)
+5. [Caching](#5-caching)
+6. [Parallel Dispatch](#6-parallel-dispatch)
+7. [Error Recovery & Classification](#7-error-recovery--classification)
+8. [Analytics & Tracing](#8-analytics--tracing)
+9. [Dynamic Tools](#9-dynamic-tools)
+10. [MCP Tool Integration](#10-mcp-tool-integration)
+11. [Python Plugin Tools](#11-python-plugin-tools)
+12. [Tool Call Flow: End-to-End](#12-tool-call-flow-end-to-end)
 
 ---
 
-### 3. TUI Integration
-**Location:** `internal/tui/model.go` and `internal/tui/style.go`
+## 1. Initialization & Registration
 
-The TUI can now display tool results and handle permissions:
+Tool system initialization happens in `cmd/gorkbot/main.go` in this order:
 
-#### New Message Types
 ```go
-type Message struct {
-    Role         string             // Now includes "tool"
-    Content      string
-    IsConsultant bool
-    ToolName     string             // For tool messages
-    ToolResult   *tools.ToolResult  // For tool messages
+// 1. Create permission manager
+permMgr := tools.NewPermissionManager(configDir)
+permMgr.Load()   // Load persisted always/never decisions from tool_permissions.json
+
+// 2. Create registry
+registry := tools.NewRegistry(permMgr)
+registry.SetConfigDir(configDir)
+
+// 3. Register all 162+ built-in tools
+tools.RegisterDefaultTools(registry)
+
+// 4. Wire dependencies into registry
+registry.SetAIProvider(orch.Primary)           // consultation tool
+registry.SetScheduler(sched)                   // schedule_task tool
+registry.SetUserCmdLoader(cmdLoader)           // define_command tool
+registry.SetGoalLedger(orch.Memory.GoalLedger) // goal ledger tools
+registry.SetPipelineRunner(orch.RunPipeline)   // run_pipeline tool
+registry.SetContextStatsReporter(orch)         // context_stats tool
+
+// 5. Load dynamic tools (hot-loaded from dynamic_tools.json)
+if err := registry.LoadDynamicTools(); err != nil {
+    logger.Warn("dynamic tools load failed", "err", err)
+}
+
+// 6. Wire analytics
+analytics := tools.NewAnalytics(configDir)
+registry.SetAnalytics(analytics)
+
+// 7. Wire registry into orchestrator
+orch.Registry = registry
+```
+
+### Category State Restoration
+
+Disabled tool categories are restored from `app_state.json` after registration:
+
+```go
+for _, cat := range appState.DisabledCategories {
+    registry.SetCategoryEnabled(tools.ToolCategory(cat), false)
 }
 ```
 
-#### New Methods
+---
 
-**addToolMessage() - Add tool result to conversation**
+## 2. Tool Interface
+
+Every tool implements the `Tool` interface (`pkg/tools/interface.go`):
+
 ```go
-func (m *Model) addToolMessage(toolName string, result *tools.ToolResult)
+type Tool interface {
+    Name() string
+    Description() string
+    Category() ToolCategory
+    Parameters() []Parameter
+    RequiresPermission() bool
+    DefaultPermission() PermissionLevel
+    OutputFormat() OutputFormat
+    Execute(ctx context.Context, params map[string]interface{}) (string, error)
+    IsReadOnly() bool
+    IsMutation() bool
+}
 ```
-- Formats tool results with success/failure indicators
-- Uses checkmark ✅ for success, cross ❌ for failure
-- Displays output in code blocks
-- Preserves tool metadata
 
-#### Permission State
+| Method | Description |
+|--------|-------------|
+| `Name()` | Unique tool identifier (snake_case) |
+| `Description()` | Human-readable description shown in permission prompts and `/tools` |
+| `Category()` | `ToolCategory` string for grouping and enabling/disabling |
+| `Parameters()` | Typed parameter definitions with names, descriptions, required flag, defaults |
+| `RequiresPermission()` | Whether the tool must go through the permission manager |
+| `DefaultPermission()` | Starting permission level before user sets it |
+| `OutputFormat()` | `Text`, `JSON`, or `Markdown` — controls how results are rendered |
+| `Execute()` | The actual implementation — receives resolved params, returns (result, error) |
+| `IsReadOnly()` | True for tools that only read state (used for caching eligibility) |
+| `IsMutation()` | True for tools that modify state (triggers cache invalidation) |
+
+### Parameter Types
+
 ```go
-// Permission prompts
-awaitingPermission bool
-pendingTool        *tools.ToolRequest
-permissionCallback func(bool) tea.Msg
+type Parameter struct {
+    Name        string
+    Type        ParameterType  // "string", "int", "bool", "array", "object"
+    Description string
+    Required    bool
+    Default     interface{}
+}
 ```
-- Ready for future permission prompt UI
-- Can pause execution while waiting for user approval
-- Callback system for async permission handling
 
-#### New Styling
-**ToolBox - Distinctive green border for tool results**
+Parameters are normalized via `NormalizeParameters()` before execution, which converts string representations of booleans and integers to their native types.
+
+---
+
+## 3. Registry Architecture
+
+`pkg/tools.Registry` manages the complete tool set:
+
 ```go
-s.ToolBox = lipgloss.NewStyle().
-    Border(lipgloss.RoundedBorder()).
-    BorderForeground(lipgloss.Color(SuccessGreen)).
-    Padding(1, 2).
-    MarginTop(1).
-    MarginBottom(1)
+type Registry struct {
+    tools              map[string]Tool
+    permissionMgr      *PermissionManager
+    ruleEngine         *RuleEngine
+    analytics          *Analytics
+    disabledCategories map[ToolCategory]bool
+
+    // Injected dependencies
+    aiProvider       interface{}
+    consultantProvider interface{}
+    scheduler        *scheduler.Scheduler
+    goalLedger       GoalLedgerAccessor
+    // ... other dependencies
+}
+```
+
+### Key Registry Methods
+
+| Method | Description |
+|--------|-------------|
+| `Register(tool)` | Add a tool (returns error if name conflicts) |
+| `RegisterOrReplace(tool)` | Add or replace (used for dynamic and hot-reloaded tools) |
+| `Get(name)` | Retrieve a tool by name |
+| `List()` | Return all registered tools |
+| `Execute(ctx, name, params)` | Full execution path including permission, cache, dispatch |
+| `SetCategoryEnabled(cat, bool)` | Enable or disable a category |
+| `IsCategoryEnabled(cat)` | Check category state |
+| `Categories()` | Return all unique category names |
+
+### Tool Execution via Registry
+
+```go
+result, err := registry.Execute(ctx, "read_file", map[string]interface{}{
+    "path": "/path/to/file",
+})
+```
+
+`Execute()` runs the full pipeline: category guard → rule engine → permission store → cache lookup → dispatcher → tool.Execute() → cache store → analytics record.
+
+---
+
+## 4. Permission Pipeline
+
+See `docs/PERMISSIONS_GUIDE.md` for the full permission system documentation. In the context of tool integration:
+
+### Category Guard
+
+```go
+func (r *Registry) Execute(ctx, name, params) (string, error) {
+    tool := r.tools[name]
+    cat := tool.Category()
+    if !r.IsCategoryEnabled(cat) {
+        return "", fmt.Errorf("tool category %q is disabled", cat)
+    }
+    // ...
+}
+```
+
+### Rule Engine
+
+```go
+decision := r.ruleEngine.Evaluate(name, params)
+if decision == RuleDeny {
+    return "", fmt.Errorf("rule denied tool %q", name)
+}
+if decision == RuleAllow {
+    // skip permission store
+    goto execute
+}
+```
+
+### Permission Store
+
+```go
+level := r.permissionMgr.Get(name)
+switch level {
+case PermissionNever:
+    return "", fmt.Errorf("tool %q is blocked (never)", name)
+case PermissionAlways, PermissionSession:
+    goto execute
+case PermissionOnce:
+    // show permission prompt; wait for user decision
+    granted := r.showPermissionPrompt(tool, params)
+    if !granted {
+        return "", fmt.Errorf("tool %q denied by user", name)
+    }
+}
 ```
 
 ---
 
-## 🔧 How It Works
+## 5. Caching
 
-### End-to-End Tool Execution Flow
+`pkg/tools.Cache` is an in-memory TTL cache that memoizes results of read-only tool calls.
 
-```
-1. User sends prompt to TUI
-   ↓
-2. TUI calls orchestrator.ExecuteTask()
-   ↓
-3. Orchestrator adds tool context to prompt:
-   - GetToolContext() returns all 28 tool definitions
-   - Prompt includes: original query + tool definitions
-   ↓
-4. AI Provider (Grok/Gemini) receives enriched prompt
-   ↓
-5. AI decides to use a tool:
-   - Outputs JSON in response:
-     ```json
-     {
-       "tool": "git_status",
-       "parameters": {"path": "."}
-     }
-     ```
-   ↓
-6. Orchestrator parses response:
-   - ParseToolRequests() extracts tool request
-   ↓
-7. Orchestrator executes tool:
-   - ExecuteTool() routes through registry
-   - Registry checks permissions
-   ↓
-8. Permission Check (via Registry):
-   - Check persistent permissions (always/never)
-   - Check session permissions (session)
-   - For "once": would prompt user (TUI integration pending)
-   ↓
-9. Tool executes:
-   - BashTool, GitStatusTool, etc. run
-   - Returns ToolResult with output/error
-   ↓
-10. TUI displays result:
-    - addToolMessage() formats result
-    - Green ToolBox style applied
-    - User sees: ✅ Tool: git_status
-                 Output in code block
-    ↓
-11. AI sees tool result in next turn
-    - Can use result to continue task
-    - Can chain multiple tools
-```
+### Cache Behavior
+
+- **Eligible tools:** `tool.IsReadOnly() == true` — e.g., `read_file`, `git_status`, `system_info`
+- **TTL:** Configurable per tool category; default 60 seconds for file reads, 5 seconds for system state
+- **Mutation invalidation:** When a mutation tool (e.g., `write_file` with `path=foo.go`) executes successfully, the cache entry for `read_file{path=foo.go}` is invalidated
+- **Cache key:** Composed from tool name + parameter fingerprint (deterministic hash)
+
+### Cache Statistics
+
+The tool analytics include cache hit/miss rates viewable via `/tools stats`.
 
 ---
 
-## 📝 Example Usage
+## 6. Parallel Dispatch
 
-### Scenario: User asks to check git status
+`pkg/tools.Dispatcher` manages concurrent tool execution within a single AI turn.
 
-**User input:**
-```
-"What's the status of my git repository?"
-```
-
-**Orchestrator adds tool context:**
-```xml
-<tools>
-## git_status
-Category: git
-Description: Show the working tree status of a git repository
-Parameters: {"type":"object","properties":{"path":...}}
-...
-</tools>
-
-What's the status of my git repository?
+```go
+type Dispatcher struct {
+    maxWorkers int           // default: 4
+    workerPool chan struct{}  // semaphore
+}
 ```
 
-**AI response:**
+When the AI requests multiple tools in a single response (a tool batch), the dispatcher:
+1. Creates a goroutine for each tool in the batch
+2. Limits concurrent execution to `maxWorkers` (4)
+3. Uses a `sync.WaitGroup` to wait for all tools in the batch
+4. Collects results in input order (not completion order)
+5. Mutation invalidation and analytics recording happen on the goroutine that completed the tool
+
+This allows the AI to parallelize reads and other non-conflicting tool calls without user-visible latency stacking.
+
+---
+
+## 7. Error Recovery & Classification
+
+`pkg/tools.ErrorRecovery` (`pkg/tools/error_recovery.go`) classifies tool errors and provides structured recovery guidance:
+
+```go
+type ErrorCode string
+
+const (
+    ErrCodePermissionDenied ErrorCode = "PERMISSION_DENIED"
+    ErrCodeToolNotFound     ErrorCode = "TOOL_NOT_FOUND"
+    ErrCodeTimeout          ErrorCode = "TIMEOUT"
+    ErrCodeShellError       ErrorCode = "SHELL_ERROR"
+    ErrCodeNetworkError     ErrorCode = "NETWORK_ERROR"
+    ErrCodeFileNotFound     ErrorCode = "FILE_NOT_FOUND"
+    ErrCodeInvalidParams    ErrorCode = "INVALID_PARAMS"
+    ErrCodeCategoryDisabled ErrorCode = "CATEGORY_DISABLED"
+)
+
+type RecoveryAction string
+
+const (
+    RecoveryRetry     RecoveryAction = "RETRY"
+    RecoveryFix       RecoveryAction = "FIX_PARAMS"
+    RecoveryEscalate  RecoveryAction = "ESCALATE"
+    RecoverySkip      RecoveryAction = "SKIP"
+    RecoveryUserInput RecoveryAction = "AWAIT_USER"
+)
 ```
-I'll check the git status for you.
+
+`ClassifyError()` maps raw errors to `ErrorCode` + `RecoveryAction`. `EnrichResult()` wraps results with structured metadata for MEL bifurcation analysis.
+
+---
+
+## 8. Analytics & Tracing
+
+### Tool Analytics
+
+`pkg/tools.Analytics` records every tool execution in SQLite:
+
+```go
+type CallRecord struct {
+    ToolName   string
+    CalledAt   time.Time
+    DurationMs int64
+    Success    bool
+    Error      string  // empty on success
+    ParamHash  string  // for deduplication
+}
+```
+
+Accessible via:
+- `/tools stats` — summary dashboard in TUI
+- The Analytics tab (`Ctrl+A`)
+- SQL queries on `~/.config/gorkbot/analytics.db`
+
+### Execution Traces
+
+When `--trace` is enabled, every tool call produces a JSONL trace entry:
+
+```json
+{"type":"tool_call","tool":"read_file","params":{"path":"main.go"},"timestamp":"2026-03-01T10:30:06Z"}
+{"type":"tool_result","tool":"read_file","success":true,"duration_ms":12,"cache_hit":false,"timestamp":"2026-03-01T10:30:06Z"}
+```
+
+Traces are written to `~/.config/gorkbot/traces/<session-timestamp>.jsonl`.
+
+### MEL Integration
+
+After every tool execution, the result (success or failure with parameters) is fed to the MEL bifurcation analyzer:
+
+```go
+// On success:
+orch.Intel.BifurcationAnalyzer.ObserveSuccess(toolName, params, result)
+
+// On failure:
+orch.Intel.BifurcationAnalyzer.ObserveFailed(toolName, params, err)
+```
+
+This allows MEL to automatically generate heuristics from recurring failure patterns and inject them into future system prompts.
+
+---
+
+## 9. Dynamic Tools
+
+Dynamic tools are shell-command wrappers created at runtime via the `create_tool` tool or by directly editing `dynamic_tools.json`.
+
+### Dynamic Tool Structure
 
 ```json
 {
-  "tool": "git_status",
+  "name": "count_words",
+  "description": "Count words in a file",
+  "category": "file",
+  "command": "wc -w {{path}}",
   "parameters": {
-    "path": ".",
-    "short": false
-  }
-}
-```
-
-```
-
-**Orchestrator parses and executes:**
-1. ParseToolRequests() extracts: `{"tool":"git_status","parameters":{...}}`
-2. ExecuteTool() calls registry
-3. Registry checks permission (git_status = always, no prompt needed)
-4. GitStatusTool executes: `git -C . status`
-5. Returns result
-
-**Tool result:**
-```go
-&ToolResult{
-    Success: true,
-    Output: "On branch main\nYour branch is up to date...",
-    Data: map[string]interface{}{
-        "stdout": "On branch main...",
-        "exit_code": 0,
-    },
-}
-```
-
-**TUI displays:**
-```
-✅ Tool: git_status
-
-```
-On branch main
-Your branch is up to date with 'origin/main'.
-
-nothing to commit, working tree clean
-```
-```
-
-**AI continues:**
-```
-Your repository is clean and up to date with the main branch.
-There are no uncommitted changes.
-```
-
----
-
-## 🔐 Permission System (Fully Integrated)
-
-### Permission Levels
-| Level | Behavior | User Action |
-|-------|----------|-------------|
-| **always** | Execute without asking | Set once, permanent |
-| **session** | Execute after first approval | Valid until restart |
-| **once** | Ask every time | Prompt each execution |
-| **never** | Block permanently | Set once, permanent |
-
-### Permission Storage
-- **File:** `~/.config/grokster/tool_permissions.json`
-- **Permissions:** 0600 (owner read/write only)
-- **Format:**
-  ```json
-  {
-    "version": "1.0",
-    "permissions": {
-      "bash": "once",
-      "git_status": "always",
-      "git_push": "once",
-      "delete_file": "once"
+    "path": {
+      "type": "string",
+      "description": "File path",
+      "required": true
     }
+  },
+  "requires_permission": false,
+  "default_permission": "always",
+  "created_at": "2026-03-01T10:00:00Z"
+}
+```
+
+Template variables (`{{path}}`, `{{query}}`, etc.) are replaced with the resolved parameter values. All substituted values are shell-escaped before execution.
+
+### Registration Flow
+
+When `create_tool` executes:
+1. Validates the tool definition
+2. Appends to `dynamic_tools.json`
+3. Calls `registry.RegisterOrReplace()` immediately (no restart required)
+4. The tool is available for the next AI turn
+
+### Compilation
+
+To permanently bake dynamic tools into the binary:
+
+```bash
+# Option 1: Set environment variable before session
+GORKBOT_AUTO_REBUILD=1 ./gorkbot.sh
+
+# Option 2: Use the rebuild tool inside the session
+rebuild {}
+
+# Option 3: Manual build
+go build -o bin/gorkbot ./cmd/gorkbot/
+```
+
+---
+
+## 10. MCP Tool Integration
+
+MCP (Model Context Protocol) tools from external servers are registered dynamically at startup.
+
+### Startup Flow
+
+```
+main.go:
+  mcpMgr := mcp.NewManager(configDir, logger)
+  mcpMgr.LoadConfig()   // read ~/.config/gorkbot/mcp.json
+  mcpMgr.StartAll(ctx)  // spawn server subprocesses
+
+  for server, tools := range mcpMgr.AllTools() {
+      for _, tool := range tools {
+          prefix := "mcp_" + server.Name + "_"
+          registry.Register(mcp.WrapTool(prefix, tool))
+      }
   }
-  ```
+```
 
-### Current Permission Defaults
-- **Safe read-only tools:** always (git_status, file_info, list_processes, etc.)
-- **Session-based:** session (read_file, search_files, web_fetch, etc.)
-- **Require approval:** once (bash, git_commit, write_file, delete_file, etc.)
-- **Destructive:** once with warnings (git_push --force, kill_process, etc.)
+### MCP Tool Wrapper
+
+`mcp.WrapTool()` creates a `Tool` implementation that:
+- Uses `mcp_<server>_<toolname>` as the name
+- Maps parameters from the MCP tool schema to Gorkbot's `Parameter` type
+- Executes by sending a `tools/call` JSON-RPC request to the server subprocess
+- Returns the string content of the `content[0].text` field from the response
+
+All MCP tools default to `once` permission and `enabled` state.
 
 ---
 
-## 🚀 What's Available Now
+## 11. Python Plugin Tools
 
-### All 28 Tools Ready for AI Use
+The Python plugin bridge (`plugins/python/`) is managed by `pkg/python.Manager`.
 
-**Shell (1):**
-- bash - Full terminal access
+### Discovery
 
-**File (7):**
-- read_file, write_file, list_directory, search_files
-- grep_content, file_info, delete_file
+On startup, `pkg/python.Manager` scans `plugins/python/*/manifest.json`:
 
-**Git (6):**
-- git_status, git_diff, git_log
-- git_commit, git_push, git_pull
-
-**Web (5):**
-- web_fetch, http_request, check_port, download_file
-
-**System (6):**
-- list_processes, kill_process, env_var
-- system_info, disk_usage
-
-**Meta (3):**
-- create_tool (DIY tool creator!)
-- list_tools, tool_info
-
----
-
-## 🎯 Next Steps (Optional Enhancements)
-
-### 1. Permission Prompt UI (TUI)
-Add interactive permission prompts:
-```
-╭─────────────────────────────────────╮
-│  Permission Request                 │
-├─────────────────────────────────────┤
-│  Tool: git_push                     │
-│  Parameters:                        │
-│    - remote: origin                 │
-│    - branch: main                   │
-│                                     │
-│  Allow this tool to execute?        │
-│                                     │
-│  [A]lways  [S]ession  [O]nce  [N]ever │
-╰─────────────────────────────────────╯
-```
-
-### 2. Tool Context in AI System Prompts
-Modify AI providers to include tool definitions:
 ```go
-func (p *GrokProvider) Generate(ctx context.Context, prompt string) (string, error) {
-    // Get tool context from orchestrator
-    toolContext := orchestrator.GetToolContext()
-
-    // Add to system message
-    systemPrompt := baseSystemPrompt + "\n\n" + toolContext
-
-    // Make API call with tools available
-    ...
+func (m *Manager) Discover(pluginsDir string) error {
+    entries, _ := os.ReadDir(pluginsDir)
+    for _, entry := range entries {
+        manifestPath := filepath.Join(pluginsDir, entry.Name(), "manifest.json")
+        if manifest, err := loadManifest(manifestPath); err == nil {
+            m.plugins[manifest.Name] = &Plugin{manifest, pluginsDir}
+        }
+    }
+    return nil
 }
 ```
 
-### 3. Multi-Turn Tool Execution
-Allow AI to see tool results and chain tools:
-```
-AI: Uses git_status
-Tool Result: "Changes detected"
-AI: Uses git_diff to see changes
-Tool Result: "Modified main.go"
-AI: Uses git_commit to commit changes
-Tool Result: "Committed successfully"
+### Auto-Install
+
+When a plugin is first invoked, `Manager.EnsureDeps()` runs:
+```bash
+pip install <requires from manifest>
 ```
 
-### 4. Tool Usage Analytics
-Track which tools are used most:
+Dependencies are installed once and cached; subsequent invocations skip the install step.
+
+### Plugin Tool Wrapper
+
+Each discovered plugin is wrapped as a `Tool` that:
+1. Resolves the Python interpreter (Termux: `python3` from Termux packages)
+2. Calls `python3 plugins/python/<name>/tool.py` with params as JSON stdin
+3. Reads stdout as the result string
+4. Reports stderr as the error on non-zero exit
+
+### RAG Memory Plugin
+
+The built-in `rag_memory` plugin (`plugins/python/rag_memory/`) provides semantic vector memory:
+
+```
+Tool name: rag_memory
+Actions:   store | search | stats | purge
+
+store: embed content into ChromaDB (auto-installs chromadb + sentence-transformers)
+search: cosine similarity search with configurable min_score
+stats: show total engrams and collection metadata
+purge: delete all stored engrams
+```
+
+Storage: `~/.config/gorkbot/rag_memory/` (ChromaDB persistent directory, set via `GORKBOT_CONFIG_DIR`).
+
+---
+
+## 12. Tool Call Flow: End-to-End
+
+This traces a complete tool call from AI response parsing through result delivery.
+
+### Step 1: Parse Tool Request from AI Response
+
+**Native path (xAI Grok):**
 ```go
-type ToolStats struct {
-    ToolName      string
-    ExecutionCount int
-    SuccessRate    float64
-    AvgDuration    time.Duration
+// AI returns structured tool_calls in JSON response
+for _, tc := range response.ToolCalls {
+    call := ToolCall{Name: tc.Function.Name, Args: tc.Function.Arguments}
+    pendingCalls = append(pendingCalls, call)
 }
 ```
 
-### 5. Custom Tool Loading
-Auto-discover custom tools in `pkg/tools/custom/`:
+**Text path (all other providers):**
 ```go
-func (r *Registry) LoadCustomTools(customDir string) error {
-    // Scan for *.go files
-    // Dynamically load New*Tool() functions
-    // Register custom tools
+// ParseToolRequests() scans the response text for tool call patterns
+calls := ai.ParseToolRequests(responseText)
+```
+
+### Step 2: Batch Dispatch
+
+```go
+// Dispatcher groups all calls from a single turn into a batch
+results := dispatcher.Batch(ctx, registry, pendingCalls)
+```
+
+### Step 3: Per-Tool Execution (runs concurrently)
+
+```go
+// For each call in the batch (up to 4 concurrent goroutines):
+result, err := registry.Execute(ctx, call.Name, call.Args)
+```
+
+### Step 4: Permission Pipeline (inside Execute)
+
+1. Category guard → returns error if disabled
+2. Rule engine → allow/deny/passthrough
+3. Permission store → allow/deny/show prompt
+
+### Step 5: Cache Check
+
+```go
+cacheKey := buildCacheKey(name, params)
+if cached, ok := cache.Get(cacheKey); ok && tool.IsReadOnly() {
+    return cached, nil  // cache hit — no execution
 }
 ```
 
----
+### Step 6: Tool Execution
 
-## 📊 Integration Status
+```go
+result, err := tool.Execute(ctx, resolvedParams)
+// - runs with 30s deadline (or tool-specific timeout)
+// - captures stdout/stderr for shell tools
+// - returns (string, error)
+```
 
-### ✅ Completed
-- [x] Tool registry initialization in main.go
-- [x] Orchestrator integration with tool execution
-- [x] TUI message types for tool results
-- [x] TUI styling for tool display
-- [x] Permission system fully functional
-- [x] All 28 tools registered and ready
-- [x] Tool context generation for AI
-- [x] Tool request parsing from AI responses
-- [x] Tool execution with error handling
-- [x] Logging and debugging support
-- [x] Code builds without errors
+### Step 7: Post-Execution
 
-### 🔄 Ready for Enhancement
-- [ ] Permission prompt UI in TUI
-- [ ] Tool context in AI system prompts
-- [ ] Multi-turn tool chaining
-- [ ] Tool usage analytics
-- [ ] Custom tool auto-loading
+```go
+// Cache the result if the tool is read-only
+if tool.IsReadOnly() && err == nil {
+    cache.Set(cacheKey, result, tool.CacheTTL())
+}
 
----
+// Invalidate related cache entries if the tool is a mutation
+if tool.IsMutation() && err == nil {
+    cache.InvalidateRelated(name, params)
+}
 
-## 🧪 Testing
+// Record analytics
+analytics.Record(CallRecord{ToolName: name, Duration: elapsed, Success: err == nil})
 
-### Manual Testing Steps
+// Feed MEL
+if err != nil {
+    bifurcation.ObserveFailed(name, params, err)
+} else {
+    bifurcation.ObserveSuccess(name, params, result)
+}
+```
 
-1. **Start Grokster:**
-   ```bash
-   ./grokster.sh
-   ```
+### Step 8: Add Result to Conversation History
 
-2. **Check tool initialization in logs:**
-   ```bash
-   tail -f ~/.local/state/grokster/grokster.json | jq .
-   # Should see: "Tool system initialized" with tool_count: 28
-   ```
+**Native path:**
+```go
+history.AddToolResultMessage(tc.ID, name, result)
+// Role: "tool", ToolCallID: tc.ID, Content: result
+```
 
-3. **Test tool access (once AI context is added):**
-   ```
-   User: "Show me the status of my git repository"
-   AI: [Should use git_status tool]
-   TUI: [Should display green ToolBox with git status output]
-   ```
+**Text path:**
+```go
+history.AddUserMessage(fmt.Sprintf("[Tool result: %s]\n%s", name, result))
+```
 
-4. **Test permission system:**
-   ```bash
-   # Check default permissions
-   cat ~/.config/grokster/tool_permissions.json
+### Step 9: Next AI Turn
 
-   # Modify a permission
-   # ... (via future /tools command in TUI)
-
-   # Verify persistence
-   # Restart grokster, permission should be remembered
-   ```
-
----
-
-## 📁 Modified Files Summary
-
-### Created
-- `TOOLS_IMPLEMENTED.md` - Comprehensive tool documentation
-- `TOOL_INTEGRATION.md` - This file
-
-### Modified
-- `cmd/grokster/main.go` - Initialize tool system
-- `internal/engine/orchestrator.go` - Add tool execution methods
-- `internal/tui/model.go` - Add tool message support
-- `internal/tui/style.go` - Add ToolBox styling
-- `pkg/tools/system.go` - Fix unused variable
-
----
-
-## 🎊 Summary
-
-The tool system integration is **complete and functional**:
-
-✅ **28 tools** ready for AI agents
-✅ **Permission system** with persistence
-✅ **Orchestrator** can execute tools
-✅ **TUI** can display results
-✅ **Logging** tracks all tool activity
-✅ **Security** via shell escaping and permissions
-✅ **Extensibility** via DIY create_tool
-
-**The AI agents now have full terminal control with proper security!** 🚀
-
-All that remains for full functionality is:
-1. Adding tool context to AI provider system prompts
-2. Implementing permission prompt UI (optional, system works without it)
-3. Testing end-to-end with real AI tool usage
-
-The foundation is solid and ready for production use! 🎉
+The updated history (including tool results) is sent to the AI provider for the next completion. The AI incorporates tool results and either responds to the user or requests additional tools.

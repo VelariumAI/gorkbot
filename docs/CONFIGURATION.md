@@ -1,6 +1,6 @@
 # Gorkbot Configuration Reference
 
-**Version:** 3.4.0
+**Version:** 3.5.1
 
 This document covers every configuration file, environment variable, CLI flag, and platform-specific path used by Gorkbot.
 
@@ -90,6 +90,7 @@ Detection: `TERMUX_VERSION` env var is set, or `/data/data/com.termux/files/usr/
 │   └── session_start.sh
 ├── skills/                 Skill definition markdown files
 │   └── *.md
+├── rag_memory/             RAG Memory plugin ChromaDB storage (v3.5.0)
 └── cci/                    CCI three-tier memory
     ├── hot/
     │   ├── CONVENTIONS.md
@@ -291,7 +292,8 @@ Managed by `pkg/config.AppStateManager`. Automatically updated when you switch m
   "secondary_provider": "google",
   "secondary_model": "gemini-2.0-flash",
   "secondary_auto": false,
-  "disabled_categories": ["security", "pentest"]
+  "disabled_categories": ["security", "pentest"],
+  "disabled_providers": []
 }
 ```
 
@@ -303,6 +305,7 @@ Managed by `pkg/config.AppStateManager`. Automatically updated when you switch m
 | `secondary_model` | Model ID for specialist |
 | `secondary_auto` | If true, specialist is auto-selected per task |
 | `disabled_categories` | Tool categories disabled via settings |
+| `disabled_providers` | Provider IDs disabled for the session — set via **Settings → API Providers** tab or auto-populated by the failover cascade (v3.5.0) |
 
 ---
 

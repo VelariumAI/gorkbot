@@ -1,244 +1,358 @@
-# Grokster TUI
+# Gorkbot TUI
 
-A high-fidelity, interactive Text User Interface for Grokster built with the Charm Bracelet stack.
+**Package:** `internal/tui`
+**Version:** 3.5.1
+
+The Gorkbot terminal UI is a full-screen, multi-tab interactive interface built on the [Charm Bracelet](https://charm.sh) stack: [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the event loop, [Lip Gloss](https://github.com/charmbracelet/lipgloss) for styling, and [Glamour](https://github.com/charmbracelet/glamour) for Markdown rendering.
+
+---
 
 ## Architecture
 
-### Components
-
-- **Bubble Tea**: Core TUI framework providing the Elm architecture (Model-View-Update)
-- **Lip Gloss**: Styling and layout engine for beautiful terminal UIs
-- **Glamour**: Markdown rendering for rich text display
-- **Bubbles**: Reusable TUI components (viewport, textarea, spinner)
-
-### File Structure
+The TUI follows the [Elm Architecture](https://guide.elm-lang.org/architecture/) pattern via Bubble Tea:
 
 ```
-internal/tui/
-├── model.go      - Main TUI model and state management
-├── update.go     - Update loop handling all events
-├── view.go       - View rendering logic
-├── style.go      - Lip Gloss styles and themes
-├── messages.go   - Custom message types
-├── phrases.go    - Loading phrases for personality
-└── README.md     - This file
+Model (state) → View (render) → Update (handle events)
+     ↑                                    │
+     └────────────────────────────────────┘
+                   Msg (events)
 ```
 
-## Features
+### Key Files
 
-### Command System (`pkg/commands/`)
+| File | Responsibility |
+|------|---------------|
+| `model.go` | `Model` struct definition; all state fields; `InitialModel()` constructor |
+| `update.go` | `Update(msg)` — handles all `tea.Msg` events and returns (model, cmd) |
+| `view.go` | `View()` — renders the full TUI from current model state |
+| `keys.go` | `KeyMap` struct and `DefaultKeyMap()` — all keybindings |
+| `statusbar.go` | Status bar rendering (context%, cost, mode, git branch) |
+| `messages.go` | All custom `tea.Msg` types used for async communication |
+| `model_extensions.go` | Extensions: `SetDiscoveryManager()`, `SetExecutionMode()`, `UpdateContextStats()` |
+| `model_select_view.go` | Dual-pane model selection UI |
+| `api_key_prompt.go` | Modal overlay for API key entry |
+| `settings_overlay.go` | 4-tab settings modal (Model Routing, Verbosity, Tool Groups, API Providers) |
+| `discovery_view.go` | Cloud Brains tab: discovered models + agent tree |
+| `list.go` | Model list items for the model selection panes |
 
-The TUI includes a comprehensive slash command system:
+---
 
-- `/clear` - Reset conversation context
-- `/help` - Display command help
-- `/chat` - Manage conversation history (save/load/list/delete)
-- `/model` - Switch active AI model
-- `/tools` - List active tools and MCPs
-- `/auth` - Refresh API credentials
-- `/settings` - Open config in editor
-- `/version` - Show version info
-- `/quit` - Exit gracefully
-- `/bug` - Open GitHub issue template
-- `/theme` - Toggle light/dark mode
-- `/compress` - Compress context to save tokens
+## State Machine
 
-### Personality Engine
+### Session States
 
-The TUI masks latency with humor through rotating loading phrases:
+```go
+type sessionState int
 
-**Standard Mode** (Grok):
-- "Reticulating splines..."
-- "Consulting the oracle..."
-- "Warming up the neurons..."
-- And 17 more!
-
-**Consultant Mode** (Gemini):
-- "Summoning the Architectural Spirits..."
-- "Gemini is judging your code..."
-- "Deep Deep Thought engaged..."
-- And 21 more!
-
-Phrases rotate every 3 seconds during generation to keep the UX engaging.
-
-### Responsive Design
-
-- **Dynamic Sizing**: Viewport and glamour renderer adjust to terminal size
-- **Mobile-Friendly**: Code blocks wrap properly on narrow screens
-- **Minimum Dimensions**: 60x20 characters ensures usability
-
-### Styling
-
-#### Consultant Box
-Gemini responses are rendered in a distinctive purple/pink bordered box to visually distinguish architectural advice from standard Grok responses.
-
-#### Status Bar
-Bottom status bar shows:
-```
-[ Grokster v1.0 ] [ Model: Grok-3 ] [ Consult: Ready ]
+const (
+    chatView         sessionState = iota // default: conversation view
+    modelSelectView                       // Ctrl+T: model selection
+    toolsTableView                        // Ctrl+E: tool registry table
+    discoveryView                         // Ctrl+D: Cloud Brains
+    analyticsView                         // Ctrl+A: session analytics
+    diagnosticsView                       // Ctrl+\: system diagnostics
+)
 ```
 
-Status updates based on generation state:
-- **Ready**: Consultant available
-- **Active**: Gemini is currently responding
-- **Standby**: Grok is responding, Gemini on standby
+State transitions are handled in `Update()` on key events. Only one state is active at a time; `Esc` always returns to `chatView`.
 
-### Keyboard Shortcuts
+### Model Struct (selected fields)
 
-- `Enter` - Submit prompt
-- `Alt+Enter` - Multi-line input (new line)
-- `Ctrl+C` / `Ctrl+D` - Quit
-- `Esc` - Cancel generation
-- `PgUp` / `PgDn` - Scroll viewport
-- `Home` / `End` - Jump to top/bottom
+```go
+type Model struct {
+    // Core
+    keys        KeyMap
+    styles      Styles
+    width       int
+    height      int
+    state       sessionState
 
-## Usage
+    // Chat
+    messages    []ChatMessage      // rendered conversation items
+    viewport    viewport.Model     // scrollable message area
+    textarea    textarea.Model     // multi-line input
+    spinner     spinner.Model      // in-progress indicator
 
-### Running the TUI
+    // Orchestrator interface
+    cmdReg      *commands.Registry    // slash command dispatcher
+    orch        OrchestratorRef       // orchestrator function refs
+
+    // Status bar
+    statusBar   StatusBar             // context%, cost, mode, git branch
+    gitBranch   string                // from git rev-parse on startup
+
+    // Overlays
+    modelSelectState  ModelSelectState   // dual-pane model selection state
+    apiKeyPromptState APIKeyPromptState  // key entry modal state
+
+    // Settings
+    settingsTab     int                 // active settings tab (0-3)
+    settingsActive  bool
+
+    // Bookmarks
+    bookmarks   []ConversationBookmark
+    bookmarksOpen bool
+
+    // Discovery
+    discoveryMgr  interface{}         // *discovery.Manager (optional)
+    agentTree     []discoveryModel
+
+    // Analytics
+    analytics   *AnalyticsData
+
+    // Execution modes
+    execMode    ExecutionMode       // Normal | Plan | Auto
+}
+```
+
+---
+
+## Message Types
+
+All async operations communicate back to the `Update()` loop via typed messages (`pkg/tui/messages.go`):
+
+| Message | Source | Description |
+|---------|--------|-------------|
+| `StreamChunkMsg` | Orchestrator goroutine | Incremental AI token for streaming display |
+| `StreamCompleteMsg` | Orchestrator goroutine | AI turn completed; includes full response |
+| `ToolStartMsg` | Orchestrator goroutine | Tool execution beginning |
+| `ToolDoneMsg` | Orchestrator goroutine | Tool execution completed |
+| `ToolProgressMsg` | Orchestrator goroutine | Tool progress update |
+| `PermissionRequestMsg` | Tool executor | Permission prompt data |
+| `PermissionResponseMsg` | Permission UI | User's permission decision |
+| `ModeChangeMsg` | Orchestrator / command | Execution mode changed |
+| `ContextUpdateMsg` | Context manager | Updated token/cost stats |
+| `InterruptMsg` | Ctrl+X handler | Cancel in-progress generation |
+| `RewindCompleteMsg` | Checkpoint manager | Rewind completed |
+| `DiscoveryUpdateMsg` | Discovery manager | New model list from provider |
+| `DiscoveryPollTickMsg` | Ticker goroutine | Trigger next discovery poll |
+| `ModelRefreshMsg` | Model selection UI | Refresh model list |
+| `ModelSwitchedMsg` | Model selection UI | Model was changed by user |
+| `APIKeySavedMsg` | API key prompt | Key saved to KeyStore |
+| `ProviderStatusMsg` | Key status checker | Provider key validation result |
+
+---
+
+## Streaming Display
+
+AI responses are streamed token-by-token:
+
+1. Orchestrator goroutine sends `StreamChunkMsg{Chunk: "next token"}` for each token.
+2. `Update()` appends the chunk to the in-progress `assistantMsg`.
+3. `View()` renders the partial message with a trailing cursor indicator.
+4. When streaming completes, `StreamCompleteMsg` is sent.
+5. `handleStreamComplete()` finalizes the message, triggers a viewport scroll, and renders the full Glamour-rendered Markdown.
+
+**Critical invariant:** `handleStreamComplete()` must not be modified without understanding its role in finalizing the conversation history and triggering the next tool-call loop.
+
+---
+
+## Touch Scroll (Android)
+
+Touch-scroll is implemented in `Update()` via `tea.MouseMsg`:
+
+```go
+case tea.MouseMsg:
+    switch msg.Type {
+    case tea.MouseWheelUp:
+        m.viewport.LineUp(3)
+    case tea.MouseWheelDown:
+        m.viewport.LineDown(3)
+    }
+```
+
+This block handles native touch gestures on Android/Termux. **Do not modify this block** without testing on-device — it is the primary scroll mechanism on mobile.
+
+---
+
+## Model Selection (Ctrl+T)
+
+The model selection UI (`model_select_view.go`) manages a dual-pane interface:
+
+```go
+type ModelSelectState struct {
+    activePane      int                  // 0=primary, 1=specialist
+    primaryList     []modelItem          // primary models
+    secondaryList   []modelItem          // specialist models
+    providerFilter  string               // "all" | provider ID
+    providerKeys    map[string]string    // masked key statuses
+    refreshing      bool                 // model list refresh in progress
+}
+```
+
+Model list items include `isAuto bool` (for the [Auto] specialist option) and `active bool` (marks currently selected model).
+
+When a model is selected, `Update()` signals the orchestrator via `OrchestratorAdapter.SetPrimary()` or `SetSecondary()`, which hot-swaps the provider without restarting.
+
+---
+
+## API Key Prompt
+
+`api_key_prompt.go` renders a modal overlay for key entry:
+
+```go
+type APIKeyPromptState struct {
+    active     bool
+    provider   string     // "xai" | "google" | "anthropic" | ...
+    inputVal   string
+    websiteURL string     // shown for guidance
+    errMsg     string     // validation failure message
+}
+```
+
+On `Enter`, the key is passed to `OrchestratorAdapter.SetProviderKey()`, which saves it to the KeyStore and attempts validation.
+
+---
+
+## Settings Overlay
+
+`settings_overlay.go` renders a 4-tab modal (`Ctrl+G`):
+
+```go
+const (
+    tabModelRouting  = 0
+    tabVerbosity     = 1
+    tabToolGroups    = 2
+    tabProviders     = 3  // API provider enable/disable
+)
+
+var tabLabels = []string{
+    "Model Routing",
+    "Verbosity",
+    "Tool Groups",
+    "API Providers",
+}
+```
+
+**Tab 3 — API Providers** (`tabProviders`): Shows per-provider toggles. Toggling a provider calls `pm.DisableForSession(id)` / `pm.EnableForSession(id)` and persists the state to `app_state.json` via `appState.SetDisabledProviders()`.
+
+---
+
+## Status Bar
+
+`statusbar.go` implements `StatusBar`:
+
+```go
+type StatusBar struct {
+    contextPct  float64    // 0.0–1.0
+    costUSD     float64
+    mode        string     // "Normal" | "Plan" | "Auto"
+    gitBranch   string
+}
+```
+
+The git branch is captured once at startup in `model.go`:
+
+```go
+func currentGitBranch() string {
+    out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
+    if err != nil {
+        return ""
+    }
+    return strings.TrimSpace(string(out))
+}
+```
+
+`SetGitBranch()` on `StatusBar` stores the result for rendering.
+
+---
+
+## OrchestratorAdapter
+
+The TUI cannot import `internal/engine` (import cycle prevention). Instead, `cmd/gorkbot/main.go` builds a `commands.OrchestratorAdapter` — a struct of function references — and passes it into the TUI via `model.SetCommandRegistry()`.
+
+All TUI-to-orchestrator communication goes through this adapter:
+
+```go
+type OrchestratorAdapter struct {
+    GetContextReport    func() string
+    GetCostReport       func() string
+    SetPrimary          func(ctx, provider, model string) error
+    SetSecondary        func(ctx, provider, model string) error
+    SetProviderKey      func(ctx, provider, key string) error
+    GetProviderStatus   func() string
+    SetAutoSecondary    func(bool)
+    RewindTo            func(id string) (string, error)
+    ExportConv          func(format, path string) error
+    ToggleDebug         func()
+    // ... 20+ total function refs
+}
+```
+
+This pattern keeps `internal/tui` free of direct dependencies on the engine package.
+
+---
+
+## Keybindings
+
+All keybindings are defined in `DefaultKeyMap()` in `keys.go`. To add a new keybinding:
+
+1. Add a `key.Binding` field to `KeyMap`
+2. Initialize it in `DefaultKeyMap()` with `key.NewBinding(...)`
+3. Handle it in `Update()` with `key.Matches(msg, m.keys.YourNewKey)`
+
+Do not hardcode key strings anywhere else — always use the `KeyMap` binding.
+
+---
+
+## Rendering Pipeline
+
+`View()` is called on every state change and must be fast (it runs on every event):
+
+```go
+func (m Model) View() string {
+    if m.width == 0 {
+        return "Loading..."
+    }
+
+    // Route to active tab view
+    switch m.state {
+    case modelSelectView:
+        return renderModelSelectView(m)
+    case toolsTableView:
+        return m.toolsTable.View()
+    case discoveryView:
+        return renderDiscoveryView(m)
+    case analyticsView:
+        return renderAnalyticsView(m)
+    case diagnosticsView:
+        return renderDiagnosticsView(m)
+    }
+
+    // Default: chat view
+    var sections []string
+    sections = append(sections, m.renderTabs())
+    sections = append(sections, m.viewport.View())
+    sections = append(sections, m.renderInputArea())
+    sections = append(sections, m.statusBar.View())
+
+    content := lipgloss.JoinVertical(lipgloss.Left, sections...)
+
+    // Overlay rendering (settings, bookmarks, permissions, api key prompt)
+    if m.settingsActive {
+        content = renderSettingsOverlay(m, content)
+    }
+    if m.apiKeyPromptState.active {
+        content = renderAPIKeyPrompt(m, content)
+    }
+    // ... other overlays
+
+    return content
+}
+```
+
+---
+
+## Building
 
 ```bash
-# Build the TUI
-go build -o bin/grokster-tui ./cmd/grokster-tui
+# Standard build (includes TUI)
+go build -o bin/gorkbot ./cmd/gorkbot/
 
-# Run it
-./bin/grokster-tui
+# Run
+./bin/gorkbot
+# Or with .env loading:
+./gorkbot.sh
 ```
 
-### Integration with Orchestrator
-
-To integrate the TUI with the existing orchestrator:
-
-1. **Message Bridge**: Create a channel to receive `TokenMsg` from orchestrator
-2. **Streaming**: Orchestrator should emit tokens via `tea.Cmd`
-3. **Routing**: Determine `isConsultant` flag based on routing logic
-4. **Context**: Pass conversation history to orchestrator
-
-Example integration:
-
-```go
-// In update.go
-func (m *Model) callOrchestrator(prompt string) tea.Cmd {
-    return func() tea.Msg {
-        ctx := context.Background()
-
-        // Stream tokens back to TUI
-        tokenChan := make(chan string)
-        go func() {
-            for token := range tokenChan {
-                // Send to TUI
-                tea.Send(TokenMsg{
-                    Content: token,
-                    IsConsultant: false,
-                    IsFinal: false,
-                })
-            }
-        }()
-
-        // Call orchestrator
-        resp, err := orchestrator.ExecuteTask(ctx, prompt)
-        if err != nil {
-            return ErrorMsg{Err: err}
-        }
-
-        // Send final message
-        return TokenMsg{
-            Content: resp,
-            IsConsultant: false,
-            IsFinal: true,
-        }
-    }
-}
-```
-
-## Themes
-
-The TUI supports two themes:
-
-### Dark Theme (Default)
-- Background: `#0A0A0A`
-- Text: `#FFFFFF`
-- Consultant Box: Purple border (`#9945FF`)
-- Primary Accent: Grok Blue (`#00D9FF`)
-
-### Light Theme
-- Background: White
-- Text: `#000000`
-- Consultant Box: Purple border (maintained for consistency)
-- Primary Accent: Blue (`#0066CC`)
-
-Switch themes with: `/theme light` or `/theme dark`
-
-## Performance Optimizations
-
-### Efficient Rendering
-- **Throttled Updates**: Viewport only updates every 50 tokens (configurable)
-- **Incremental Markdown**: Glamour renders delta, not entire history
-- **Lazy Scrolling**: Viewport uses virtual scrolling for large conversations
-
-### Token Streaming
-- **Non-Blocking**: Token reception doesn't block UI updates
-- **Buffered**: Uses `strings.Builder` for efficient string concatenation
-- **Batched**: UI updates batched with `tea.Batch()`
-
-## Customization
-
-### Adding New Commands
-
-1. Register in `pkg/commands/registry.go`:
-```go
-r.commands["mycommand"] = &CommandDefinition{
-    Name: "mycommand",
-    Description: "Does something cool",
-    Usage: "/mycommand [arg]",
-    Handler: r.handleMyCommand,
-}
-```
-
-2. Implement handler:
-```go
-func (r *Registry) handleMyCommand(args []string) (string, error) {
-    return "Result markdown", nil
-}
-```
-
-### Adding New Loading Phrases
-
-Edit `internal/tui/phrases.go`:
-```go
-standardPhrases = append(standardPhrases, "Your new phrase...")
-consultantPhrases = append(consultantPhrases, "Your Gemini phrase...")
-```
-
-### Custom Styles
-
-Modify `internal/tui/style.go`:
-```go
-// Add new style
-s.MyStyle = lipgloss.NewStyle().
-    Foreground(lipgloss.Color("#FF0000")).
-    Bold(true)
-```
-
-## Future Enhancements
-
-- [ ] Syntax highlighting for code blocks
-- [ ] Image rendering (via kitty/iterm protocols)
-- [ ] Multi-pane layout (chat + docs)
-- [ ] Conversation search
-- [ ] Export to HTML/PDF
-- [ ] Custom keybindings
-- [ ] Plugin system for commands
-- [ ] Real-time collaboration
-
-## Dependencies
-
-```
-github.com/charmbracelet/bubbletea v1.3.10
-github.com/charmbracelet/lipgloss v1.1.1
-github.com/charmbracelet/glamour v0.10.0
-github.com/charmbracelet/bubbles v1.0.0
-```
-
-## License
-
-Part of the Grokster project. See main repository LICENSE.
+The TUI package is `internal/` — it is not intended for import by external packages.

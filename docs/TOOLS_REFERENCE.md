@@ -1,8 +1,8 @@
 # Gorkbot Tool Reference
 
-**Version:** 3.4.0
+**Version:** 3.5.1
 
-Gorkbot ships with 150+ built-in tools spanning 20+ categories. This document provides a complete reference for every tool: its name, description, parameters, permission level, and usage notes.
+Gorkbot ships with 162+ built-in tools spanning 33+ categories. This document provides a complete reference for every tool: its name, description, parameters, permission level, and usage notes.
 
 All tools are registered in `pkg/tools/registry.go → RegisterDefaultTools()` and routed through the unified permission and caching pipeline. Additional tools are registered from `cmd/gorkbot/main.go` (process management, subagents) and `pkg/cci` (CCI context tools).
 
@@ -56,6 +56,7 @@ Default permissions shown below are the built-in defaults. Users can override an
 31. [Agentic Pipeline](#31-agentic-pipeline)
 32. [CCI Context Tools](#32-cci-context-tools)
 33. [Dynamic Tool Creation](#33-dynamic-tool-creation)
+34. [RAG Memory Plugin](#34-rag-memory-plugin)
 
 ---
 
@@ -2007,3 +2008,104 @@ go build -o bin/gorkbot ./cmd/gorkbot/
 ```
 
 Placeholders `{{param_name}}` are replaced with shell-escaped parameter values at execution time.
+
+---
+
+## 34. RAG Memory Plugin
+
+**Tool name:** `rag_memory`
+**Package:** `plugins/python/rag_memory/`
+**Introduced:** v3.5.0
+
+The RAG Memory plugin provides persistent semantic vector memory backed by ChromaDB and the `all-MiniLM-L6-v2` sentence embedding model. It enables the AI to store and retrieve information across sessions using cosine similarity search.
+
+Dependencies are auto-installed on first use via pip (`chromadb`, `sentence-transformers`). Storage is at `~/.config/gorkbot/rag_memory/` (configurable via `GORKBOT_CONFIG_DIR`).
+
+### Actions
+
+The `rag_memory` tool takes an `action` parameter selecting one of four operations:
+
+---
+
+### `store`
+
+Embed and store content as an engram in the vector database.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | yes | `"store"` |
+| `content` | string | yes | Text content to embed and store |
+| `metadata` | object | no | Key-value metadata attached to the engram |
+
+**Permission:** `session`
+
+```
+# Example: store a code review finding
+rag_memory {action: "store", content: "Auth module uses MD5 for password hashing — critical security issue", metadata: {tag: "security", file: "pkg/auth/hash.go"}}
+```
+
+---
+
+### `search`
+
+Perform a cosine similarity search and return the top N matching engrams.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `action` | string | yes | — | `"search"` |
+| `query` | string | yes | — | Natural language search query |
+| `n_results` | int | no | 5 | Number of results to return |
+| `min_score` | float | no | 0.0 | Minimum similarity score threshold (0.0–1.0) |
+
+**Permission:** `always`
+
+```
+# Example: find previous security findings
+rag_memory {action: "search", query: "security vulnerabilities in auth module", n_results: 3, min_score: 0.6}
+```
+
+Results are returned ranked by cosine similarity score (highest first). Each result includes the stored content, metadata, and similarity score.
+
+---
+
+### `stats`
+
+Return collection statistics.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | yes | `"stats"` |
+
+**Permission:** `always`
+
+Returns: total engram count, collection name, storage path, and embedding model in use.
+
+---
+
+### `purge`
+
+Delete all stored engrams from the collection.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | yes | `"purge"` |
+
+**Permission:** `once` — prompts before deletion.
+
+Use with care — this operation is irreversible. Useful for clearing stale memory at the start of a new project.
+
+---
+
+### Capacity
+
+The rolling memory window holds up to **10,000 engrams**. When the limit is reached, the oldest engrams are evicted to make room for new ones.
+
+### Setup
+
+No manual setup is required. On first invocation, the plugin:
+
+1. Auto-installs `chromadb` and `sentence-transformers` via pip
+2. Downloads the `all-MiniLM-L6-v2` embedding model (~90 MB)
+3. Initializes a persistent ChromaDB collection at `~/.config/gorkbot/rag_memory/`
+
+Subsequent invocations use the cached model and collection — no re-download occurs.

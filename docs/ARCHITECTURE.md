@@ -1,6 +1,6 @@
 # Gorkbot Architecture
 
-**Version:** 3.4.0
+**Version:** 3.5.1
 
 This document describes the complete technical architecture of Gorkbot — from the entry point through the orchestration engine, intelligence layer, memory systems, tool execution pipeline, and terminal UI.
 
@@ -27,7 +27,7 @@ This document describes the complete technical architecture of Gorkbot — from 
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                          Gorkbot v3.4.0                              │
+│                          Gorkbot v3.5.1                              │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │                    Terminal UI (TUI)                          │  │
@@ -42,7 +42,7 @@ This document describes the complete technical architecture of Gorkbot — from 
 │              │                        │                             │
 │  ┌───────────▼──────────┐  ┌──────────▼──────────────────────────┐  │
 │  │   AI Provider System  │  │        Tool Registry                │  │
-│  │  xAI · Gemini        │  │  150+ tools · Permissions · Cache   │  │
+│  │  xAI · Gemini        │  │  162+ tools · Permissions · Cache   │  │
 │  │  Anthropic · OpenAI  │  │  Dispatcher · Analytics · Rules     │  │
 │  │  MiniMax             │  └─────────────────────────────────────┘  │
 │  └───────────────────────┘                                          │
@@ -301,6 +301,29 @@ type ConversationMessage struct {
 ```
 
 **Token management:** `TruncateToTokenLimit(maxTokens)` preserves all system messages and the most recent conversation that fits. The truncation algorithm starts from the most recent message and works backward — a large individual message is skipped (not dropped), ensuring older context is preserved.
+
+### Provider Failover Cascade (`fallback.go`) — v3.5.0
+
+When the active provider fails with a recoverable error, `RunProviderCascade()` automatically elects the next healthy provider without interrupting the session.
+
+**Priority order:**
+```
+xAI → Google → Anthropic → MiniMax → OpenAI → OpenRouter
+```
+
+**Error classification** — `isProviderOutage(err)` matches sentinel values from `pkg/ai/errors.go`:
+
+| Sentinel | Status | Cause |
+|----------|--------|-------|
+| `ErrUnauthorized` | 401 | Invalid / expired key |
+| `ErrNoCredits` | 402 | Quota exhausted |
+| `ErrRateLimit` | 429 | Too many requests |
+| `ErrBadGateway` | 502/503 | Server error |
+| `ErrProviderDown` | — | Network unreachable |
+
+`MapStatusError(statusCode, body)` is a shared HTTP→sentinel mapper used by all five provider implementations, ensuring consistent failover behavior regardless of which provider is primary.
+
+On failover, `pm.DisableForSession(failedID)` marks the provider unavailable in-memory for the session duration. The **API Providers** tab in Settings (`Ctrl+G`) allows manually re-enabling a provider or toggling any provider on/off. Session-disabled providers persist to `app_state.json` under `disabled_providers`.
 
 ---
 
@@ -684,13 +707,16 @@ Updated via `StatusBar.SetContextStats()`, `SetGitBranch()`, `SetMode()`, `SetCo
 
 ### Settings Overlay (`settings_overlay.go`)
 
-Three-tab modal:
+Four-tab modal (`Ctrl+G`):
 
-| Tab | Content |
-|-----|---------|
-| Model Routing | Primary and specialist model info |
-| Verbosity | Verbose thoughts toggle |
-| Tool Groups | Enable/disable tool categories |
+| Tab | Index | Content |
+|-----|-------|---------|
+| Model Routing | 0 | Primary and specialist model info |
+| Verbosity | 1 | Verbose thoughts toggle |
+| Tool Groups | 2 | Enable/disable tool categories |
+| API Providers | 3 | Per-provider session enable/disable toggles (v3.5.0) |
+
+The **API Providers** tab (index 3 = `tabProviders`) calls `pm.DisableForSession(id)` or `pm.EnableForSession(id)` on each toggle and persists the resulting list to `app_state.json` via `appState.SetDisabledProviders()`.
 
 ---
 

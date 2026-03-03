@@ -1,6 +1,6 @@
 # Gorkbot Provider Guide
 
-**Version:** 3.4.0
+**Version:** 3.5.1
 
 This document covers all five AI providers supported by Gorkbot — model IDs, capability classes, API setup, dynamic model discovery, hot-swapping, and the adaptive routing system.
 
@@ -20,6 +20,7 @@ This document covers all five AI providers supported by Gorkbot — model IDs, c
 10. [Cloud Brains Tab](#10-cloud-brains-tab)
 11. [Adaptive Routing & Feedback](#11-adaptive-routing--feedback)
 12. [Dual-Model Orchestration](#12-dual-model-orchestration)
+13. [Provider Failover Cascade](#13-provider-failover-cascade)
 
 ---
 
@@ -414,3 +415,71 @@ Gorkbot works with a single provider. If only `XAI_API_KEY` is set:
 If only `GEMINI_API_KEY` is set:
 - Primary: Gemini (acts as both primary and specialist)
 - All tool calls routed through the text-parsing path (not native function calling)
+
+---
+
+## 13. Provider Failover Cascade
+
+**Package:** `internal/engine/fallback.go`
+**Introduced:** v3.5.0
+
+### Overview
+
+The provider failover cascade automatically switches to the next healthy provider when the current one fails. This makes Gorkbot resilient to temporary outages, quota exhaustion, and credential issues — without any user intervention.
+
+### Priority Order
+
+```
+xAI → Google → Anthropic → MiniMax → OpenAI → OpenRouter
+```
+
+The cascade always tries providers in this fixed order, skipping any already disabled for the session.
+
+### Outage Classification
+
+`isProviderOutage(err)` identifies recoverable failures using sentinel errors from `pkg/ai/errors.go`:
+
+| Sentinel Error | HTTP Status | Trigger Condition |
+|---------------|-------------|-------------------|
+| `ErrUnauthorized` | 401 | Invalid or expired API key |
+| `ErrNoCredits` | 402 | Payment required / quota exhausted |
+| `ErrRateLimit` | 429 | Too many requests |
+| `ErrBadGateway` | 502 / 503 | Server error |
+| `ErrProviderDown` | — | Network unreachable, connection refused, timeout |
+
+Network errors containing the strings `"connection refused"`, `"timeout"`, or `"no route"` also trigger failover.
+
+### Unified HTTP Error Mapper
+
+`MapStatusError(statusCode int, body []byte) error` in `pkg/ai/errors.go` is a shared utility used by all provider implementations. It converts raw HTTP status codes into the typed sentinel errors above, ensuring consistent behavior across xAI, Gemini, Anthropic, OpenAI, and MiniMax.
+
+### Cascade Execution Flow
+
+```
+1. Primary provider call fails with outage-class error
+2. RunProviderCascade(ctx, failedProviderID) is invoked
+3. For each remaining provider in priority order:
+   a. Already disabled this session? → Skip
+   b. Probe call successful? → Elect as active provider
+   c. pm.DisableForSession(failedProviderID) marks failed provider unavailable
+4. All subsequent turns in the session use the elected provider
+5. The failed provider is never re-enabled automatically within the session
+```
+
+### Manual Provider Control
+
+**Settings overlay** (`Ctrl+G` → **API Providers** tab):
+- Toggle each provider on/off for the current session
+- Re-enable a provider that was auto-disabled by the cascade
+- Changes take effect immediately (no restart required)
+- State persists to `app_state.json` via `appState.SetDisabledProviders()`
+
+**Via `/key` command:**
+```
+/key validate xai          # test if xAI key is still valid
+/key xai xai-replacement   # replace a failed key on the fly
+```
+
+### Session Persistence
+
+Providers disabled during a session (by cascade or manually) are written to `app_state.json` under `disabled_providers`. On the next session start, those providers remain disabled until explicitly re-enabled in the **API Providers** settings tab.
