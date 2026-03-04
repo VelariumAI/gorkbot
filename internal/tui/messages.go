@@ -68,6 +68,13 @@ type ToolExecutionMsg struct {
 	Result   *tools.ToolResult
 }
 
+// ToolCallMsg carries the outgoing tool call request (name + params) for
+// display as a cyan-bordered box immediately before the tool result box.
+type ToolCallMsg struct {
+	ToolName string
+	Params   map[string]interface{}
+}
+
 // ColorTickMsg is sent to change spinner colors
 type ColorTickMsg time.Time
 

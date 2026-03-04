@@ -21,8 +21,8 @@ type InterventionCallback func(severity WatchdogSeverity, context string) Interv
 
 // ExecuteTaskWithStreaming handles a user prompt with real-time streaming output.
 // toolStartCallback (may be nil) is invoked just before each tool execution begins,
-// enabling the TUI to show a live "in-progress" panel before results arrive.
-func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt string, streamCallback StreamCallback, toolCallback func(string, *tools.ToolResult), toolStartCallback func(string), interventionCallback InterventionCallback) error {
+// enabling the TUI to show a live "in-progress" panel and a tool call request box.
+func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt string, streamCallback StreamCallback, toolCallback func(string, *tools.ToolResult), toolStartCallback func(string, map[string]interface{}), interventionCallback InterventionCallback) error {
 	o.Logger.Info("Analyzing task complexity...", "prompt_length", len(prompt))
 
 	// ── Git Workspace Checkpoint ─────────────────────────────────────────────
@@ -400,9 +400,9 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		for i, req := range toolRequests {
 			o.Logger.Info("Executing tool", "tool", req.ToolName, "index", i+1, "total", len(toolRequests))
 
-			// Notify TUI that this tool is starting (shows live panel before result arrives).
+			// Notify TUI that this tool is starting (shows call box + live panel).
 			if toolStartCallback != nil {
-				toolStartCallback(req.ToolName)
+				toolStartCallback(req.ToolName, req.Parameters)
 			}
 			if o.Relay != nil {
 				o.Relay.SendToolStart(req.ToolName)

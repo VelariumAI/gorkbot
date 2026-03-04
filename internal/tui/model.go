@@ -232,13 +232,14 @@ type Bookmark struct {
 
 // Message represents a single message in the conversation
 type Message struct {
-	Role         string // "user", "assistant", "consultant", "system", "tool", "internal", "a2a"
+	Role         string // "user", "assistant", "consultant", "system", "tool", "tool_call", "internal", "a2a"
 	Content      string
 	IsConsultant bool
 	ToolName     string             // For tool messages
-	ToolResult   *tools.ToolResult  // For tool messages
+	ToolResult   *tools.ToolResult  // For tool result messages
+	ToolParams   map[string]interface{} // For tool_call (request) messages
 	NestLevel    int                // Nesting depth for tool calls (0 = top level)
-	MessageType  string             // "tool", "internal", "a2a", "normal"
+	MessageType  string             // "tool", "tool_call", "internal", "a2a", "normal"
 	Collapsed    bool               // true = show 1-line summary; toggled with Ctrl+R
 	Elapsed        time.Duration    // tool execution duration (for display)
 	IntentCategory string           // ARC category at time of user message
@@ -492,6 +493,17 @@ func (m *Model) addToolMessageWithNesting(toolName string, result *tools.ToolRes
 	})
 }
 
+// addToolCallMessage inserts a tool_call (request) message that renders as a
+// cyan-bordered box showing the tool name and its parameters before the result.
+func (m *Model) addToolCallMessage(toolName string, params map[string]interface{}) {
+	m.messages = append(m.messages, Message{
+		Role:        "tool_call",
+		ToolName:    toolName,
+		ToolParams:  params,
+		MessageType: "tool_call",
+	})
+}
+
 func (m *Model) addInternalMessage(content string, level int) {
 	m.messages = append(m.messages, Message{
 		Role:        "internal",
@@ -567,6 +579,47 @@ func (m *Model) renderMessages() string {
 			} else {
 				output.WriteString(rendered)
 			}
+			output.WriteString("\n")
+
+		case "tool_call":
+			// Render the outgoing JSON tool call request as a cyan-bordered box.
+			nameColor := toolCategoryColor(msg.ToolName)
+			nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(nameColor)).Bold(true)
+			header := "→ " + nameStyle.Render(msg.ToolName)
+
+			// Format parameters compactly: key: value, one per line, truncated.
+			paramStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(TextGray))
+			var paramLines []string
+			for k, v := range msg.ToolParams {
+				val := fmt.Sprintf("%v", v)
+				val = strings.ReplaceAll(val, "\n", " ")
+				if len(val) > 72 {
+					val = val[:69] + "…"
+				}
+				paramLines = append(paramLines,
+					paramStyle.Render(fmt.Sprintf("  %s: %s", k, val)))
+			}
+			var body string
+			if len(paramLines) > 0 {
+				body = strings.Join(paramLines, "\n")
+			}
+
+			boxWidth := m.width - msg.NestLevel*2 - 4
+			if boxWidth < 20 {
+				boxWidth = 20
+			}
+			var boxContent string
+			if body != "" {
+				boxContent = lipgloss.JoinVertical(lipgloss.Left, header, body)
+			} else {
+				boxContent = header
+			}
+			callBoxStyle := lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(lipgloss.Color(DraculaCyan)).
+				Padding(0, 1).
+				Width(boxWidth)
+			output.WriteString(callBoxStyle.Render(boxContent))
 			output.WriteString("\n")
 
 		case "tool":
@@ -1455,9 +1508,11 @@ func (m *Model) callOrchestrator(prompt string) tea.Cmd {
 			}
 		}
 
-		// toolStartCallback — called just before each tool begins, showing it in the live panel.
-		toolStartCallback := func(toolName string) {
+		// toolStartCallback — called just before each tool begins.
+		// Sends both a ToolCallMsg (request box) and a ToolProgressMsg (live panel).
+		toolStartCallback := func(toolName string, params map[string]interface{}) {
 			if prog := m.getProgram(); prog != nil {
+				prog.Send(ToolCallMsg{ToolName: toolName, Params: params})
 				prog.Send(ToolProgressMsg{ToolName: toolName, Done: false})
 			}
 		}

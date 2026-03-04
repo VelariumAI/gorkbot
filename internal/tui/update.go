@@ -299,6 +299,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_, cmd = m.handleStreamComplete(msg)
 		cmds = append(cmds, cmd)
 
+	case ToolCallMsg:
+		// Render the outgoing tool call request box before the result arrives.
+		m.addToolCallMessage(msg.ToolName, msg.Params)
+		m.updateViewportContent()
+		if !m.userScrolledUp {
+			m.viewport.GotoBottom()
+		}
+
 	case ToolExecutionMsg:
 		_, cmd = m.handleToolExecution(msg)
 		cmds = append(cmds, cmd)
