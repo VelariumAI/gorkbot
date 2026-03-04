@@ -379,28 +379,14 @@ func NewModel(orch *engine.Orchestrator, pm *process.Manager, modelName, consult
 	// Initialise analytics dashboard.
 	m.analytics = NewAnalyticsData()
 
-	// Build welcome message with accurate system inventory.
+	// Build minimal welcome message — full details available via /about.
 	consultantLine := ""
 	if consultantName != "" {
 		consultantLine = fmt.Sprintf(" · **%s** (Consultant)", consultantName)
 	}
 	m.addSystemMessage(fmt.Sprintf(
-		"# Gorkbot v%s\n\n"+
-			"**%s**%s\n\n"+
-			"---\n\n"+
-			"**Intelligence**\n"+
-			"- **ARC Router** — classifies every prompt (Direct vs ReasonVerify) and scales tool budget to platform RAM\n"+
-			"- **MEL** — Meta-Experience Learning: turns tool failure→correction cycles into persistent guardrail heuristics\n\n"+
-			"**Parametric Memory** *(cross-session, query-relevant, refreshed every turn)*\n"+
-			"- **AgeMem STM/LTM** — two-tier memory; hot facts in-session, cold facts survive restarts\n"+
-			"- **Engrams** — explicit tool/behaviour preferences written by `record_engram`, persisted to LTM\n"+
-			"- **MEL VectorStore** — heuristic store with Jaccard retrieval and confidence weighting\n\n"+
-			"**SENSE**\n"+
-			"- **LIE** (reasoning depth) · **Stabilizer** (quality guard) · **Code2World** (action preview)\n\n"+
-			"**Discovery** — live model polling (xAI + Gemini) · **Cloud Brains** tab `Ctrl+D`\n\n"+
-			"---\n\n"+
-			"Type `/help` for commands · `/tools` to browse tools · `/mode` to switch execution mode\n\n"+
-			"*Independent project — Todd Eddings / Velarium AI — OpenAI-compatible API*",
+		"**Gorkbot v%s** — %s%s\n\n"+
+			"Type `/help` for commands · `/about` for system overview",
 		platform.Version, modelName, consultantLine,
 	))
 

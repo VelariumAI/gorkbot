@@ -199,6 +199,13 @@ func (r *Registry) registerCommands() {
 		Handler:     r.handleHelp,
 	}
 
+	r.commands["about"] = &CommandDefinition{
+		Name:        "about",
+		Description: "Show system overview, intelligence stack, and platform info",
+		Usage:       "/about",
+		Handler:     r.handleAbout,
+	}
+
 	r.commands["chat"] = &CommandDefinition{
 		Name:        "chat",
 		Description: "Manage conversation history",
@@ -446,7 +453,7 @@ func (r *Registry) handleHelp(args []string) (string, error) {
 
 	// Sort commands alphabetically for consistent display
 	commandNames := []string{
-		"help", "clear", "chat", "model", "tools", "permissions", "auth",
+		"help", "about", "clear", "chat", "model", "tools", "permissions", "auth",
 		"settings", "version", "theme", "compress", "bug", "quit",
 		// Enhanced commands
 		"context", "cost", "rewind", "mode", "export", "compact",
@@ -464,6 +471,22 @@ func (r *Registry) handleHelp(args []string) (string, error) {
 
 	sb.WriteString("\n**Tip:** Press `Alt+Enter` for multi-line input\n")
 	return sb.String(), nil
+}
+
+func (r *Registry) handleAbout(args []string) (string, error) {
+	return "# About Gorkbot\n\n" +
+		"**Intelligence**\n" +
+		"- **ARC Router** — classifies every prompt (Direct vs ReasonVerify) and scales tool budget to platform RAM\n" +
+		"- **MEL** — Meta-Experience Learning: turns tool failure→correction cycles into persistent guardrail heuristics\n\n" +
+		"**Parametric Memory** *(cross-session, query-relevant, refreshed every turn)*\n" +
+		"- **AgeMem STM/LTM** — two-tier memory; hot facts in-session, cold facts survive restarts\n" +
+		"- **Engrams** — explicit tool/behaviour preferences written by `record_engram`, persisted to LTM\n" +
+		"- **MEL VectorStore** — heuristic store with Jaccard retrieval and confidence weighting\n\n" +
+		"**SENSE**\n" +
+		"- **LIE** (reasoning depth) · **Stabilizer** (quality guard) · **Code2World** (action preview)\n\n" +
+		"**Discovery** — live model polling (xAI + Gemini) · **Cloud Brains** tab `Ctrl+D`\n\n" +
+		"---\n\n" +
+		"*Independent project — Todd Eddings / Velarium AI — OpenAI-compatible API*", nil
 }
 
 func (r *Registry) handleChat(args []string) (string, error) {

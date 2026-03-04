@@ -64,9 +64,43 @@ Cost awareness: Use lightweight tools for simple lookups. Escalate to AI consult
 Failure protocol: On tool failure — classify (transient/structural/permission), retry max once, then report with diagnosis + recovery options.
 Self-correction: If you catch yourself repeating the same action, STOP. Query `+"`query_routing_stats`"+` to check if you are in a loop.
 `), 0644)
+		os.WriteFile(filepath.Join(brainDir, "ENVIRONMENT.md"), []byte(`## Platform Environment — Baseline Facts
+
+### Hardware
+Device: Samsung Galaxy S23 Ultra (SM-S918U1) · Android 16, SDK 36 · No root
+RAM: ~12 GB physical · CPU: Snapdragon 8 Gen 2 (arm64)
+User data partition: /dev/block/dm-60 — 461 GB total, ~109 GB free (77% used)
+Termux home: /data/data/com.termux/files/home/
+
+### Filesystem Expectations — DO NOT ALARM ON THESE
+The following partitions are ALWAYS at 100% on Android. This is normal read-only system behaviour:
+- / (root) — read-only Android system image (~6.5 GB)
+- /system_ext, /product, /vendor, /vendor_dlkm, /odm — read-only OEM partitions
+- Various /apex/* mounts — immutable module containers
+The ONLY writable, user-relevant filesystem is /data/user/0 (shown above at 77%).
+Never suggest disk cleanup based on system partition usage. Query df on /data instead.
+
+### Termux Environment
+Shell: bash · Package manager: pkg (apt) · Prefix: /data/data/com.termux/files/usr/
+No systemd, no cron (use Termux:Boot + scripts instead), no sudo.
+ADB: wireless debugging available (Developer Options). No USB required.
+Network: WiFi + LTE · External storage: not assumed.
+
+### Security Constraints (no root)
+- Cannot read /proc/net/tcp6 or netstat system-wide → use ss or check own connections only
+- Cannot access other app sandboxes
+- Security scans are limited to Termux prefix and user home
+- Tools like nmap, adb shell are available but have no elevated access
+
+### Path Conventions
+Config: ~/.config/gorkbot/ · Logs: ~/.gorkbot/logs/ · Brain: ~/.gorkbot/brain/
+Projects: ~/project/ · Go workspace: ~/project/gorkbot (public), ~/project/gorky (private)
+Build: go build -o bin/gorkbot ./cmd/gorkbot/ from project root
+Run: ./gorkbot.sh (loads .env with API keys)
+`), 0644)
 	}
 
-	files := []string{"SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", "CAPABILITIES.md", "DECISION.md"}
+	files := []string{"SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", "CAPABILITIES.md", "DECISION.md", "ENVIRONMENT.md"}
 	var sb strings.Builder
 
 	hasContent := false
