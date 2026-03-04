@@ -79,6 +79,13 @@ func (m *Model) View() string {
 			lipgloss.WithWhitespaceChars("░"), lipgloss.WithWhitespaceForeground(lipgloss.Color("235")))
 	}
 
+	// HITL Approval Prompt — displayed as a modal overlay over the chat view.
+	if m.awaitingHITL && m.hitlRequest != nil {
+		hitlBox := m.renderHITLPrompt()
+		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, hitlBox,
+			lipgloss.WithWhitespaceChars("░"), lipgloss.WithWhitespaceForeground(lipgloss.Color("235")))
+	}
+
 	// Intervention Prompt
 	if m.interventionMode {
 		boxStyle := m.styles.ToolBox.Copy().
@@ -107,6 +114,68 @@ func (m *Model) View() string {
 	}
 
 	return view
+}
+
+// renderHITLPrompt renders the HITL plan-and-execute approval overlay.
+func (m *Model) renderHITLPrompt() string {
+	req := m.hitlRequest
+	if req == nil {
+		return ""
+	}
+
+	boxWidth := m.width - 4
+	if boxWidth > 82 {
+		boxWidth = 82
+	}
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#FF8800")).
+		Padding(1, 2).
+		Width(boxWidth)
+
+	titleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FF8800")).
+		Bold(true)
+
+	toolStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(TextWhite)).
+		Bold(true)
+
+	hintStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(TextGray)).
+		Italic(true)
+
+	approveStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#00FF88")).
+		Bold(true)
+
+	rejectStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ErrorRed)).
+		Bold(true)
+
+	// Truncate plan if it would overflow the box.
+	plan := req.Plan
+	lines := strings.Split(plan, "\n")
+	const maxPlanLines = 14
+	if len(lines) > maxPlanLines {
+		lines = append(lines[:maxPlanLines], hintStyle.Render("  … (truncated)"))
+		plan = strings.Join(lines, "\n")
+	}
+
+	queueNote := ""
+	if len(m.hitlQueue) > 1 {
+		queueNote = "\n" + hintStyle.Render(fmt.Sprintf("(%d more requests queued)", len(m.hitlQueue)-1))
+	}
+
+	content := titleStyle.Render("⚡ SENSE HITL — Action Requires Approval") + "\n\n"
+	content += "Tool: " + toolStyle.Render(req.ToolName) + "\n\n"
+	content += plan + "\n\n"
+	content += "───────────────────────────────────────\n"
+	content += approveStyle.Render("[Y] Approve") + "    " + rejectStyle.Render("[N] Reject") + queueNote + "\n"
+	content += hintStyle.Render("Press Y / Enter to approve · N / Esc to reject")
+
+	return boxStyle.Render(content)
 }
 
 // renderTabs renders the top navigation tabs

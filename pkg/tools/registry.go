@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -53,6 +54,8 @@ type Registry struct {
 	// pipelineRunner executes an agent synchronously, returning its output.
 	// Wired from the orchestrator so the run_pipeline tool can execute multi-step pipelines.
 	pipelineRunner func(ctx context.Context, agentType, task string) (string, error)
+	// auditDB is the structured SQLite audit log (nil = disabled).
+	auditDB *AuditDB
 }
 
 // NewRegistry creates a new tool registry
@@ -112,6 +115,14 @@ func (r *Registry) SetAnalytics(analytics *Analytics) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.analytics = analytics
+}
+
+// SetAuditDB wires the structured SQLite audit database into the registry.
+// Every subsequent tool execution will be logged asynchronously.
+func (r *Registry) SetAuditDB(db *AuditDB) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.auditDB = db
 }
 
 // SetAIProvider sets the AI provider for tools that need it (e.g., Task tool)
@@ -401,11 +412,31 @@ func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, 
 	// Execute the tool with normalized params
 	result, err := tool.Execute(ctxWithRegistry, normalizedParams)
 
-	// Record analytics
+	// Record analytics and structured audit log.
 	duration := time.Since(startTime)
 	success := err == nil && result != nil && result.Success
 	if r.analytics != nil {
 		r.analytics.RecordExecution(normalizedName, success, duration)
+	}
+
+	// Fire-and-forget audit write: never blocks the caller.
+	r.mu.RLock()
+	adb := r.auditDB
+	r.mu.RUnlock()
+	if adb != nil {
+		// Serialize params to JSON; truncation is handled inside LogExecution.
+		argsJSON := ""
+		if b, jErr := json.Marshal(normalizedParams); jErr == nil {
+			argsJSON = string(b)
+		}
+		rawErrStr := ""
+		if err != nil {
+			rawErrStr = err.Error()
+		} else if result != nil && result.Error != "" {
+			rawErrStr = result.Error
+		}
+		errCat := classifyToolError(err, result)
+		adb.LogExecution(normalizedName, argsJSON, success, errCat, rawErrStr, duration.Milliseconds())
 	}
 
 	return result, err

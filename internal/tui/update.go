@@ -780,6 +780,16 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
+		// Handle HITL rejection via Esc
+		if m.awaitingHITL {
+			m.resolveCurrentHITL(engine.HITLDecision{Approval: engine.HITLRejected, Notes: "Rejected (Esc)"})
+			m.addSystemMessage("🚫 **HITL: rejected** — tool execution cancelled.")
+			m.updateViewportContent()
+			if !m.userScrolledUp {
+				m.viewport.GotoBottom()
+			}
+			return m, nil
+		}
 		// Handle permission prompt denial
 		if m.awaitingPermission {
 			m.DenyPermission()
@@ -823,6 +833,27 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, nil // Ignore other keys
+	}
+
+	// Handle HITL approval prompt — intercept y/n/enter (esc handled in switch above).
+	if m.awaitingHITL {
+		switch msg.String() {
+		case "y", "Y", "enter":
+			m.resolveCurrentHITL(engine.HITLDecision{Approval: engine.HITLApproved})
+			m.addSystemMessage("✅ **HITL: approved** — tool execution will proceed.")
+			m.updateViewportContent()
+			if !m.userScrolledUp {
+				m.viewport.GotoBottom()
+			}
+		case "n", "N":
+			m.resolveCurrentHITL(engine.HITLDecision{Approval: engine.HITLRejected, Notes: "Rejected by user"})
+			m.addSystemMessage("🚫 **HITL: rejected** — tool execution cancelled.")
+			m.updateViewportContent()
+			if !m.userScrolledUp {
+				m.viewport.GotoBottom()
+			}
+		}
+		return m, nil // Drop all other keys while HITL prompt is active
 	}
 
 	// Viewport navigation shortcuts - always available for scrolling
@@ -1039,21 +1070,32 @@ func (m *Model) handleStreamComplete(msg StreamCompleteMsg) (tea.Model, tea.Cmd)
 }
 
 // handleHITLRequest handles a SENSE HITL plan-and-execute approval request.
-// It displays the plan as a system message and sets the awaitingHITL flag so
-// the TUI can route `/hitl approve|reject` commands to the waiting goroutine.
+// It pushes the request onto the FIFO queue and, if no HITL is currently
+// active, immediately activates it and opens the approval overlay.
 func (m *Model) handleHITLRequest(msg HITLRequestMsg) (tea.Model, tea.Cmd) {
 	req := msg.Request
-	planDisplay := fmt.Sprintf(
-		"## ⚡ SENSE HITL — v1.5.3 Validation Required\n\n"+
-			"**Tool:** `%s`\n\n"+
-			"%s\n\n"+
-			"---\n"+
-			"Type **`/hitl approve`** to proceed, **`/hitl reject`** to cancel, or **`/hitl approve <notes>`** to approve with amendments.",
-		req.ToolName, req.Plan,
-	)
-	m.addSystemMessage(planDisplay)
-	m.awaitingHITL = true
-	m.updateViewportContent()
+	item := hitlPendingItem{req: req, ch: msg.ResponseChan}
+	m.hitlQueue = append(m.hitlQueue, item)
+
+	if !m.awaitingHITL {
+		// Activate the front-of-queue immediately.
+		front := m.hitlQueue[0]
+		m.hitlRequest = &front.req
+		m.hitlChan = front.ch
+		m.awaitingHITL = true
+		m.state = stateHITLApproval
+
+		planDisplay := fmt.Sprintf(
+			"## ⚡ SENSE HITL — v1.5.3 Validation Required\n\n"+
+				"**Tool:** `%s`\n\n%s",
+			req.ToolName, req.Plan,
+		)
+		m.addSystemMessage(planDisplay)
+		m.updateViewportContent()
+		if !m.userScrolledUp {
+			m.viewport.GotoBottom()
+		}
+	}
 	return m, nil
 }
 

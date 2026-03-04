@@ -307,11 +307,30 @@ func main() {
 		logger.Error("Failed to initialize analytics", "error", err)
 	}
 
+	// Structured SQLite audit log — records every tool execution asynchronously.
+	// Stored at <configDir>/audit.db with schema defined in audit_db.go.
+	auditPruneCtx, auditPruneCancel := context.WithCancel(context.Background())
+	defer auditPruneCancel()
+	auditDB, auditErr := tools.InitAuditDB(env.ConfigDir)
+	if auditErr != nil {
+		logger.Warn("Audit DB init failed — tool executions will not be logged to audit.db",
+			"error", auditErr)
+	}
+	if auditDB != nil {
+		// Start 12-hour background pruner; caps the DB at DefaultAuditMaxRecords rows.
+		auditDB.StartPruner(auditPruneCtx, tools.DefaultAuditMaxRecords)
+		defer auditDB.Close()
+		logger.Info("Audit DB initialized", "path", filepath.Join(env.ConfigDir, "audit.db"))
+	}
+
 	toolRegistry := tools.NewRegistry(permissionMgr)
 	toolRegistry.SetAnalytics(analytics)
 	toolRegistry.SetAIProvider(primary)
 	toolRegistry.SetConsultantProvider(consultant)
 	toolRegistry.SetConfigDir(env.ConfigDir)
+	if auditDB != nil {
+		toolRegistry.SetAuditDB(auditDB)
+	}
 
 	if err := toolRegistry.RegisterDefaultTools(); err != nil {
 		logger.Error("Failed to register default tools", "error", err)

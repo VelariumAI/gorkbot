@@ -43,7 +43,15 @@ const (
 	discoveryView
 	analyticsView    // session analytics dashboard (Ctrl+A)
 	diagnosticsView  // system diagnostics (Ctrl+\)
+	stateHITLApproval // SENSE HITL plan-and-execute approval overlay
 )
+
+// hitlPendingItem holds a queued HITL request alongside the response channel
+// that the requesting goroutine is blocking on.
+type hitlPendingItem struct {
+	req engine.HITLRequest
+	ch  chan engine.HITLDecision
+}
 
 // modelSelectView is the dual-pane model selection view (alias for modelListView).
 const modelSelectView = modelListView
@@ -105,6 +113,7 @@ type Model struct {
 	awaitingHITL  bool
 	hitlRequest   *engine.HITLRequest
 	hitlChan      chan engine.HITLDecision
+	hitlQueue     []hitlPendingItem // FIFO queue of pending HITL requests
 
 	// Content
 	messages         []Message
@@ -1526,49 +1535,73 @@ func (m *Model) DenyPermission() {
 
 // RequestHITLApproval surfaces a SENSE HITL plan to the user and waits for
 // their approval decision.  It runs on the tool-execution goroutine and blocks
-// until the TUI dispatches a decision via the hitlChan.
+// until the TUI sends a decision through the response channel.
+//
+// This function does NOT touch any Model fields directly — all state mutations
+// happen on the TUI goroutine via handleHITLRequest. This eliminates the data
+// race that the previous implementation had.
 func (m *Model) RequestHITLApproval(req engine.HITLRequest) engine.HITLDecision {
-	// Surface the plan as a system message so the user can read it.
-	planMsg := fmt.Sprintf(
-		"## SENSE HITL — Action Requires Approval\n\n"+
-			"**Tool:** `%s`\n\n"+
-			"%s\n\n"+
-			"*Type `/hitl approve`, `/hitl reject`, or `/hitl approve <notes>` to respond.*",
-		req.ToolName, req.Plan,
-	)
-	if prog := m.getProgram(); prog != nil {
-		prog.Send(HITLRequestMsg{Request: req})
+	prog := m.getProgram()
+	if prog == nil {
+		// Non-interactive mode (e.g. --stdin) — auto-approve.
+		return engine.HITLDecision{Approval: engine.HITLApproved}
 	}
-	_ = planMsg // Plan is surfaced via HITLRequestMsg in the TUI update handler
-
-	m.hitlRequest = &req
-	m.awaitingHITL = true
-	m.hitlChan = make(chan engine.HITLDecision, 1)
-
-	decision := <-m.hitlChan
-
-	m.awaitingHITL = false
-	m.hitlRequest = nil
-
-	return decision
+	// Create the response channel locally; pass it through the message so the
+	// TUI goroutine owns the write end and we own the read end.
+	ch := make(chan engine.HITLDecision, 1)
+	prog.Send(HITLRequestMsg{Request: req, ResponseChan: ch})
+	return <-ch // block until TUI sends decision
 }
 
-// ApproveHITL approves the current HITL request.
-func (m *Model) ApproveHITL(notes string) {
-	if m.awaitingHITL && m.hitlChan != nil {
-		approval := engine.HITLApproved
-		if notes != "" {
-			approval = engine.HITLAmended
-		}
-		m.hitlChan <- engine.HITLDecision{Approval: approval, Notes: notes}
+// resolveCurrentHITL sends the given decision to the waiting goroutine, pops
+// the front of the queue, and either activates the next pending request or
+// returns the TUI to chatView. Must be called from the TUI goroutine.
+func (m *Model) resolveCurrentHITL(decision engine.HITLDecision) {
+	if len(m.hitlQueue) == 0 {
+		return
 	}
+	// Unblock the waiting goroutine.
+	item := m.hitlQueue[0]
+	m.hitlQueue = m.hitlQueue[1:]
+	item.ch <- decision
+
+	m.hitlRequest = nil
+	m.hitlChan = nil
+
+	if len(m.hitlQueue) > 0 {
+		// Advance to the next queued request.
+		next := m.hitlQueue[0]
+		m.hitlRequest = &next.req
+		m.hitlChan = next.ch
+		m.awaitingHITL = true
+		m.state = stateHITLApproval
+		planDisplay := fmt.Sprintf(
+			"## ⚡ SENSE HITL — Approval Required\n\n**Tool:** `%s`\n\n%s",
+			next.req.ToolName, next.req.Plan,
+		)
+		m.addSystemMessage(planDisplay)
+		m.updateViewportContent()
+		if !m.userScrolledUp {
+			m.viewport.GotoBottom()
+		}
+	} else {
+		m.awaitingHITL = false
+		m.state = chatView
+	}
+}
+
+// ApproveHITL approves the current HITL request (optionally with amendment notes).
+func (m *Model) ApproveHITL(notes string) {
+	approval := engine.HITLApproved
+	if notes != "" {
+		approval = engine.HITLAmended
+	}
+	m.resolveCurrentHITL(engine.HITLDecision{Approval: approval, Notes: notes})
 }
 
 // RejectHITL rejects the current HITL request.
 func (m *Model) RejectHITL(reason string) {
-	if m.awaitingHITL && m.hitlChan != nil {
-		m.hitlChan <- engine.HITLDecision{Approval: engine.HITLRejected, Notes: reason}
-	}
+	m.resolveCurrentHITL(engine.HITLDecision{Approval: engine.HITLRejected, Notes: reason})
 }
 
 // handleHITLCommand processes /hitl sub-commands for the SENSE HITL approval flow.
@@ -1600,12 +1633,11 @@ func (m *Model) handleHITLCommand(input string) tea.Cmd {
 			m.updateViewportContent()
 			return nil
 		}
-		m.ApproveHITL(rest) // sends to hitlChan; tool goroutine unblocks
 		label := "approved"
 		if rest != "" {
 			label = fmt.Sprintf("approved with notes: *%s*", rest)
 		}
-		m.awaitingHITL = false // optimistic UI update; goroutine also resets this
+		m.ApproveHITL(rest) // resolveCurrentHITL handles state/queue cleanup
 		m.addSystemMessage(fmt.Sprintf("✅ **HITL: %s** — tool execution will proceed.", label))
 		m.updateViewportContent()
 		m.textarea.Blur()
@@ -1622,8 +1654,7 @@ func (m *Model) handleHITLCommand(input string) tea.Cmd {
 		if reason == "" {
 			reason = "user rejected"
 		}
-		m.RejectHITL(reason) // sends to hitlChan; tool goroutine unblocks
-		m.awaitingHITL = false
+		m.RejectHITL(reason) // resolveCurrentHITL handles state/queue cleanup
 		m.addSystemMessage(fmt.Sprintf("❌ **HITL: rejected** — *%s*. Tool execution cancelled.", reason))
 		m.updateViewportContent()
 		m.textarea.Blur()

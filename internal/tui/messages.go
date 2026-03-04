@@ -82,8 +82,11 @@ type InterventionRequestMsg struct {
 }
 
 // HITLRequestMsg signals a SENSE HITL plan-and-execute approval request.
+// ResponseChan is created by the requesting goroutine; the TUI sends the
+// decision back through it so the goroutine can unblock without a data race.
 type HITLRequestMsg struct {
-	Request engine.HITLRequest
+	Request      engine.HITLRequest
+	ResponseChan chan engine.HITLDecision
 }
 
 // CompletionMsg represents a text completion suggestion
