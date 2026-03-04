@@ -892,6 +892,10 @@ func runTUI(orch *engine.Orchestrator, pm *process.Manager, reg *registry.ModelR
 			},
 			SetAutoSecondary: func() string {
 				orch.Consultant = nil
+				// Clear registry cache so ResolveConsultantProvider auto-selects.
+				if orch.Registry != nil {
+					orch.Registry.SetConsultantProvider(nil)
+				}
 				_ = appState.SetSecondaryAuto()
 				return "Secondary set to **Auto** — AI picks best model per task."
 			},

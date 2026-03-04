@@ -147,18 +147,37 @@ func (o *Orchestrator) GetSystemState() string {
 		sb.WriteString(fmt.Sprintf("**Open Goals**: %d\n", len(open)))
 	}
 
-	// Tool analytics top 5
-	if o.Registry != nil && o.Registry.GetAnalytics() != nil {
-		analytics := o.Registry.GetAnalytics()
-		top := analytics.GetTopTools(5)
-		if len(top) > 0 {
-			sb.WriteString("\n**Top Tools (by execution count)**:\n")
-			for _, t := range top {
-				rate := 0.0
-				if t.ExecutionCount > 0 {
-					rate = float64(t.SuccessCount) / float64(t.ExecutionCount) * 100
+	// Tool analytics top 5 — prefer persistent audit DB (all-time, accurate)
+	// over in-memory analytics (session-scoped, resets on restart).
+	if o.Registry != nil {
+		reported := false
+		if adb := o.Registry.GetAuditDB(); adb != nil {
+			if top, err := adb.TopTools(5); err == nil && len(top) > 0 {
+				sb.WriteString("\n**Top Tools (all-time, audit DB)**:\n")
+				for _, t := range top {
+					rate := 0.0
+					if t.ExecutionCount > 0 {
+						rate = float64(t.SuccessCount) / float64(t.ExecutionCount) * 100
+					}
+					sb.WriteString(fmt.Sprintf("  - %s: %d calls (%.0f%% success)\n",
+						t.ToolName, t.ExecutionCount, rate))
 				}
-				sb.WriteString(fmt.Sprintf("  - %s: %d calls (%.0f%% success)\n", t.ToolName, t.ExecutionCount, rate))
+				reported = true
+			}
+		}
+		// Fallback: in-memory analytics (current session only — label clearly).
+		if !reported && o.Registry.GetAnalytics() != nil {
+			top := o.Registry.GetAnalytics().GetTopTools(5)
+			if len(top) > 0 {
+				sb.WriteString("\n**Top Tools (this session)**:\n")
+				for _, t := range top {
+					rate := 0.0
+					if t.ExecutionCount > 0 {
+						rate = float64(t.SuccessCount) / float64(t.ExecutionCount) * 100
+					}
+					sb.WriteString(fmt.Sprintf("  - %s: %d calls (%.0f%% success)\n",
+						t.ToolName, t.ExecutionCount, rate))
+				}
 			}
 		}
 	}

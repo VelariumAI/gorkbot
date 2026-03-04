@@ -125,6 +125,13 @@ func (r *Registry) SetAuditDB(db *AuditDB) {
 	r.auditDB = db
 }
 
+// GetAuditDB returns the audit database (nil when not configured).
+func (r *Registry) GetAuditDB() *AuditDB {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.auditDB
+}
+
 // SetAIProvider sets the AI provider for tools that need it (e.g., Task tool)
 func (r *Registry) SetAIProvider(provider interface{}) {
 	r.mu.Lock()

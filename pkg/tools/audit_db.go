@@ -255,6 +255,46 @@ func (a *AuditDB) StartPruner(ctx context.Context, maxRecords int) {
 	}()
 }
 
+// AuditToolStat holds per-tool summary statistics from the persistent audit log.
+type AuditToolStat struct {
+	ToolName       string
+	ExecutionCount int
+	SuccessCount   int
+}
+
+// TopTools returns the top n tools by total execution count from the persistent
+// audit log. It is safe to call with a nil receiver (returns nil).
+func (a *AuditDB) TopTools(n int) ([]AuditToolStat, error) {
+	if a == nil || a.db == nil {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT tool_name,
+		       COUNT(*)        AS total,
+		       SUM(success)    AS successes
+		FROM   tool_audit_log
+		GROUP  BY tool_name
+		ORDER  BY total DESC
+		LIMIT  ?`, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []AuditToolStat
+	for rows.Next() {
+		var s AuditToolStat
+		if err := rows.Scan(&s.ToolName, &s.ExecutionCount, &s.SuccessCount); err != nil {
+			continue
+		}
+		stats = append(stats, s)
+	}
+	return stats, rows.Err()
+}
+
 // Close releases the underlying database connection.
 // Safe to call with a nil receiver.
 func (a *AuditDB) Close() error {

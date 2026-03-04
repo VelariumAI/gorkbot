@@ -73,6 +73,11 @@ func (o *Orchestrator) SetSecondary(ctx context.Context, providerName, modelID s
 		return fmt.Errorf("SetSecondary: %w", err)
 	}
 	o.Consultant = prov
+	// Keep the tool registry in sync so consultation tool always uses the
+	// current secondary model (covers both UI switches and cascade failover).
+	if o.Registry != nil {
+		o.Registry.SetConsultantProvider(prov)
+	}
 	if o.Stabilizer != nil {
 		o.Stabilizer = nil // re-init handled lazily
 	}
