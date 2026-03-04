@@ -284,7 +284,7 @@ func (m *Model) renderLoadingIndicator() string {
 	if len(m.activeTools) > 0 {
 		toolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Italic(true)
 		for _, toolName := range m.activeTools {
-			lines = append(lines, toolStyle.Render("    ⚙ "+toolName+"..."))
+			lines = append(lines, toolStyle.Render("    🔧 "+toolName+"..."))
 		}
 	}
 

@@ -327,8 +327,8 @@ func (r *Registry) registerCommands() {
 
 	r.commands["export"] = &CommandDefinition{
 		Name:        "export",
-		Description: "Export conversation to file",
-		Usage:       "/export [markdown|json|plain] [filename]",
+		Description: "Export full session to .md, .txt, or .pdf (PDF requires pandoc)",
+		Usage:       "/export [md|txt|pdf] [filename]",
 		Handler:     r.handleExport,
 	}
 
@@ -369,8 +369,8 @@ func (r *Registry) registerCommands() {
 
 	r.commands["save"] = &CommandDefinition{
 		Name:        "save",
-		Description: "Save current conversation to a named session file",
-		Usage:       "/save <name>",
+		Description: "Save current conversation (auto-names if no name given)",
+		Usage:       "/save [name]",
 		Handler:     r.handleSave,
 	}
 
@@ -1157,32 +1157,40 @@ func (r *Registry) handleMode(args []string) (string, error) {
 }
 
 func (r *Registry) handleExport(args []string) (string, error) {
-	if r.Orch == nil || r.Orch.ExportConv == nil {
-		return "Export system not available.", nil
-	}
-	format := "markdown"
+	format := "md"
 	path := ""
 	if len(args) >= 1 {
-		format = args[0]
+		format = strings.ToLower(args[0])
 	}
 	if len(args) >= 2 {
 		path = args[1]
 	}
+	ext := formatExt(format)
 	if path == "" {
-		// Generate default filename
-		path = fmt.Sprintf("gorkbot_export_%s.%s",
+		path = fmt.Sprintf("%s/gorkbot_export_%s.%s",
+			homeDir(),
 			time.Now().Format("20060102_150405"),
-			formatExt(format))
+			ext)
 	}
-	return r.Orch.ExportConv(format, path), nil
+	// Signal the TUI to export its full message history (includes tool calls,
+	// results, system messages — not just the AI conversation buffer).
+	return fmt.Sprintf("EXPORT_TUI:%s:%s", ext, path), nil
+}
+
+// homeDir returns the user's home directory, falling back to "~".
+func homeDir() string {
+	if h, err := os.UserHomeDir(); err == nil {
+		return h
+	}
+	return "~"
 }
 
 func formatExt(format string) string {
 	switch format {
-	case "json":
-		return "json"
-	case "plain", "text":
+	case "txt", "text", "plain":
 		return "txt"
+	case "pdf":
+		return "pdf"
 	default:
 		return "md"
 	}
@@ -1286,9 +1294,7 @@ func (r *Registry) handleRename(args []string) (string, error) {
 }
 
 func (r *Registry) handleSave(args []string) (string, error) {
-	if len(args) == 0 {
-		return "Usage: /save <name>", nil
-	}
+	// Empty name → orchestrator auto-generates one from the conversation.
 	name := strings.Join(args, "-")
 	if r.Orch != nil && r.Orch.SaveSession != nil {
 		return r.Orch.SaveSession(name), nil

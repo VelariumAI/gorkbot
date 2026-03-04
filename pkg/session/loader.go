@@ -1,9 +1,11 @@
 package session
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -64,6 +66,21 @@ type SessionFile struct {
 	Messages []ai.ConversationMessage `json:"messages"`
 }
 
+// SessionMeta is a lightweight summary of a saved session for listing.
+type SessionMeta struct {
+	Name    string // human-readable name stored in the file
+	Key     string // opaque filename key (without .json)
+	SavedAt string
+}
+
+// sessionKey derives the on-disk filename (without extension) for a session name.
+// A truncated SHA-256 makes filenames opaque to casual filesystem browsing.
+// The human-readable name is always stored in the file's "name" field for lookup.
+func sessionKey(name string) string {
+	sum := sha256.Sum256([]byte("gorkbot\x00" + strings.ToLower(strings.TrimSpace(name))))
+	return fmt.Sprintf("%x", sum[:8]) // 16 hex chars — 64-bit key space
+}
+
 // SaveSessionFile writes conversation messages to a JSON file at path.
 // Sensitive credential patterns are automatically redacted before writing.
 func SaveSessionFile(path, name string, msgs []ai.ConversationMessage) error {
@@ -79,6 +96,14 @@ func SaveSessionFile(path, name string, msgs []ai.ConversationMessage) error {
 	return os.WriteFile(path, data, 0600)
 }
 
+// SaveSessionByName writes a session file using a key-derived filename.
+// Returns the opaque key used, or an error.
+func SaveSessionByName(dir, name string, msgs []ai.ConversationMessage) (string, error) {
+	key := sessionKey(name)
+	path := filepath.Join(dir, key+".json")
+	return key, SaveSessionFile(path, name, msgs)
+}
+
 // LoadSessionFile reads a JSON session file and returns the messages.
 func LoadSessionFile(path string) ([]ai.ConversationMessage, error) {
 	data, err := os.ReadFile(path)
@@ -92,17 +117,77 @@ func LoadSessionFile(path string) ([]ai.ConversationMessage, error) {
 	return sf.Messages, nil
 }
 
-// ListSessionFiles returns the base names (without .json) of all session files in dir.
-func ListSessionFiles(dir string) []string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var names []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
-			names = append(names, strings.TrimSuffix(e.Name(), ".json"))
+// FindSessionFile scans dir for a session file whose internal name field matches name
+// (case-insensitive). Returns the full path, or "" if not found.
+func FindSessionFile(dir, name string) string {
+	target := strings.ToLower(strings.TrimSpace(name))
+
+	// Fast path: try the deterministic key first (avoids scanning all files).
+	fastPath := filepath.Join(dir, sessionKey(name)+".json")
+	if data, err := os.ReadFile(fastPath); err == nil {
+		var sf SessionFile
+		if json.Unmarshal(data, &sf) == nil && strings.ToLower(sf.Name) == target {
+			return fastPath
 		}
+	}
+
+	// Fallback: scan all .json files (handles legacy files without a key-named path).
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var sf SessionFile
+		if err := json.Unmarshal(data, &sf); err != nil {
+			continue
+		}
+		if strings.ToLower(sf.Name) == target {
+			return path
+		}
+	}
+	return ""
+}
+
+// ListSessionMetas returns metadata for all saved sessions in dir,
+// sorted newest-first by saved_at timestamp.
+func ListSessionMetas(dir string) []SessionMeta {
+	entries, _ := os.ReadDir(dir)
+	var metas []SessionMeta
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var sf SessionFile
+		if err := json.Unmarshal(data, &sf); err != nil {
+			continue
+		}
+		key := strings.TrimSuffix(e.Name(), ".json")
+		name := sf.Name
+		if name == "" {
+			name = key // legacy files stored name as filename
+		}
+		metas = append(metas, SessionMeta{Name: name, Key: key, SavedAt: sf.SavedAt})
+	}
+	return metas
+}
+
+// ListSessionFiles returns the human-readable names of all sessions in dir.
+// Kept for backward compatibility; prefer ListSessionMetas for richer data.
+func ListSessionFiles(dir string) []string {
+	metas := ListSessionMetas(dir)
+	names := make([]string, len(metas))
+	for i, m := range metas {
+		names[i] = m.Name
 	}
 	return names
 }

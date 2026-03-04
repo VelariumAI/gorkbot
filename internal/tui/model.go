@@ -3,7 +3,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -631,7 +633,7 @@ func (m *Model) renderMessages() string {
 			nameColor := toolCategoryColor(msg.ToolName)
 			nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(nameColor))
 
-			titleParts := "⚙ " + nameStyle.Render(msg.ToolName)
+			titleParts := "🔧 " + nameStyle.Render(msg.ToolName)
 			if msg.Elapsed > 0 {
 				titleParts += fmt.Sprintf("  ·  %.2fs", msg.Elapsed.Seconds())
 			}
@@ -809,12 +811,147 @@ func (m *Model) renderPlanningBox() string {
 
 	var label string
 	if m.planningShowDots || m.planningIntent == "" {
-		label = "Planning..."
+		label = "💡 Planning..."
 	} else {
-		label = m.planningIntent
+		label = "💡 " + m.planningIntent
 	}
 
 	return planStyle.Render(label)
+}
+
+// ── Session export ────────────────────────────────────────────────────────────
+
+// exportTUISession formats m.messages and writes the result to path.
+// ext is "md", "txt", or "pdf". PDF requires pandoc; if unavailable it falls
+// back to markdown and reports the fallback.
+func (m *Model) exportTUISession(ext, path string) string {
+	var content string
+	switch ext {
+	case "txt":
+		content = m.exportAsPlain()
+	case "pdf":
+		// Generate markdown first, then invoke pandoc to convert.
+		md := m.exportAsMarkdown()
+		if result := m.exportPDF(md, path); result != "" {
+			return result // success or pandoc error message
+		}
+		// pandoc unavailable — fall back to markdown at a .md path.
+		mdPath := strings.TrimSuffix(path, ".pdf") + ".md"
+		if err := writeExportFile(mdPath, md); err != nil {
+			return fmt.Sprintf("**Export failed**: %v", err)
+		}
+		return fmt.Sprintf("⚠ pandoc not found — exported as Markdown instead: `%s`", mdPath)
+	default: // "md"
+		content = m.exportAsMarkdown()
+	}
+	if err := writeExportFile(path, content); err != nil {
+		return fmt.Sprintf("**Export failed**: %v", err)
+	}
+	return fmt.Sprintf("✅ Session exported to `%s` (%d messages).", path, len(m.messages))
+}
+
+// exportAsMarkdown renders m.messages as a Markdown document.
+func (m *Model) exportAsMarkdown() string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("# Gorkbot Session Export\n\n*Exported: %s*\n\n---\n\n",
+		time.Now().Format("2006-01-02 15:04:05")))
+	for _, msg := range m.messages {
+		switch msg.Role {
+		case "user":
+			sb.WriteString(fmt.Sprintf("## You\n\n%s\n\n---\n\n", msg.Content))
+		case "assistant":
+			sb.WriteString(fmt.Sprintf("## Gorkbot\n\n%s\n\n---\n\n", msg.Content))
+		case "consultant":
+			sb.WriteString(fmt.Sprintf("## Consultant\n\n%s\n\n---\n\n", msg.Content))
+		case "system":
+			sb.WriteString(fmt.Sprintf("> *System: %s*\n\n", strings.ReplaceAll(msg.Content, "\n", " ")))
+		case "tool_call":
+			sb.WriteString(fmt.Sprintf("**→ Tool call: `%s`**\n\n", msg.ToolName))
+		case "tool":
+			status := "✓"
+			if msg.ToolResult != nil && !msg.ToolResult.Success {
+				status = "✗"
+			}
+			sb.WriteString(fmt.Sprintf("**🔧 `%s` %s**\n\n", msg.ToolName, status))
+			if msg.ToolResult != nil {
+				out := msg.ToolResult.Output
+				if !msg.ToolResult.Success {
+					out = msg.ToolResult.Error
+				}
+				if out != "" {
+					sb.WriteString("```\n" + out + "\n```\n\n")
+				}
+			}
+		}
+	}
+	return sb.String()
+}
+
+// exportAsPlain renders m.messages as plain text.
+func (m *Model) exportAsPlain() string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Gorkbot Session Export — %s\n%s\n\n",
+		time.Now().Format("2006-01-02 15:04:05"),
+		strings.Repeat("=", 50)))
+	for _, msg := range m.messages {
+		switch msg.Role {
+		case "user":
+			sb.WriteString(fmt.Sprintf("[You]\n%s\n\n", msg.Content))
+		case "assistant":
+			sb.WriteString(fmt.Sprintf("[Gorkbot]\n%s\n\n", msg.Content))
+		case "consultant":
+			sb.WriteString(fmt.Sprintf("[Consultant]\n%s\n\n", msg.Content))
+		case "tool_call":
+			sb.WriteString(fmt.Sprintf("[Tool → %s]\n", msg.ToolName))
+		case "tool":
+			status := "OK"
+			if msg.ToolResult != nil && !msg.ToolResult.Success {
+				status = "FAIL"
+			}
+			out := ""
+			if msg.ToolResult != nil {
+				out = msg.ToolResult.Output
+				if !msg.ToolResult.Success {
+					out = msg.ToolResult.Error
+				}
+			}
+			sb.WriteString(fmt.Sprintf("[Tool %s: %s]\n%s\n\n", status, msg.ToolName, out))
+		}
+	}
+	return sb.String()
+}
+
+// exportPDF converts markdown content to PDF at path using pandoc.
+// Returns the success/error message, or "" if pandoc is not found.
+func (m *Model) exportPDF(md, path string) string {
+	// Write markdown to a temp file.
+	tmpFile := path + ".tmp.md"
+	if err := writeExportFile(tmpFile, md); err != nil {
+		return fmt.Sprintf("**Export failed** (temp file): %v", err)
+	}
+	// Run pandoc: pandoc tmp.md -o output.pdf --pdf-engine=xelatex (or wkhtmltopdf)
+	// Try pandoc with default engine first; many Termux installs use xelatex or wkhtmltopdf.
+	args := []string{tmpFile, "-o", path, "--wrap=none"}
+	cmd := exec.Command("pandoc", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// pandoc failed or not found — remove temp, caller will fall back.
+		os.Remove(tmpFile)
+		if strings.Contains(err.Error(), "executable file not found") ||
+			strings.Contains(err.Error(), "no such file") {
+			return "" // signal: not available
+		}
+		return fmt.Sprintf("**pandoc error**: %s\n\nInstall pandoc: `pkg install pandoc`", string(out))
+	}
+	os.Remove(tmpFile)
+	return fmt.Sprintf("✅ Session exported to `%s` (%d messages).", path, len(m.messages))
+}
+
+// writeExportFile writes content to path, creating parent directories as needed.
+func writeExportFile(path, content string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), 0644)
 }
 
 // toolCategoryColor returns a Lip Gloss color string for a tool name.
@@ -1095,6 +1232,33 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 			toolReg = m.commands.GetToolRegistry()
 		}
 		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn, providerSetter)
+		return nil
+
+	case strings.HasPrefix(result, "SAVE_SESSION_OK:"):
+		// /save completed: session was stored under an auto-generated or user-supplied name.
+		name := strings.TrimPrefix(result, "SAVE_SESSION_OK:")
+		m.addSystemMessage(fmt.Sprintf("✅ Session saved as **%s**.", name))
+		m.updateViewportContent()
+		return nil
+
+	case strings.HasPrefix(result, "EXPORT_TUI:"):
+		// /export: format TUI messages and write to file.
+		// Signal format: EXPORT_TUI:<ext>:<path>
+		rest := strings.TrimPrefix(result, "EXPORT_TUI:")
+		colonIdx := strings.Index(rest, ":")
+		if colonIdx < 0 {
+			m.addSystemMessage("**Export error**: malformed signal (missing path).")
+			m.updateViewportContent()
+			return nil
+		}
+		ext := rest[:colonIdx]
+		path := rest[colonIdx+1:]
+		msg := m.exportTUISession(ext, path)
+		m.addSystemMessage(msg)
+		m.updateViewportContent()
+		if !m.userScrolledUp {
+			m.viewport.GotoBottom()
+		}
 		return nil
 
 	case strings.HasPrefix(result, "SKILL_INVOKE:"):

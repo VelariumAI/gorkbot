@@ -440,8 +440,11 @@ func (o *Orchestrator) ExportConversation(format, path string) string {
 	return result
 }
 
-// SaveSession writes the conversation history to a named JSON file under configDir/sessions/.
-// Returns a status message suitable for display in the TUI.
+// SaveSession writes the conversation history to a key-named JSON file under configDir/sessions/.
+// When name is empty an auto-generated name is derived from the first user message + date.
+// The on-disk filename is a truncated SHA-256 of the name so sessions are opaque on the
+// filesystem; the human-readable name is stored inside the JSON for listing and lookup.
+// Returns "SAVE_SESSION_OK:<name>" on success (parsed by the TUI), or an error string.
 func (o *Orchestrator) SaveSession(name string) string {
 	if o.ConversationHistory == nil {
 		return "No conversation history to save."
@@ -454,18 +457,59 @@ func (o *Orchestrator) SaveSession(name string) string {
 		return "Environment config is nil"
 	}
 	sessionDir := filepath.Join(env.ConfigDir, "sessions")
-	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+	if err := os.MkdirAll(sessionDir, 0700); err != nil {
 		return fmt.Sprintf("Cannot create sessions directory: %v", err)
 	}
-	path := filepath.Join(sessionDir, name+".json")
+
+	// Auto-generate name from first user message when none supplied.
+	if strings.TrimSpace(name) == "" {
+		name = o.suggestSessionName()
+	}
+
 	msgs := o.ConversationHistory.GetMessages()
-	if err := session.SaveSessionFile(path, name, msgs); err != nil {
+	if _, err := session.SaveSessionByName(sessionDir, name, msgs); err != nil {
 		return fmt.Sprintf("Save failed: %v", err)
 	}
-	return fmt.Sprintf("Session '%s' saved (%d messages).", name, len(msgs))
+	return fmt.Sprintf("SAVE_SESSION_OK:%s", name)
+}
+
+// suggestSessionName derives a kebab-case session name from the first user message + date.
+func (o *Orchestrator) suggestSessionName() string {
+	date := time.Now().Format("2006-01-02")
+	if o.ConversationHistory == nil {
+		return "session-" + date
+	}
+	for _, m := range o.ConversationHistory.GetMessages() {
+		if m.Role != "user" {
+			continue
+		}
+		// Take the first 40 chars of the first user message, kebab-case it.
+		text := strings.ToLower(m.Content)
+		text = strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				return r
+			}
+			return '-'
+		}, text)
+		// Collapse repeated dashes and trim
+		for strings.Contains(text, "--") {
+			text = strings.ReplaceAll(text, "--", "-")
+		}
+		text = strings.Trim(text, "-")
+		if len(text) > 40 {
+			text = text[:40]
+		}
+		text = strings.TrimRight(text, "-")
+		if text == "" {
+			break
+		}
+		return text + "-" + date
+	}
+	return "session-" + date
 }
 
 // LoadSession imports a named session file and replaces the current conversation history.
+// Looks up the session by its human-readable name (scans the sessions directory).
 // Returns "SESSION_LOADED:<name>:<count>" on success (parsed by the TUI), or an error string.
 func (o *Orchestrator) LoadSession(name string) string {
 	if o.ConversationHistory == nil {
@@ -478,7 +522,11 @@ func (o *Orchestrator) LoadSession(name string) string {
 	if env == nil {
 		return "Environment config is nil"
 	}
-	path := filepath.Join(env.ConfigDir, "sessions", name+".json")
+	sessionDir := filepath.Join(env.ConfigDir, "sessions")
+	path := session.FindSessionFile(sessionDir, name)
+	if path == "" {
+		return fmt.Sprintf("Session '%s' not found. Use /resume to list available sessions.", name)
+	}
 	msgs, err := session.LoadSessionFile(path)
 	if err != nil {
 		return fmt.Sprintf("Load failed: %v", err)
@@ -490,7 +538,7 @@ func (o *Orchestrator) LoadSession(name string) string {
 	return fmt.Sprintf("SESSION_LOADED:%s:%d", name, len(msgs))
 }
 
-// ListSessions returns a formatted list of saved session names.
+// ListSessions returns a formatted table of saved sessions with human-readable names.
 func (o *Orchestrator) ListSessions() string {
 	env, err := platform.GetEnvConfig()
 	if err != nil {
@@ -499,11 +547,20 @@ func (o *Orchestrator) ListSessions() string {
 	if env == nil {
 		return "Environment config is nil"
 	}
-	names := session.ListSessionFiles(filepath.Join(env.ConfigDir, "sessions"))
-	if len(names) == 0 {
-		return "No saved sessions."
+	metas := session.ListSessionMetas(filepath.Join(env.ConfigDir, "sessions"))
+	if len(metas) == 0 {
+		return "No saved sessions. Use `/save` to save the current session."
 	}
-	return "Saved sessions:\n• " + strings.Join(names, "\n• ")
+	var sb strings.Builder
+	sb.WriteString("**Saved Sessions** (use `/resume <name>` to restore):\n\n")
+	for _, m := range metas {
+		date := m.SavedAt
+		if t, err := time.Parse(time.RFC3339, m.SavedAt); err == nil {
+			date = t.Format("2006-01-02 15:04")
+		}
+		sb.WriteString(fmt.Sprintf("• **%s** — %s\n", m.Name, date))
+	}
+	return sb.String()
 }
 
 // CompactWithFocus runs SENSE compression with an optional focus hint.
