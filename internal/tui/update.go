@@ -267,6 +267,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_, cmd = m.handleTokenMsg(msg)
 		cmds = append(cmds, cmd)
 
+	case PlanningTokenMsg:
+		_, cmd = m.handlePlanningTokenMsg(msg)
+		cmds = append(cmds, cmd)
+
+	case PlanningBoxClearMsg:
+		_, cmd = m.handlePlanningBoxClear(msg)
+		cmds = append(cmds, cmd)
+
+	case PlanningCommitMsg:
+		_, cmd = m.handlePlanningCommit(msg)
+		cmds = append(cmds, cmd)
+
+	case PlanningTickMsg:
+		_, cmd = m.handlePlanningTick(msg)
+		cmds = append(cmds, cmd)
+
 	case spinner.TickMsg:
 		_, cmd = m.handleSpinnerTick(msg)
 		cmds = append(cmds, cmd)
@@ -369,6 +385,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.orchestrator.Interrupt()
 			}
 			m.generating = false
+			m.planningActive = false
+			m.planningBuf.Reset()
+			m.planningIntent = ""
 			m.currentResponse.Reset()
 			m.streamChunkCount = 0
 			m.recalcViewportHeight()
@@ -661,6 +680,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.generating && m.orchestrator != nil {
 			m.orchestrator.Interrupt()
 			m.generating = false
+			m.planningActive = false
+			m.planningBuf.Reset()
+			m.planningIntent = ""
 			m.currentResponse.Reset()
 			m.streamChunkCount = 0
 			m.recalcViewportHeight()
@@ -812,6 +834,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Cancel generation. Clear generating flag first so recalcViewportHeight
 			// uses the correct height (loading bar gone).
 			m.generating = false
+			m.planningActive = false
+			m.planningBuf.Reset()
+			m.planningIntent = ""
 			m.currentResponse.Reset()
 			m.streamChunkCount = 0
 			// Expand viewport now loading bar is gone, then sync content.
@@ -1238,10 +1263,87 @@ func (m *Model) handlePhraseTick(msg PhraseTickMsg) (tea.Model, tea.Cmd) {
 	return m, phraseTick()
 }
 
+// handlePlanningTokenMsg receives a streaming token destined for the planning box.
+// It accumulates tokens in planningBuf for intent extraction and throttled display.
+// currentResponse is NOT updated here; the final answer arrives via PlanningCommitMsg.
+func (m *Model) handlePlanningTokenMsg(msg PlanningTokenMsg) (tea.Model, tea.Cmd) {
+	if !m.generating {
+		return m, nil
+	}
+
+	// Retry signal: the stream rewound; clear planning buffer to show fresh start.
+	if msg.Content == "[__GORKBOT_STREAM_RETRY__]" {
+		m.planningBuf.Reset()
+		m.planningIntent = ""
+		m.updateViewportContent()
+		return m, nil
+	}
+
+	m.planningBuf.WriteString(msg.Content)
+
+	// Extract intent from the latest buffer content.
+	if intent := extractPlanningIntent(m.planningBuf.String()); intent != "" {
+		m.planningIntent = intent
+	}
+
+	// Throttle viewport re-renders (same interval as streaming).
+	m.streamChunkCount++
+	if m.streamChunkCount%m.streamChunkInterval == 0 {
+		m.updateViewportContent()
+	}
+	return m, nil
+}
+
+// handlePlanningBoxClear resets the planning buffer when a tool call fires.
+// The previous reasoning segment is discarded; only the final segment is committed.
+func (m *Model) handlePlanningBoxClear(_ PlanningBoxClearMsg) (tea.Model, tea.Cmd) {
+	m.planningBuf.Reset()
+	m.planningIntent = ""
+	m.streamChunkCount = 0
+	m.updateViewportContent()
+	return m, nil
+}
+
+// handlePlanningCommit finalises generation by adding the last planning segment
+// (the actual answer) as an assistant message and deactivating the planning box.
+// It sets m.generating=false so that the subsequent StreamCompleteMsg skips the
+// legacy currentResponse commit path (but still recalcs the viewport).
+func (m *Model) handlePlanningCommit(msg PlanningCommitMsg) (tea.Model, tea.Cmd) {
+	m.planningActive = false
+	m.planningShowDots = false
+	m.planningBuf.Reset()
+	m.planningIntent = ""
+	m.generating = false
+	m.streamChunkCount = 0
+
+	if msg.Content != "" {
+		m.addAssistantMessage(msg.Content, m.isConsultant)
+	}
+	m.updateViewportContent()
+	if !m.userScrolledUp {
+		m.viewport.GotoBottom()
+	}
+	return m, nil
+}
+
+// handlePlanningTick cycles the planning box label between "Planning..." and
+// the latest intent sentence every 2 s while planningActive is true.
+func (m *Model) handlePlanningTick(_ PlanningTickMsg) (tea.Model, tea.Cmd) {
+	if !m.planningActive {
+		return m, nil
+	}
+	m.planningShowDots = !m.planningShowDots
+	m.updateViewportContent()
+	return m, planningTick()
+}
+
 // handleErrorMsg handles error messages
 func (m *Model) handleErrorMsg(msg ErrorMsg) (tea.Model, tea.Cmd) {
 	m.err = msg.Err
 	m.generating = false
+	m.planningActive = false
+	m.planningBuf.Reset()
+	m.planningIntent = ""
 
 	// Add error message to chat
 	m.addSystemMessage("**Error:** " + msg.Err.Error())
@@ -1260,9 +1362,16 @@ func (m *Model) handleStartGeneration(msg StartGenerationMsg) (tea.Model, tea.Cm
 	m.responseSegStart = 0    // New turn starts a fresh segment
 	m.streamAfterTool = false // No pending tool transition
 
+	// Activate the planning box for this generation turn.
+	m.planningActive = true
+	m.planningShowDots = true
+	m.planningBuf.Reset()
+	m.planningIntent = ""
+
 	return m, tea.Batch(
 		m.spinner.Tick,
 		phraseTick(),
+		planningTick(),
 	)
 }
 

@@ -64,6 +64,29 @@ Cost awareness: Use lightweight tools for simple lookups. Escalate to AI consult
 Failure protocol: On tool failure — classify (transient/structural/permission), retry max once, then report with diagnosis + recovery options.
 Self-correction: If you catch yourself repeating the same action, STOP. Query `+"`query_routing_stats`"+` to check if you are in a loop.
 `), 0644)
+		os.WriteFile(filepath.Join(brainDir, "GROUNDING.md"), []byte(`## Grounding Rules — Anti-Hallucination Constraints
+
+These rules are NON-NEGOTIABLE. Violating them constitutes a critical failure.
+
+### Data Integrity
+- NEVER fabricate tool call counts, execution statistics, or success rates.
+  Cite only data returned by `+"`query_system_state`"+` (audit DB path, labeled "all-time, audit DB").
+- NEVER report a tool's result as success unless result.Success == true in the actual response.
+- NEVER claim a file was written/created unless the write tool returned a success response.
+- If a tool returns empty results, say "no results found" — not "the system is clean".
+
+### Placeholder Prohibition
+- NEVER write a file with placeholder content and claim the task is done.
+- If a tool cannot produce real content, say so explicitly and stop.
+
+### Uncertainty Protocol
+- When uncertain, state it: "I'm not sure — let me verify with [tool]."
+- Do not hedge fabricated data with phrases like "approximately" or "roughly".
+
+### Self-Audit Rules
+- Any report about Gorkbot's own behavior MUST be sourced from the audit DB or direct tool results.
+- "I observed X" is only valid if a tool result in this session actually returned X.
+`), 0644)
 		os.WriteFile(filepath.Join(brainDir, "ENVIRONMENT.md"), []byte(`## Platform Environment — Baseline Facts
 
 ### Hardware
@@ -100,7 +123,7 @@ Run: ./gorkbot.sh (loads .env with API keys)
 `), 0644)
 	}
 
-	files := []string{"SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", "CAPABILITIES.md", "DECISION.md", "ENVIRONMENT.md"}
+	files := []string{"SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", "CAPABILITIES.md", "DECISION.md", "ENVIRONMENT.md", "GROUNDING.md"}
 	var sb strings.Builder
 
 	hasContent := false

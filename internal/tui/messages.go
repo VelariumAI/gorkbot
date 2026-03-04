@@ -193,6 +193,29 @@ func glistenTick() tea.Cmd {
 	})
 }
 
+// PlanningTokenMsg carries a streaming token destined for the planning box,
+// not the live chat stream. All AI tokens during generation go through this
+// path so that internal reasoning is hidden behind the planning box UI.
+type PlanningTokenMsg struct{ Content string }
+
+// PlanningBoxClearMsg resets the planning buffer when a tool call fires.
+// The planning reasoning for that segment is discarded; the box is cleared.
+type PlanningBoxClearMsg struct{}
+
+// PlanningCommitMsg finalises generation: the last planning segment (the
+// actual answer) is committed to the chat as an assistant message.
+type PlanningCommitMsg struct{ Content string }
+
+// PlanningTickMsg fires every 2 s to cycle the planning box label between
+// "Planning..." and the latest extracted intent sentence.
+type PlanningTickMsg time.Time
+
+func planningTick() tea.Cmd {
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		return PlanningTickMsg(t)
+	})
+}
+
 func discoveryPollTick() tea.Cmd {
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 		return DiscoveryPollTickMsg{}

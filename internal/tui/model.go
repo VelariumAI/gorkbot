@@ -194,6 +194,16 @@ type Model struct {
 	// ── ARC intent badge for latest user message ──────────────────────────
 	lastIntentCategory string
 
+	// ── Planning box: hides internal monologue during generation ──────────
+	// planningActive is true while the AI is generating (hidden in box).
+	// planningBuf accumulates tokens for the current segment (display only).
+	// planningIntent is the latest short intent sentence extracted from planningBuf.
+	// planningShowDots cycles between "Planning..." and planningIntent.
+	planningActive   bool
+	planningBuf      strings.Builder
+	planningIntent   string
+	planningShowDots bool
+
 	// ── Tool timing: ToolName → start time (for elapsed display) ──────────
 	toolStartTimes map[string]time.Time
 
@@ -746,7 +756,65 @@ func (m *Model) renderMessages() string {
 			Render(fmt.Sprintf("⚡ Context at %d%% — approaching limit", pct))
 	}
 
+	// Planning box — shown while AI is generating (hides internal monologue).
+	if m.planningActive {
+		rendered += "\n" + m.renderPlanningBox()
+	}
+
 	return rendered
+}
+
+// extractPlanningIntent returns a short intent sentence (≤55 chars) from the
+// last meaningful line of the planning buffer. Returns "" if nothing suitable found.
+func extractPlanningIntent(text string) string {
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" || strings.HasPrefix(line, "```") || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Strip leading markdown decorators
+		line = strings.TrimLeft(line, "*_->#|`~0123456789. ")
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if len([]rune(line)) <= 55 {
+			return line
+		}
+		// Truncate at word boundary
+		runes := []rune(line)
+		sub := string(runes[:52])
+		if idx := strings.LastIndex(sub, " "); idx > 10 {
+			return sub[:idx] + "..."
+		}
+		return sub + "..."
+	}
+	return ""
+}
+
+// renderPlanningBox renders the planning box that hides internal AI monologue.
+// It shows "Planning..." when planningShowDots is true, or the latest extracted
+// intent sentence when planningShowDots is false. Cycles every 2 s via planningTick.
+func (m *Model) renderPlanningBox() string {
+	boxWidth := m.viewport.Width - 4
+	if boxWidth < 20 {
+		boxWidth = 20
+	}
+	planStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#6272a4")).
+		Padding(0, 1).
+		Width(boxWidth)
+
+	var label string
+	if m.planningShowDots || m.planningIntent == "" {
+		label = "Planning..."
+	} else {
+		label = m.planningIntent
+	}
+
+	return planStyle.Render(label)
 }
 
 // toolCategoryColor returns a Lip Gloss color string for a tool name.
@@ -1442,24 +1510,31 @@ func (m *Model) callOrchestrator(prompt string) tea.Cmd {
 			prog.Send(StartGenerationMsg{IsConsultant: isConsult, Prompt: prompt})
 		}
 
-		// Stream callback for real-time token updates
-		// We implement a simple filter to prevent raw JSON tool calls from leaking into the UI.
-		// Since we handle tool executions explicitly via toolCallback, we don't want the raw JSON request.
+		// planBuf tracks the current segment in the goroutine; reset on each tool call.
+		// At the end of the SENSE loop, planBuf holds the final answer text.
+		var planBuf strings.Builder
+
+		// Stream callback — tokens go to the planning box, NOT to the live chat stream.
+		// inJSONBlock filters raw JSON tool-call markup that leaks from some models.
 		inJSONBlock := false
 
 		streamCallback := func(token string) {
-			// 1. If we are inside a tool call block, drop tokens.
-			// Check for the closing marker so we exit the blocked state after it.
+			// Retry signal: the stream rewound; clear the local planning buffer.
+			if token == "[__GORKBOT_STREAM_RETRY__]" {
+				planBuf.Reset()
+				if prog := m.getProgram(); prog != nil {
+					prog.Send(PlanningTokenMsg{Content: token})
+				}
+				return
+			}
+
+			// Drop tokens inside JSON tool-call blocks.
 			if inJSONBlock {
 				if strings.Contains(token, "[/TOOL_CALL]") {
 					inJSONBlock = false
 				}
 				return
 			}
-
-			// 2. Heuristic detection: enter blocked state on known tool call markers.
-			// Covers native xAI format ("tool_calls"/"function") and the arrow-syntax
-			// [TOOL_CALL] format emitted by some other AI models.
 			if strings.Contains(token, "\"tool_calls\"") ||
 				strings.Contains(token, "\"function\"") ||
 				strings.Contains(token, "[TOOL_CALL]") {
@@ -1467,19 +1542,9 @@ func (m *Model) callOrchestrator(prompt string) tea.Cmd {
 				return
 			}
 
-			// 3. Edge case: "{" at start of line might be start of JSON.
-			// We buffer slightly to check, but for responsiveness we generally pass through.
-			// If we accumulated a buffer and it turns out to be text, we'd release it.
-			// For this fix, we focus on the most common leak pattern which contains the keys.
-			
-			// Check against buffer if we were suspicious (omitted for simplicity/stability, relying on key detection)
-
+			planBuf.WriteString(token)
 			if prog := m.getProgram(); prog != nil {
-				prog.Send(TokenMsg{
-					Content:      token,
-					IsConsultant: isConsult,
-					IsFinal:      false,
-				})
+				prog.Send(PlanningTokenMsg{Content: token})
 			}
 		}
 
@@ -1495,9 +1560,12 @@ func (m *Model) callOrchestrator(prompt string) tea.Cmd {
 		}
 
 		// toolStartCallback — called just before each tool begins.
-		// Sends both a ToolCallMsg (request box) and a ToolProgressMsg (live panel).
+		// Clears the planning buffer (discards the inter-tool reasoning) and sends
+		// a ToolCallMsg (request box) plus a ToolProgressMsg (live panel).
 		toolStartCallback := func(toolName string, params map[string]interface{}) {
+			planBuf.Reset() // discard planning reasoning; only the final segment is shown
 			if prog := m.getProgram(); prog != nil {
+				prog.Send(PlanningBoxClearMsg{})
 				prog.Send(ToolCallMsg{ToolName: toolName, Params: params})
 				prog.Send(ToolProgressMsg{ToolName: toolName, Done: false})
 			}
@@ -1524,7 +1592,14 @@ func (m *Model) callOrchestrator(prompt string) tea.Cmd {
 			return ErrorMsg{Err: err}
 		}
 
-		// Signal stream completion
+		// Commit the final planning segment (the actual answer) to chat.
+		// PlanningCommitMsg sets m.generating=false before StreamCompleteMsg arrives,
+		// so handleStreamComplete skips the legacy currentResponse commit path.
+		if prog := m.getProgram(); prog != nil {
+			prog.Send(PlanningCommitMsg{Content: planBuf.String()})
+		}
+
+		// Signal stream completion (handles viewport recalc + textarea focus).
 		return StreamCompleteMsg{}
 	}
 }
