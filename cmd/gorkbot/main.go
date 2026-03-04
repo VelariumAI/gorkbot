@@ -565,6 +565,14 @@ func main() {
 				}
 			}
 		}
+
+		// Propagate restored selections to the already-initialised orchestrator and
+		// tool registry. NewOrchestrator (and toolRegistry.SetConsultantProvider) ran
+		// before app state was loaded and therefore hold pre-restore values.
+		orch.Primary = primary
+		toolRegistry.SetAIProvider(primary)
+		orch.Consultant = consultant
+		toolRegistry.SetConsultantProvider(consultant)
 	}
 
 	if memMgr != nil {
