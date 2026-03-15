@@ -1,8 +1,8 @@
 # Gorkbot Provider Guide
 
-**Version:** 3.5.1
+**Version:** 4.7.0
 
-This document covers all five AI providers supported by Gorkbot — model IDs, capability classes, API setup, dynamic model discovery, hot-swapping, and the adaptive routing system.
+This document covers all AI providers supported by Gorkbot — model IDs, capability classes, API setup, dynamic model discovery, hot-swapping, and the adaptive routing system.
 
 ---
 
@@ -15,24 +15,29 @@ This document covers all five AI providers supported by Gorkbot — model IDs, c
 5. [Anthropic (Claude)](#5-anthropic-claude)
 6. [OpenAI](#6-openai)
 7. [MiniMax](#7-minimax)
-8. [Hot-Swapping Models at Runtime](#8-hot-swapping-models-at-runtime)
-9. [Dynamic Model Discovery](#9-dynamic-model-discovery)
-10. [Cloud Brains Tab](#10-cloud-brains-tab)
-11. [Adaptive Routing & Feedback](#11-adaptive-routing--feedback)
-12. [Dual-Model Orchestration](#12-dual-model-orchestration)
-13. [Provider Failover Cascade](#13-provider-failover-cascade)
+8. [Moonshot](#8-moonshot)
+9. [OpenRouter](#9-openrouter)
+10. [Hot-Swapping Models at Runtime](#10-hot-swapping-models-at-runtime)
+11. [Dynamic Model Discovery](#11-dynamic-model-discovery)
+12. [Cloud Brains Tab](#12-cloud-brains-tab)
+13. [Adaptive Routing and Feedback](#13-adaptive-routing-and-feedback)
+14. [Dual-Model Orchestration](#14-dual-model-orchestration)
+15. [Provider Failover Cascade](#15-provider-failover-cascade)
+16. [Extended Thinking](#16-extended-thinking)
 
 ---
 
 ## 1. Supported Providers
 
-| Provider | ID | Primary Use | API Key Env Var |
-|----------|----|------------|----------------|
-| xAI | `xai` | Primary agent (Grok) | `XAI_API_KEY` |
-| Google | `google` | Specialist consultant (Gemini) | `GEMINI_API_KEY` |
-| Anthropic | `anthropic` | Alternative primary or specialist | `ANTHROPIC_API_KEY` |
-| OpenAI | `openai` | Alternative primary or specialist | `OPENAI_API_KEY` |
-| MiniMax | `minimax` | Alternative provider | `MINIMAX_API_KEY` |
+| Provider | ID | Primary Use | API Key Env Var | Package |
+|----------|----|------------|----------------|---------|
+| xAI | `xai` | Primary agent (Grok) | `XAI_API_KEY` | `pkg/ai/grok.go` |
+| Google | `google` | Specialist consultant (Gemini) | `GEMINI_API_KEY` | `pkg/ai/gemini.go` |
+| Anthropic | `anthropic` | Alternative primary or specialist | `ANTHROPIC_API_KEY` | `pkg/ai/anthropic.go` |
+| OpenAI | `openai` | Alternative primary or specialist | `OPENAI_API_KEY` | `pkg/ai/openai_provider.go` |
+| MiniMax | `minimax` | Alternative provider | `MINIMAX_API_KEY` | `pkg/ai/minimax.go` |
+| Moonshot | `moonshot` | Alternative provider | `MOONSHOT_API_KEY` | `pkg/ai/moonshot.go` |
+| OpenRouter | `openrouter` | Gateway to 400+ models | `OPENROUTER_API_KEY` | `pkg/ai/openrouter.go` |
 
 At least one provider with a valid key is required. Gorkbot works with any subset of providers.
 
@@ -43,7 +48,7 @@ At least one provider with a valid key is required. Gorkbot works with any subse
 Gorkbot selects primary and specialist models through a layered decision process:
 
 ```
-Priority 1: Environment variable overrides
+Priority 1: Environment variable overrides (highest)
   GORKBOT_PRIMARY_MODEL=grok-3-mini ./gorkbot.sh
   → Skips all dynamic selection; uses the named model directly.
 
@@ -53,24 +58,24 @@ Priority 2: Persisted app state (app_state.json)
 
 Priority 3: Dynamic selection (Router.SelectSystemModels)
   → Queries all registered providers for live model lists.
-  → Ranks models by capability, latency, and cost.
+  → Ranks models by capability, cost, and provider priority.
   → Returns SystemConfiguration{PrimaryModel, SpecialistModel}.
 
 Priority 4: Defaults
-  Primary:    baseGrok (default model from GrokProvider)
-  Specialist: baseGemini (default model from GeminiProvider)
+  Primary:    xAI Grok (latest available model)
+  Specialist: Google Gemini (latest available model)
 ```
 
 ### Capability Classes
 
 Dynamic selection and `spawn_sub_agent` use capability classes to route tasks to the best model:
 
-| Class | Description | Examples |
-|-------|-------------|---------|
+| Class | Description | Example Models |
+|-------|-------------|----------------|
 | `General` | Balanced all-round | grok-3, gemini-2.0-flash |
-| `Reasoning` | Deep thinking, planning | grok-3, claude-3-7-sonnet |
-| `Speed` | Low latency, simple tasks | grok-3-mini, gemini-flash |
-| `Coding` | Code generation and review | grok-3, claude-3-7-sonnet |
+| `Reasoning` | Deep thinking, planning | grok-3, claude-opus-4-6, o3 |
+| `Speed` | Low latency, simple tasks | grok-3-mini, gemini-flash, gpt-4o-mini |
+| `Coding` | Code generation and review | grok-3, claude-sonnet-4-6 |
 
 ---
 
@@ -89,19 +94,16 @@ Dynamic selection and `spawn_sub_agent` use capability classes to route tasks to
 | `grok-3-fast` | Optimized throughput | 128k tokens |
 | `grok-2-vision-1212` | Vision-capable (image analysis) | 32k tokens |
 
-> Model availability depends on your xAI plan. Check [console.x.ai](https://console.x.ai) for current model list.
+> Model availability depends on your xAI plan. Run `/mcp status` or check [console.x.ai](https://console.x.ai) for current availability.
 
 ### Special Features
 
-- **Native function calling** — xAI's structured `tool_calls` API is fully implemented. When Grok is primary, tool requests come as structured JSON (not parsed text), improving reliability.
+- **Native function calling** — xAI's structured `tool_calls` API is fully implemented. When Grok is primary, tool requests come as structured JSON rather than parsed text, improving reliability and reducing hallucinated tool calls.
 - **Streaming** — Real-time token streaming via SSE.
 - **Usage reporting** — `GrokProvider.GetLastUsage()` returns `TokenUsage{PromptTokens, CompletionTokens}` for billing.
-- **Thinking models** — Models supporting `reasoning_effort` are tagged `SupportsThinking=true` and displayed with a reasoning indicator in the model selection UI.
+- **Extended thinking** — `grok-3-mini` supports `reasoning_effort` parameter for extended internal reasoning.
 - **x_pull tool** — Fetch content from X (Twitter) posts using the xAI API.
-
-### Vision
-
-Gork Vision uses `grok-2-vision-1212` via the `vision_screen`, `vision_file`, `vision_ocr`, and related tools. Images are sent as base64 data URIs in the messages array.
+- **Vision** — `grok-2-vision-1212` processes images sent as base64 data URIs; used by the `vision_screen`, `vision_file`, `vision_ocr`, and related tools.
 
 ### Getting an xAI API Key
 
@@ -123,7 +125,7 @@ Gork Vision uses `grok-2-vision-1212` via the `vision_screen`, `vision_file`, `v
 
 | Model ID | Description | Context |
 |----------|-------------|---------|
-| `gemini-2.0-flash` | Fast, efficient (recommended default) | 1M tokens |
+| `gemini-2.0-flash` | Fast, efficient (recommended default specialist) | 1M tokens |
 | `gemini-2.0-flash-thinking-exp` | Extended reasoning mode | 1M tokens |
 | `gemini-1.5-pro` | Previous generation pro | 2M tokens |
 | `gemini-1.5-flash` | Previous generation fast | 1M tokens |
@@ -132,10 +134,10 @@ Gork Vision uses `grok-2-vision-1212` via the `vision_screen`, `vision_file`, `v
 
 ### Special Features
 
-- **Verbose thoughts** — Enable with `--verbose-thoughts` flag to display Gemini's chain-of-thought reasoning in consultant response boxes.
-- **Thinking config** — Supported models have `reasoning_effort` enabled for extended internal reasoning before responding.
+- **Verbose thoughts** — Enable with `--verbose-thoughts` to display Gemini's chain-of-thought reasoning in distinctive consultant boxes in the TUI.
 - **Large context** — Gemini supports up to 2M tokens of context, making it excellent for whole-codebase analysis.
-- **Role mapping** — `"assistant"` maps to `"model"` in Gemini's API; `"system"` messages are included as user messages with special formatting.
+- **Role mapping** — `"assistant"` maps to `"model"` in Gemini's API; system messages are included as user messages with special formatting.
+- **Streaming** — SSE-based real-time token streaming.
 
 ### Getting a Gemini API Key
 
@@ -157,17 +159,18 @@ Gork Vision uses `grok-2-vision-1212` via the `vision_screen`, `vision_file`, `v
 
 | Model ID | Description | Context |
 |----------|-------------|---------|
-| `claude-opus-4-6` | Most capable (Opus) | 200k tokens |
-| `claude-sonnet-4-6` | Balanced (Sonnet) | 200k tokens |
-| `claude-haiku-4-5-20251001` | Fast (Haiku) | 200k tokens |
+| `claude-opus-4-6` | Most capable (Opus family) | 200k tokens |
+| `claude-sonnet-4-6` | Balanced performance (Sonnet family) | 200k tokens |
+| `claude-haiku-4-5-20251001` | Fast and efficient (Haiku family) | 200k tokens |
 
-> Model IDs include dates in some cases. The discovery system fetches the current list from `GET /v1/models`.
+> The discovery system fetches the current model list from `GET /v1/models`. Actual available models depend on your Anthropic plan.
 
 ### Special Features
 
+- **Extended thinking** — Claude Sonnet 3.7+ and Claude Opus 4+ support extended thinking blocks. Enable with `/think <budget>` (token budget) or set `ThinkingBudget` in the orchestrator. Thinking tokens are rendered in a dedicated TUI panel when a `ThinkingCallback` is wired.
 - **SSE streaming** — Real-time token streaming.
 - **Anthropic headers** — Requests include `x-api-key` and `anthropic-version: 2023-06-01` headers.
-- **Extended thinking** — Claude Sonnet 3.7+ supports extended thinking; models are tagged `SupportsThinking=true`.
+- **Tool tagging** — Models supporting extended thinking are tagged `SupportsThinking=true` in the model selection UI.
 
 ### Getting an Anthropic API Key
 
@@ -194,13 +197,12 @@ Gork Vision uses `grok-2-vision-1212` via the `vision_screen`, `vision_file`, `v
 | `o3` | Advanced reasoning | 128k tokens |
 | `o1` | First reasoning model | 128k tokens |
 
-> `o1`/`o3`/`o4` series are tagged `SupportsThinking=true`. Non-chat models are filtered out during discovery.
+> `o1`/`o3`/`o4` series are tagged `SupportsThinking=true`. Non-chat models (embeddings, TTS, whisper, dall-e, babbage) are filtered out during discovery.
 
 ### Special Features
 
-- **OpenAI-compatible** — Uses the standard chat completions API; compatible with any OpenAI-compatible endpoint by changing the base URL.
+- **OpenAI-compatible** — Uses the standard chat completions API. Compatible with any OpenAI-compatible endpoint (e.g., local LLM servers, other providers) by changing the base URL.
 - **o-series detection** — `o1`, `o3`, `o4` prefix detection tags models as reasoning-capable.
-- **Model filtering** — `embeddings`, `tts`, `whisper`, `dall-e`, and `babbage` models are excluded from the chat model list.
 
 ### Getting an OpenAI API Key
 
@@ -216,7 +218,7 @@ Gork Vision uses `grok-2-vision-1212` via the `vision_screen`, `vision_file`, `v
 **API Base:** `https://api.minimax.io/anthropic/v1` (Anthropic-compatible endpoint)
 **Key env var:** `MINIMAX_API_KEY`
 
-MiniMax exposes an Anthropic-compatible API, so `MiniMaxProvider` wraps `AnthropicProvider` with a custom base URL. Model discovery uses an OpenAI-compatible listing endpoint with a static fallback.
+MiniMax exposes an Anthropic-compatible API. `MiniMaxProvider` wraps `AnthropicProvider` with a custom base URL and uses an OpenAI-compatible model listing endpoint with a static fallback list.
 
 ### Getting a MiniMax API Key
 
@@ -224,7 +226,52 @@ Register at [minimax.io](https://minimax.io) and generate an API key from the de
 
 ---
 
-## 8. Hot-Swapping Models at Runtime
+## 8. Moonshot
+
+**Package:** `pkg/ai/moonshot.go`
+**API Base:** `https://api.moonshot.cn/v1` (OpenAI-compatible)
+**Key env var:** `MOONSHOT_API_KEY`
+
+### Available Models
+
+| Model ID | Context |
+|----------|---------|
+| `moonshot-v1-8k` | 8k tokens |
+| `moonshot-v1-32k` | 32k tokens |
+| `moonshot-v1-128k` | 128k tokens |
+
+Moonshot uses an OpenAI-compatible API. `MoonshotProvider` is a standalone implementation that targets the Moonshot API base URL.
+
+### Getting a Moonshot API Key
+
+Register at [platform.moonshot.cn](https://platform.moonshot.cn) and generate an API key from the console.
+
+---
+
+## 9. OpenRouter
+
+**Package:** `pkg/ai/openrouter.go`
+**API Base:** `https://openrouter.ai/api/v1`
+**Key env var:** `OPENROUTER_API_KEY`
+
+OpenRouter is a gateway that provides access to 400+ models from multiple providers (Anthropic, OpenAI, Google, Meta, Mistral, etc.) via a single API key, using provider-prefixed model IDs like `anthropic/claude-opus-4-6`.
+
+### Special Features
+
+- **Single key for 400+ models** — pay-as-you-go across all major providers without needing separate accounts.
+- **Model ID format** — `<provider>/<model>` (e.g., `openai/gpt-4o`, `meta-llama/llama-3.1-70b-instruct`).
+- **Last-resort failover** — OpenRouter serves as the final fallback in the provider cascade.
+- **Referer header** — Requests include `HTTP-Referer: https://gorkbot.ai` and `X-Title: Gorkbot` headers per OpenRouter's requirements.
+
+### Getting an OpenRouter API Key
+
+1. Go to [openrouter.ai](https://openrouter.ai)
+2. Create an account
+3. Navigate to **Keys** and create a new key
+
+---
+
+## 10. Hot-Swapping Models at Runtime
 
 Switch providers and models without restarting Gorkbot.
 
@@ -232,32 +279,34 @@ Switch providers and models without restarting Gorkbot.
 
 1. Press `Ctrl+T` to open the dual-pane model selection
 2. Use `Tab` to switch between Primary and Specialist panes
-3. Navigate with `↑`/`↓` or `k`/`j`
-4. Press `Enter` to select
+3. Navigate with `Up`/`Down` arrow keys
+4. Press `Enter` to select a model
 5. Press `r` to refresh model lists from all providers
 6. Press `p` to cycle provider filter
-7. Press `k` to add/update an API key
+7. Press `k` to add or update an API key
 
 ### Via `/model` Command
 
 ```
-/model                              # show current models
-/model primary grok-3-mini          # switch primary
-/model consultant claude-sonnet-4-6 # switch specialist
-/model consultant auto              # enable auto-select specialist
+/model                              # show current primary and specialist
+/model primary grok-3-mini          # switch primary to grok-3-mini
+/model consultant claude-sonnet-4-6 # switch specialist to Claude Sonnet
+/model consultant auto              # enable auto-select specialist per task
 ```
 
-### Via `/key` Command
+The `MODEL_SWITCH_PRIMARY:<provider>:<modelID>` and `MODEL_SWITCH_SECONDARY:<provider>:<modelID>` signals are processed by the TUI and call `Orchestrator.SetPrimary`/`SetSecondary` respectively.
 
-Set or update API keys at runtime:
+### Via `/key` Command
 
 ```
 /key xai xai-your-new-key
 /key google AIza-your-new-key
 /key anthropic sk-ant-your-key
 /key openai sk-your-key
-/key status                # show key status for all providers
-/key validate xai          # validate xAI key
+/key moonshot your-key
+/key openrouter sk-or-your-key
+/key status                         # show status for all providers
+/key validate xai                   # validate a specific key with a live ping
 ```
 
 ### Via Environment Variable Override
@@ -272,7 +321,7 @@ GORKBOT_CONSULTANT_MODEL=grok-3 \
 
 ---
 
-## 9. Dynamic Model Discovery
+## 11. Dynamic Model Discovery
 
 The `pkg/discovery.Manager` polls all configured providers for live model lists on startup and every 30 minutes.
 
@@ -280,206 +329,131 @@ The `pkg/discovery.Manager` polls all configured providers for live model lists 
 
 ```
 discovery.Manager.Start(ctx)
-  → goroutine: poll every 30 minutes
-  → fetchXAIModels()     → GET https://api.x.ai/v1/models
-  → fetchGeminiModels()  → GET https://generativelanguage.googleapis.com/v1beta/models
+  → background goroutine: poll every 30 minutes
+  → fetchXAIModels()       → GET https://api.x.ai/v1/models
+  → fetchGeminiModels()    → GET https://generativelanguage.googleapis.com/v1beta/models
   → fetchAnthropicModels() → GET https://api.anthropic.com/v1/models
-  → fetchOpenAIModels()  → GET https://api.openai.com/v1/models
-  → fetchMiniMaxModels() → static list + API query
-  → classify each model by ID keywords → CapabilityClass
-  → send DiscoveryUpdateMsg to TUI
+  → fetchOpenAIModels()    → GET https://api.openai.com/v1/models
+  → fetchMiniMaxModels()   → static list + API query
+  → classify each model → CapabilityClass
+  → send DiscoveryUpdateMsg to TUI (updates Cloud Brains tab)
 ```
+
+Discovery uses `NewManagerWithKeys(keyGetter, logger)` where `KeyGetter` is an interface satisfied by `pkg/providers.KeyStore`. This avoids an import cycle between `pkg/discovery` and `pkg/providers`.
 
 ### Model Classification
 
-Models are classified by matching their IDs against keyword patterns:
+Models are classified by matching IDs against keyword patterns:
 
 | Keyword patterns | CapabilityClass |
 |-----------------|----------------|
 | `reasoning`, `thinking`, `o1`, `o3`, `o4`, `opus` | `Reasoning` |
-| `mini`, `haiku`, `flash`, `fast`, `nano` | `Speed` |
-| `code`, `codex`, `starcoder`, `deepsek` | `Coding` |
-| (everything else) | `General` |
-
-### BestForCap
-
-`Manager.BestForCap(class)` returns the highest-ranked available model for a capability class. Used by `spawn_sub_agent` to automatically select the best model for the delegated task type.
+| `flash`, `mini`, `haiku`, `fast`, `turbo`, `lite` | `Speed` |
+| `code`, `coder`, `dev` | `Coding` |
+| (default) | `General` |
 
 ---
 
-## 10. Cloud Brains Tab
+## 12. Cloud Brains Tab
 
-**Shortcut:** `Ctrl+D`
+The Cloud Brains tab (`Ctrl+D`) provides a live view of the discovery system:
 
-The Cloud Brains tab shows:
+- **Left panel** — discovered models grouped by provider and capability class
+- **Right panel** — hierarchical agent delegation tree (sub-agents and their tasks)
 
-**Left panel — Discovered Models:**
-- All discovered models grouped by provider and capability class
-- Availability status (requires valid API key)
-- Whether each model supports thinking/reasoning
-
-**Right panel — Agent Tree:**
-- Hierarchical view of active sub-agent delegations
-- Shows which models are handling which sub-tasks
-- Updated in real-time via `DiscoveryUpdateMsg`
+This tab updates automatically when `discovery.Manager` completes a poll cycle.
 
 ---
 
-## 11. Adaptive Routing & Feedback
+## 13. Adaptive Routing and Feedback
 
-The adaptive routing system learns from user feedback which models perform best for different task categories.
-
-### Rating Responses
+`pkg/router` provides a feedback-driven model routing system:
 
 ```
-/rate 5    # excellent
-/rate 3    # average
-/rate 1    # poor
+/rate <1-5>
+  → FeedbackManager.RecordOutcome(category, provider, model, score)
+  → Persisted to ~/.config/gorkbot/feedback.jsonl
+
+FeedbackManager.SuggestModel(category)
+  → Returns the provider/model with the highest average score for this category
+  → Logged before each task (suggestion loop closure)
 ```
 
-Each rating is recorded to `~/.config/gorkbot/feedback.jsonl` by `router.FeedbackManager`:
+Intent categories matched by the ARC system (from `pkg/adaptive`): `auto`, `deep`, `quick`, `visual`, `research`, `security`, `code`, `creative`, `data`, `plan`.
 
-```json
-{"timestamp":"2025-11-15T10:30:00Z","model":"grok-3","task_category":"code_review","score":5.0}
-{"timestamp":"2025-11-15T10:30:05Z","model":"gemini-2.0-flash","task_category":"architecture","score":4.0}
-```
-
-### How Routing Uses Feedback
-
-Before each task, `router.AdaptiveRouter.SuggestModel(category)` queries the feedback store for the best-performing model in the task's category. This suggestion is logged and optionally used to override the default selection.
-
-### Task Categories
-
-Categories are inferred from the task prompt using keyword detection:
-
-| Category | Keywords |
-|----------|---------|
-| `code_review` | review, audit, check, quality |
-| `code_generation` | write, create, implement, generate |
-| `architecture` | design, architect, system, structure |
-| `debugging` | bug, error, fix, debug |
-| `research` | explain, what is, how does, research |
-| `data_analysis` | data, analyze, csv, statistics |
+The feedback system is separate from ARC routing: ARC routes based on prompt structure and compute budget; the feedback router learns from explicit user satisfaction ratings.
 
 ---
 
-## 12. Dual-Model Orchestration
+## 14. Dual-Model Orchestration
 
-Gorkbot's default configuration uses two models working together:
+Gorkbot uses a two-model architecture:
 
+1. **Primary** — handles all conversational turns and tool execution; streaming tokens appear in real time in the TUI
+2. **Specialist (Consultant)** — consulted for complex queries; response appears in a distinct bordered box in the TUI
+
+The consultant is triggered when:
+- The user includes `COMPLEX` or `REFRESH` keywords in the message
+- The orchestrator's complexity heuristic fires (message length + tool count threshold)
+- The `/mode` is set to `Plan` or `Auto`
+
+The specialist's advice is prepended to the user message context before the primary AI call, so the primary benefits from specialist reasoning without the consultant being in the main conversation thread.
+
+### Changing the Specialist
+
+```bash
+# Use Anthropic Claude as consultant instead of Gemini
+/model consultant claude-sonnet-4-6
+
+# Use auto-selection (picks best model per task via ARC + discovery)
+/model consultant auto
 ```
-User prompt
-    │
-    ▼
-Consultant needed? (isConsultant heuristic)
-    │
-    ├── No → Primary only
-    │         Grok handles everything
-    │
-    └── Yes → Consultant first (Gemini)
-              ├── Gemini provides architectural advice / analysis
-              ├── Advice is appended to context
-              └── Primary (Grok) generates the final response
-                  incorporating the consultant's perspective
-```
-
-### Consultant Triggers
-
-The `isConsultant` heuristic evaluates:
-
-1. **Keyword triggers** — prompt contains `COMPLEX`, `REFRESH`, `ARCHITECTURE`, `DESIGN`
-2. **Length threshold** — prompt longer than ~1000 characters
-3. **ARC classification** — `WorkflowReasonVerify` classification routes to consultant
-
-When triggered, the consultant's response appears in a bordered box in the TUI:
-
-```
-╭──────────────────────────────────────────────────╮
-│  Specialist (Gemini)                             │
-│                                                  │
-│  Architectural recommendation: Use an event-     │
-│  driven approach with CQRS for complex domain... │
-╰──────────────────────────────────────────────────╯
-```
-
-### Auto Specialist Mode
-
-Set `secondary_auto: true` in `app_state.json` or use `/model consultant auto` to let the ARC Router and discovery system pick the best specialist model per task, rather than always using the configured consultant.
-
-### Using Only One Provider
-
-Gorkbot works with a single provider. If only `XAI_API_KEY` is set:
-- Primary: Grok
-- Specialist: None (single-model mode; no consultant responses)
-
-If only `GEMINI_API_KEY` is set:
-- Primary: Gemini (acts as both primary and specialist)
-- All tool calls routed through the text-parsing path (not native function calling)
 
 ---
 
-## 13. Provider Failover Cascade
+## 15. Provider Failover Cascade
 
-**Package:** `internal/engine/fallback.go`
-**Introduced:** v3.5.0
-
-### Overview
-
-The provider failover cascade automatically switches to the next healthy provider when the current one fails. This makes Gorkbot resilient to temporary outages, quota exhaustion, and credential issues — without any user intervention.
-
-### Priority Order
+When the primary provider returns an error (rate limit, outage, invalid key, context overflow), `internal/engine/fallback.go` automatically cycles through the cascade:
 
 ```
 xAI → Google → Anthropic → MiniMax → OpenAI → OpenRouter
 ```
 
-The cascade always tries providers in this fixed order, skipping any already disabled for the session.
+Behaviour:
+- Each step tries the same request with the next available provider
+- Providers disabled in `app_state.json` (via Settings → API Providers tab) are skipped
+- If all providers fail, the error is returned to the user with a summary of all failures
+- The cascade is transparent to the TUI — the user sees the response as if the primary succeeded
 
-### Outage Classification
+---
 
-`isProviderOutage(err)` identifies recoverable failures using sentinel errors from `pkg/ai/errors.go`:
+## 16. Extended Thinking
 
-| Sentinel Error | HTTP Status | Trigger Condition |
-|---------------|-------------|-------------------|
-| `ErrUnauthorized` | 401 | Invalid or expired API key |
-| `ErrNoCredits` | 402 | Payment required / quota exhausted |
-| `ErrRateLimit` | 429 | Too many requests |
-| `ErrBadGateway` | 502 / 503 | Server error |
-| `ErrProviderDown` | — | Network unreachable, connection refused, timeout |
+Extended thinking allows supported models to reason internally before producing their response. The internal reasoning is visible in the TUI in a dedicated collapsible panel.
 
-Network errors containing the strings `"connection refused"`, `"timeout"`, or `"no route"` also trigger failover.
+### Supported Models
 
-### Unified HTTP Error Mapper
+| Provider | Models | Parameter |
+|----------|--------|-----------|
+| Anthropic | claude-sonnet-3-7, claude-opus-4+ | `thinking` block in API |
+| xAI | grok-3-mini | `reasoning_effort` parameter |
+| OpenAI | o1, o3, o4-mini | Internal (no explicit parameter needed) |
 
-`MapStatusError(statusCode int, body []byte) error` in `pkg/ai/errors.go` is a shared utility used by all provider implementations. It converts raw HTTP status codes into the typed sentinel errors above, ensuring consistent behavior across xAI, Gemini, Anthropic, OpenAI, and MiniMax.
-
-### Cascade Execution Flow
+### Enabling Extended Thinking
 
 ```
-1. Primary provider call fails with outage-class error
-2. RunProviderCascade(ctx, failedProviderID) is invoked
-3. For each remaining provider in priority order:
-   a. Already disabled this session? → Skip
-   b. Probe call successful? → Elect as active provider
-   c. pm.DisableForSession(failedProviderID) marks failed provider unavailable
-4. All subsequent turns in the session use the elected provider
-5. The failed provider is never re-enabled automatically within the session
+/think 8000      # enable with 8000-token thinking budget (Anthropic)
+/think 0         # disable extended thinking
+/think           # toggle on/off with last-used budget
 ```
 
-### Manual Provider Control
+Or set at startup:
 
-**Settings overlay** (`Ctrl+G` → **API Providers** tab):
-- Toggle each provider on/off for the current session
-- Re-enable a provider that was auto-disabled by the cascade
-- Changes take effect immediately (no restart required)
-- State persists to `app_state.json` via `appState.SetDisabledProviders()`
-
-**Via `/key` command:**
-```
-/key validate xai          # test if xAI key is still valid
-/key xai xai-replacement   # replace a failed key on the fly
+```bash
+# Via orchestrator (set in main.go from flag or env):
+./gorkbot.sh --thinking-budget 8000  # (if flag is exposed)
 ```
 
-### Session Persistence
+The thinking budget controls how many tokens the model can spend on internal reasoning. Higher budgets produce more thorough reasoning but increase cost and latency.
 
-Providers disabled during a session (by cascade or manually) are written to `app_state.json` under `disabled_providers`. On the next session start, those providers remain disabled until explicitly re-enabled in the **API Providers** settings tab.
+When thinking is active, the TUI renders thinking-block tokens in a separate stream (separated from main output by sentinel characters `\x02`/`\x03` in the stream). The `ThinkingCallback` on the orchestrator routes these tokens to the dedicated panel.
