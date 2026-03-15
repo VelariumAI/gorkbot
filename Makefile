@@ -11,7 +11,7 @@ LLAMA_ROOT := ./ext/llama.cpp
 .PHONY: all build clean install install-global \
         build-windows build-android build-linux \
         build-llm-bridge build-llm clean-llm download-nomic build-web \
-        init-submodules
+        init-submodules build-llama-cpp
 
 all: build build-web
 
@@ -75,8 +75,27 @@ init-submodules:
 	  echo "✓ ext/llama.cpp already present"; \
 	fi
 
+# Build llama.cpp static libraries via cmake (Release, Vulkan, no tests/examples).
+# Output: ext/llama.cpp/build/libllama.a, libggml*.a — required by the linker.
+build-llama-cpp: init-submodules
+	@if [ ! -f "$(LLAMA_ROOT)/build/libllama.a" ]; then \
+	  echo "Building llama.cpp static libs (this takes a few minutes)..."; \
+	  cmake -S $(LLAMA_ROOT) -B $(LLAMA_ROOT)/build \
+	    -DCMAKE_BUILD_TYPE=Release \
+	    -DBUILD_SHARED_LIBS=OFF \
+	    -DGGML_VULKAN=ON \
+	    -DGGML_BUILD_TESTS=OFF \
+	    -DGGML_BUILD_EXAMPLES=OFF \
+	    -DLLAMA_BUILD_TESTS=OFF \
+	    -DLLAMA_BUILD_EXAMPLES=OFF; \
+	  cmake --build $(LLAMA_ROOT)/build --parallel 4; \
+	  echo "✓ llama.cpp libs ready"; \
+	else \
+	  echo "✓ llama.cpp libs already built"; \
+	fi
+
 # Compile the C++ bridge → internal/llm/libgorkbot_llm.a
-build-llm-bridge: init-submodules
+build-llm-bridge: build-llama-cpp
 	@echo "Compiling LLM bridge (C++ → static lib)..."
 	@bash scripts/build_llm_bridge.sh
 
