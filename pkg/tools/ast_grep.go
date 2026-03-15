@@ -74,8 +74,8 @@ func (t *ASTGrepTool) Execute(ctx context.Context, params map[string]interface{}
 	// Check if ast-grep (sg) is installed
 	if err := exec.Command("sg", "--version").Run(); err != nil {
 		return &ToolResult{
-			Success: false,
-			Output:  "ast-grep ('sg') is not installed on this system. Please install it to use AST structural search, or use regular 'grep_content' instead.",
+			Success:      false,
+			Output:       "ast-grep ('sg') is not installed on this system. Please install it to use AST structural search, or use regular 'grep_content' instead.",
 			OutputFormat: FormatError,
 		}, nil
 	}
@@ -95,14 +95,14 @@ func (t *ASTGrepTool) Execute(ctx context.Context, params map[string]interface{}
 		// 'sg' exits with 1 if no matches are found, or if an error occurs.
 		if len(out) == 0 {
 			return &ToolResult{
-				Success: true,
-				Output:  "No matches found.",
+				Success:      true,
+				Output:       "No matches found.",
 				OutputFormat: FormatText,
 			}, nil
 		}
 		return &ToolResult{
-			Success: false,
-			Output:  fmt.Sprintf("ast-grep failed:\n%s\nError: %v", string(out), err),
+			Success:      false,
+			Output:       fmt.Sprintf("ast-grep failed:\n%s\nError: %v", string(out), err),
 			OutputFormat: FormatError,
 		}, nil
 	}
@@ -116,8 +116,8 @@ func (t *ASTGrepTool) Execute(ctx context.Context, params map[string]interface{}
 	}
 
 	return &ToolResult{
-		Success: true,
-		Output:  outputStr,
+		Success:      true,
+		Output:       outputStr,
 		OutputFormat: FormatText,
 	}, nil
 }

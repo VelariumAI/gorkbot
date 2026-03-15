@@ -38,10 +38,10 @@ type Process struct {
 	ExitCode  int
 	Output    string // Buffered output for recall
 
-	cmd *exec.Cmd
-	pty *os.File // Pseudo-terminal file descriptor (if applicable)
-	mu  sync.RWMutex
-	ctx context.Context
+	cmd    *exec.Cmd
+	pty    *os.File // Pseudo-terminal file descriptor (if applicable)
+	mu     sync.RWMutex
+	ctx    context.Context
 	cancel context.CancelFunc
 
 	// Output streaming (optional channels/writers)
@@ -83,7 +83,7 @@ func (m *Manager) Start(id string, command string, args []string, usePty bool) (
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, command, args...)
-	
+
 	// Inherit environment
 	cmd.Env = os.Environ()
 
@@ -150,7 +150,7 @@ func (m *Manager) startWithPty(proc *Process) error {
 				break
 			}
 		}
-		
+
 		// Wait for command completion
 		err := proc.cmd.Wait()
 		proc.mu.Lock()
@@ -290,7 +290,7 @@ func (m *Manager) Stop(id string) error {
 
 	// Try graceful termination first if PTY
 	if proc.pty != nil {
-		// Send SIGINT or similar? 
+		// Send SIGINT or similar?
 		// For now, let's just use the context cancel or process kill
 	}
 
@@ -301,7 +301,7 @@ func (m *Manager) Stop(id string) error {
 			proc.cmd.Process.Kill()
 		}
 	}
-	
+
 	proc.cancel() // Cancel context
 	proc.State = StateStopped
 	proc.EndTime = time.Now()

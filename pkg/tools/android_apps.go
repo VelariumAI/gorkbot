@@ -16,9 +16,9 @@ type ApkDecompileTool struct {
 func NewApkDecompileTool() *ApkDecompileTool {
 	return &ApkDecompileTool{
 		BaseTool: BaseTool{
-			name:        "apk_decompile",
-			description: "Decompile an Android APK file to analyze its resources or source code.",
-			category:          CategorySystem,
+			name:               "apk_decompile",
+			description:        "Decompile an Android APK file to analyze its resources or source code.",
+			category:           CategorySystem,
 			requiresPermission: true,
 			defaultPermission:  PermissionOnce,
 		},
@@ -85,9 +85,9 @@ type SqliteExplorerTool struct {
 func NewSqliteExplorerTool() *SqliteExplorerTool {
 	return &SqliteExplorerTool{
 		BaseTool: BaseTool{
-			name:        "sqlite_explorer",
-			description: "Execute SQL queries on an SQLite database file.",
-			category:          CategoryDatabase,
+			name:               "sqlite_explorer",
+			description:        "Execute SQL queries on an SQLite database file.",
+			category:           CategoryDatabase,
 			requiresPermission: true,
 			defaultPermission:  PermissionOnce,
 		},
@@ -139,9 +139,9 @@ type TermuxApiBridgeTool struct {
 func NewTermuxApiBridgeTool() *TermuxApiBridgeTool {
 	return &TermuxApiBridgeTool{
 		BaseTool: BaseTool{
-			name:        "termux_api_bridge",
-			description: "Access Android hardware features via Termux:API (camera, sms, contacts, location, vibrate, torch).",
-			category:          CategorySystem,
+			name:               "termux_api_bridge",
+			description:        "Access Android hardware features via Termux:API (camera, sms, contacts, location, vibrate, torch).",
+			category:           CategorySystem,
 			requiresPermission: true,
 			defaultPermission:  PermissionOnce,
 		},

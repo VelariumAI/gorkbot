@@ -1,0 +1,13 @@
+{
+  "name": "git_log_audit",
+  "description": "Analyzes git commit history with detailed audit information, similar to git log --pretty=fuller. Accepts JSON with optional 'repo_path', 'count' (default 5), and 'format' parameters.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

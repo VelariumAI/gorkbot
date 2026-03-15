@@ -34,7 +34,7 @@ import (
 )
 
 // AnalyticsData holds the real-time metrics shown in the analytics dashboard.
-// It is populated by the TUI model on every ContextUpdateMsg and ToolProgressMsg.
+// It is populated by the TUI model on every ToolProgressMsg and context sync tick.
 type AnalyticsData struct {
 	// Context window.
 	ContextUsedPct  float64 // 0.0–1.0
@@ -60,7 +60,7 @@ type AnalyticsData struct {
 	StartTime time.Time
 
 	// Last token arrival time (for rate calculation).
-	lastTokenTime time.Time
+	lastTokenTime  time.Time
 	lastTokenCount int
 }
 

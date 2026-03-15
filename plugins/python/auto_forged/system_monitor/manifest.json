@@ -1,0 +1,13 @@
+{
+  "name": "system_monitor",
+  "description": "Monitors system resources (CPU, memory, disk), lists processes, runs bash commands for diagnostics, and returns audit/performance state snapshots.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

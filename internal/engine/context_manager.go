@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"time"
-	
+
 	"github.com/velariumai/gorkbot/pkg/billing"
 )
 
@@ -23,6 +23,7 @@ type ContextManager struct {
 	mu           sync.RWMutex
 	maxTokens    int     // Provider context limit
 	inputTokens  int     // Current input token count (updated after each call)
+	lastOutToks  int     // Output tokens from the last call
 	outputTokens int     // Cumulative output tokens for cost tracking
 	compactPct   float64 // Trigger threshold (default 0.90)
 
@@ -46,11 +47,11 @@ func NewContextManager(maxTokens int, onNearFull func()) *ContextManager {
 		maxTokens = 131072 // Grok-3 default
 	}
 	return &ContextManager{
-		maxTokens:      maxTokens,
-		compactPct:     0.90,
-		onNearFull:     onNearFull,
-		sessionStart:   time.Now(),
-		Billing:        billing.NewBillingManager(),
+		maxTokens:    maxTokens,
+		compactPct:   0.95,
+		onNearFull:   onNearFull,
+		sessionStart: time.Now(),
+		Billing:      billing.NewBillingManager(),
 	}
 }
 
@@ -59,11 +60,12 @@ func NewContextManager(maxTokens int, onNearFull func()) *ContextManager {
 func (cm *ContextManager) UpdateFromUsage(usage TokenUsage) {
 	cm.mu.Lock()
 	cm.inputTokens = usage.InputTokens
+	cm.lastOutToks = usage.OutputTokens
 	cm.outputTokens += usage.OutputTokens
 	cm.totalInputTokens += usage.InputTokens
 	cm.totalOutputTokens += usage.OutputTokens
 	cm.turnCount++
-	
+
 	if cm.Billing != nil {
 		cm.Billing.TrackTurn(usage.ProviderID, usage.ModelID, usage.InputTokens, usage.OutputTokens)
 	}
@@ -82,6 +84,7 @@ func (cm *ContextManager) UpdateFromUsage(usage TokenUsage) {
 func (cm *ContextManager) SetInputTokens(n int) {
 	cm.mu.Lock()
 	cm.inputTokens = n
+	cm.lastOutToks = 0
 	cm.mu.Unlock()
 }
 
@@ -96,24 +99,24 @@ func (cm *ContextManager) usedPctLocked() float64 {
 	if cm.maxTokens == 0 {
 		return 0
 	}
-	return float64(cm.inputTokens) / float64(cm.maxTokens)
+	return float64(cm.inputTokens+cm.lastOutToks) / float64(cm.maxTokens)
 }
 
 // InputTokens returns the current input token count.
 func (cm *ContextManager) InputTokens() int {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
-	return cm.inputTokens
+	return cm.inputTokens + cm.lastOutToks
 }
 
 // MaxTokens returns the context window size.
 func (cm *ContextManager) MaxTokens() int { return cm.maxTokens }
 
-// TokensUsed returns the current input token count (satisfies ContextStatsReporter).
+// TokensUsed returns the current token count in the context window.
 func (cm *ContextManager) TokensUsed() int {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
-	return cm.inputTokens
+	return cm.inputTokens + cm.lastOutToks
 }
 
 // TokenLimit returns the context window size (satisfies ContextStatsReporter).
@@ -125,6 +128,13 @@ func (cm *ContextManager) TotalCostUSD() float64 {
 		return cm.Billing.GetTotalSessionCost()
 	}
 	return 0.0
+}
+
+// TotalUsage returns the total input and output tokens accumulated.
+func (cm *ContextManager) TotalUsage() (int, int) {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.totalInputTokens, cm.totalOutputTokens
 }
 
 // SessionDuration returns how long this session has been running.
@@ -208,16 +218,16 @@ func (cm *ContextManager) CostReport(primaryModel, consultantModel string) strin
 
 	var sb string
 	sb += "# Session Cost\n\n"
-	
+
 	totalCost := cm.TotalCostUSD()
 
 	if cm.Billing != nil {
 		cm.Billing.Mu.RLock()
 		defer cm.Billing.Mu.RUnlock()
-		
+
 		sb += fmt.Sprintf("| Model | Input Tokens | Output Tokens | Est. Cost |\n")
 		sb += fmt.Sprintf("|-------|-------------|---------------|----------|\n")
-		
+
 		for model, usage := range cm.Billing.Session {
 			sb += fmt.Sprintf("| %s | %s | %s | $%.4f |\n",
 				model, formatTokens(usage.InputTokens), formatTokens(usage.OutputTokens), usage.TotalCost)
@@ -228,7 +238,7 @@ func (cm *ContextManager) CostReport(primaryModel, consultantModel string) strin
 		totalIn := cm.totalInputTokens
 		totalOut := cm.totalOutputTokens
 		cm.mu.RUnlock()
-		
+
 		sb += fmt.Sprintf("| Provider | Input Tokens | Output Tokens | Est. Cost |\n")
 		sb += fmt.Sprintf("|----------|-------------|---------------|----------|\n")
 		sb += fmt.Sprintf("| %s | %s | %s | $%.4f |\n",

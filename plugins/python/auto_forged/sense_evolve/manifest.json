@@ -1,0 +1,13 @@
+{
+  "name": "sense_evolve",
+  "description": "Analyzes trace logs for failure patterns (e.g. bash sanitizer rejects, path violations), then generates SKILL.md heuristic files containing invariants to prevent repeated errors and auto-inject them into future context.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

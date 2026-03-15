@@ -16,11 +16,11 @@ type TotpGenerateTool struct {
 func NewTotpGenerateTool() *TotpGenerateTool {
 	return &TotpGenerateTool{
 		BaseTool: BaseTool{
-			name:              "totp_generate",
-			description:       "Generate a TOTP 2FA code from a base32 secret.",
-			category:          CategorySecurity,
+			name:               "totp_generate",
+			description:        "Generate a TOTP 2FA code from a base32 secret.",
+			category:           CategorySecurity,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -49,8 +49,8 @@ func (t *TotpGenerateTool) Execute(ctx context.Context, params map[string]interf
 	projectRoot := os.Getenv("HOME") + "/project/gorkbot"
 	scriptPath := filepath.Join(projectRoot, "scripts/totp_bridge.js")
 
-	command := fmt.Sprintf("node %s %s", 
-		shellescape(scriptPath), 
+	command := fmt.Sprintf("node %s %s",
+		shellescape(scriptPath),
 		shellescape(secret))
 
 	bashTool := NewBashTool()

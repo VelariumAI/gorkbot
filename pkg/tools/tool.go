@@ -86,6 +86,26 @@ type Tool interface {
 	OutputFormat() OutputFormat
 }
 
+// CapabilityRequirer is an optional interface a Tool can implement to declare
+// the external binaries and Python packages it needs at runtime.
+// The Registry checks these before executing the tool and returns a clear
+// "not installed" error instead of running the tool and getting a cryptic
+// failure deep in subprocess output.
+//
+// Tools should only declare hard requirements — binaries or packages without
+// which the tool cannot function at all.  Optional enhancements should not
+// be listed here.
+type CapabilityRequirer interface {
+	// RequiredBinaries returns CLI tool names that must be present in PATH.
+	// Example: []string{"nmap"} for the nmap_scan tool.
+	RequiredBinaries() []string
+
+	// RequiredPythonPackages returns Python package import names that must be
+	// importable.  Use the import name, not the pip name (e.g. "google.genai"
+	// not "google-genai").
+	RequiredPythonPackages() []string
+}
+
 // ToolResult represents the result of tool execution
 type ToolResult struct {
 	Success      bool                   `json:"success"`
@@ -93,6 +113,8 @@ type ToolResult struct {
 	Error        string                 `json:"error,omitempty"`
 	Data         map[string]interface{} `json:"data,omitempty"`
 	OutputFormat OutputFormat           `json:"output_format"` // What format the output is in
+	AuthRequired bool                   `json:"auth_required,omitempty"`
+	AuthType     string                 `json:"auth_type,omitempty"`
 }
 
 // ToolRequest represents a request to execute a tool
@@ -112,8 +134,8 @@ type ToolDefinition struct {
 	Examples    []ToolExample   `json:"examples,omitempty"`
 	// NEW FIELDS for better AI guidance
 	WhenToUse string `json:"when_to_use,omitempty"` // When to prefer this tool
-	Returns    string `json:"returns,omitempty"`     // What the output contains
-	Safety     string `json:"safety,omitempty"`     // Security notes
+	Returns   string `json:"returns,omitempty"`     // What the output contains
+	Safety    string `json:"safety,omitempty"`      // Security notes
 }
 
 // ToolExample shows how to use a tool
@@ -135,11 +157,11 @@ func NewBaseTool(name, description string, category ToolCategory, requiresPerm b
 
 // BaseTool provides common functionality for tools
 type BaseTool struct {
-	name              string
-	description       string
-	category          ToolCategory
+	name               string
+	description        string
+	category           ToolCategory
 	requiresPermission bool
-	defaultPermission PermissionLevel
+	defaultPermission  PermissionLevel
 }
 
 func (b *BaseTool) Name() string {
@@ -169,7 +191,8 @@ func (b *BaseTool) OutputFormat() OutputFormat {
 // IsFileModifier returns true if the given tool name is known to modify workspace files.
 func IsFileModifier(toolName string) bool {
 	switch toolName {
-	case "write_file", "edit_file", "edit_file_hashed", "delete_file", "run_bash", "bash", "execute_command":
+	case "write_file", "edit_file", "edit_file_hashed", "delete_file", "run_bash",
+		"bash", "structured_bash", "privileged_execute", "execute_command":
 		return true
 	default:
 		return false

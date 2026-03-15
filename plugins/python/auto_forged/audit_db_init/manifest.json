@@ -1,0 +1,13 @@
+{
+  "name": "audit_db_init",
+  "description": "Initializes the Gorkbot audit database with tool_calls table for logging tool executions. Creates ~/.gorkbot/audit.db if it doesn't exist.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

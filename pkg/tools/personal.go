@@ -226,7 +226,7 @@ func (t *SmartHomeApiTool) Execute(ctx context.Context, args map[string]interfac
 
 	apiEndpoint := fmt.Sprintf("%s/api/services/homeassistant/%s", url, service)
 	payload := fmt.Sprintf(`{"entity_id": "%s"}`, entity)
-	
+
 	cmd := exec.CommandContext(ctx, "curl", "-X", "POST", "-H", "Authorization: Bearer "+token, "-H", "Content-Type: application/json", "-d", payload, apiEndpoint)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

@@ -21,10 +21,11 @@ import (
 //   - Exit code 2: block (stderr = reason shown to user)
 //   - Other exit: warning logged, execution continues
 type Manager struct {
-	hooksDir string
-	timeout  time.Duration
-	logger   *slog.Logger
-	enabled  bool
+	hooksDir    string
+	timeout     time.Duration
+	logger      *slog.Logger
+	enabled     bool
+	subscribers []func(Event, Payload)
 }
 
 // NewManager creates a Manager looking for hooks in <configDir>/hooks/.
@@ -32,15 +33,21 @@ func NewManager(configDir string, logger *slog.Logger) *Manager {
 	hooksDir := filepath.Join(configDir, "hooks")
 	_ = os.MkdirAll(hooksDir, 0755)
 	return &Manager{
-		hooksDir: hooksDir,
-		timeout:  15 * time.Second,
-		logger:   logger,
-		enabled:  true,
+		hooksDir:    hooksDir,
+		timeout:     15 * time.Second,
+		logger:      logger,
+		enabled:     true,
+		subscribers: []func(Event, Payload){},
 	}
 }
 
 // SetEnabled enables or disables hook execution globally.
 func (m *Manager) SetEnabled(v bool) { m.enabled = v }
+
+// Subscribe adds a Go function to be called whenever a hook is fired.
+func (m *Manager) Subscribe(f func(Event, Payload)) {
+	m.subscribers = append(m.subscribers, f)
+}
 
 // Fire executes the hook script for the given event (if it exists).
 // Returns a HookResult; Blocked=true means the caller should abort the action.
@@ -51,6 +58,11 @@ func (m *Manager) Fire(ctx context.Context, event Event, payload Payload) HookRe
 
 	payload.Event = event
 	payload.Timestamp = time.Now()
+
+	// Notify Go subscribers
+	for _, sub := range m.subscribers {
+		sub(event, payload)
+	}
 
 	scriptPath := filepath.Join(m.hooksDir, string(event)+".sh")
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {

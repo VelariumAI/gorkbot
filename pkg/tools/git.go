@@ -14,11 +14,11 @@ type GitStatusTool struct {
 func NewGitStatusTool() *GitStatusTool {
 	return &GitStatusTool{
 		BaseTool: BaseTool{
-			name:              "git_status",
-			description:       "Show the working tree status of a git repository",
-			category:          CategoryGit,
+			name:               "git_status",
+			description:        "Show the working tree status of a git repository",
+			category:           CategoryGit,
 			requiresPermission: false, // Safe read-only operation
-			defaultPermission: PermissionAlways,
+			defaultPermission:  PermissionAlways,
 		},
 	}
 }
@@ -73,11 +73,11 @@ type GitDiffTool struct {
 func NewGitDiffTool() *GitDiffTool {
 	return &GitDiffTool{
 		BaseTool: BaseTool{
-			name:              "git_diff",
-			description:       "Show changes between commits, commit and working tree, etc",
-			category:          CategoryGit,
+			name:               "git_diff",
+			description:        "Show changes between commits, commit and working tree, etc",
+			category:           CategoryGit,
 			requiresPermission: false,
-			defaultPermission: PermissionAlways,
+			defaultPermission:  PermissionAlways,
 		},
 	}
 }
@@ -145,11 +145,11 @@ type GitLogTool struct {
 func NewGitLogTool() *GitLogTool {
 	return &GitLogTool{
 		BaseTool: BaseTool{
-			name:              "git_log",
-			description:       "Show commit logs",
-			category:          CategoryGit,
+			name:               "git_log",
+			description:        "Show commit logs",
+			category:           CategoryGit,
 			requiresPermission: false,
-			defaultPermission: PermissionAlways,
+			defaultPermission:  PermissionAlways,
 		},
 	}
 }
@@ -225,11 +225,11 @@ type GitCommitTool struct {
 func NewGitCommitTool() *GitCommitTool {
 	return &GitCommitTool{
 		BaseTool: BaseTool{
-			name:              "git_commit",
-			description:       "Record changes to the repository",
-			category:          CategoryGit,
+			name:               "git_commit",
+			description:        "Record changes to the repository",
+			category:           CategoryGit,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -314,11 +314,11 @@ type GitPushTool struct {
 func NewGitPushTool() *GitPushTool {
 	return &GitPushTool{
 		BaseTool: BaseTool{
-			name:              "git_push",
-			description:       "Update remote refs along with associated objects",
-			category:          CategoryGit,
+			name:               "git_push",
+			description:        "Update remote refs along with associated objects",
+			category:           CategoryGit,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -408,11 +408,11 @@ type GitPullTool struct {
 func NewGitPullTool() *GitPullTool {
 	return &GitPullTool{
 		BaseTool: BaseTool{
-			name:              "git_pull",
-			description:       "Fetch from and integrate with another repository or local branch",
-			category:          CategoryGit,
+			name:               "git_pull",
+			description:        "Fetch from and integrate with another repository or local branch",
+			category:           CategoryGit,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }

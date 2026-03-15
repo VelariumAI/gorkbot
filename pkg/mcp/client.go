@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"syscall"
 )
 
 // Client manages a connection to one MCP server over stdio transport.
@@ -40,6 +41,7 @@ func NewStdioClient(cfg ServerConfig) *Client {
 func (c *Client) Start(ctx context.Context) error {
 	// #nosec G204 — args come from user config, not user input
 	cmd := exec.CommandContext(ctx, c.cfg.Command, c.cfg.Args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	// Set extra env vars
 	if len(c.cfg.Env) > 0 {
@@ -77,7 +79,7 @@ func (c *Client) Handshake(ctx context.Context) error {
 	result, err := c.call(ctx, "initialize", InitializeParams{
 		ProtocolVersion: "2024-11-05",
 		Capabilities:    ClientCaps{},
-		ClientInfo:      ClientInfo{Name: "gorkbot", Version: "1.6.3"},
+		ClientInfo:      ClientInfo{Name: "gorkbot", Version: "4.5.2"},
 	})
 	if err != nil {
 		return fmt.Errorf("mcp: initialize: %w", err)
@@ -144,6 +146,9 @@ func (c *Client) CachedTools() []ToolDefinition { return c.tools }
 
 // ServerName returns the configured server name.
 func (c *Client) ServerName() string { return c.cfg.Name }
+
+// ServerDescription returns the configured server description.
+func (c *Client) ServerDescription() string { return c.cfg.Description }
 
 // Stop terminates the child process.
 func (c *Client) Stop() {

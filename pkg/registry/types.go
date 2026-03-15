@@ -22,14 +22,14 @@ const (
 
 // CapabilitySet defines the standardized features of a model
 type CapabilitySet struct {
-	MaxContextTokens int
-	SupportsVision   bool
-	SupportsTools    bool
-	SupportsJSONMode bool
+	MaxContextTokens  int
+	SupportsVision    bool
+	SupportsTools     bool
+	SupportsJSONMode  bool
 	SupportsStreaming bool
-	SupportsThinking bool    // Supports native thinking/reasoning mode (e.g. Gemini 2.5+, thinking variants)
-	InputCostPer1M   float64 // Normalized pricing (USD)
-	OutputCostPer1M  float64
+	SupportsThinking  bool    // Supports native thinking/reasoning mode (e.g. Gemini 2.5+, thinking variants)
+	InputCostPer1M    float64 // Normalized pricing (USD)
+	OutputCostPer1M   float64
 }
 
 // ModelDefinition represents a fully normalized model entry

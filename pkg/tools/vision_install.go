@@ -22,9 +22,10 @@ import (
 // a local HTTP service on 127.0.0.1:7777 — no ADB, no root required.
 //
 // Build chain (no Gradle, no full Android SDK required):
-//   pkg install aapt2 d8 apksigner   (Termux — small, fast)
-//   android-34.jar downloaded once from Google's SDK CDN (~70 MB)
-//   javac → d8 → aapt2 link → apksigner
+//
+//	pkg install aapt2 d8 apksigner   (Termux — small, fast)
+//	android-34.jar downloaded once from Google's SDK CDN (~70 MB)
+//	javac → d8 → aapt2 link → apksigner
 type VisionInstallTool struct{ BaseTool }
 
 func NewVisionInstallTool() *VisionInstallTool {

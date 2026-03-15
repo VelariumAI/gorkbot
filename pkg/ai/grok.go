@@ -17,9 +17,9 @@ import (
 
 // GrokRequest represents the payload for xAI's chat completions.
 type GrokRequest struct {
-	Model     string        `json:"model"`
-	Messages  []GrokMessage `json:"messages"`
-	Stream    bool          `json:"stream,omitempty"`
+	Model    string        `json:"model"`
+	Messages []GrokMessage `json:"messages"`
+	Stream   bool          `json:"stream,omitempty"`
 	// MaxTokens sets the upper bound on response length.
 	// Grok-3 supports up to 131072 output tokens. Omit (zero) falls back to a
 	// conservative API default (~4096) that truncates long agentic tasks.
@@ -29,6 +29,8 @@ type GrokRequest struct {
 	// Omit entirely for models that do not support it — sending it to unsupported
 	// models returns a 400 Bad Request.
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	Temperature     *float32 `json:"temperature,omitempty"`
+	TopP            *float32 `json:"top_p,omitempty"`
 }
 
 type GrokMessage struct {
@@ -82,8 +84,8 @@ type NativeToolCaller interface {
 // with fields that must sometimes be null (e.g. content for tool-call turns).
 type grokNativeMsg struct {
 	Role       string         `json:"role"`
-	Content    interface{}    `json:"content"`              // string or nil
-	ToolCalls  []GrokToolCall `json:"tool_calls,omitempty"` // assistant → tool calls
+	Content    interface{}    `json:"content"`                // string or nil
+	ToolCalls  []GrokToolCall `json:"tool_calls,omitempty"`   // assistant → tool calls
 	ToolCallID string         `json:"tool_call_id,omitempty"` // tool result → call id
 }
 
@@ -146,9 +148,9 @@ func NewGrokProvider(apiKey string, defaultModel string) *GrokProvider {
 		model = "grok-3"
 	}
 	return &GrokProvider{
-		APIKey: apiKey,
-		Model:  model,
-		Client: NewRetryClient(),
+		APIKey:           apiKey,
+		Model:            model,
+		Client:           NewRetryClient(),
 		supportsThinking: grokModelSupportsThinking(model),
 	}
 }
@@ -336,7 +338,7 @@ func (g *GrokProvider) Stream(ctx context.Context, prompt string, out io.Writer)
 	req.Header.Set("Authorization", "Bearer "+g.APIKey)
 
 	// Use a client with no timeout for streaming, or long timeout
-	streamClient := NewRetryClient() 
+	streamClient := NewRetryClient()
 	resp, err := streamClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
@@ -356,7 +358,7 @@ func (g *GrokProvider) Stream(ctx context.Context, prompt string, out io.Writer)
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
-		
+
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
 			break
@@ -365,7 +367,7 @@ func (g *GrokProvider) Stream(ctx context.Context, prompt string, out io.Writer)
 		var chunk GrokStreamResponse
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			// Skip malformed chunks or log error?
-			continue 
+			continue
 		}
 
 		if len(chunk.Choices) > 0 {

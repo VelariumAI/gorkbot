@@ -55,7 +55,7 @@ func (s *Stylist) PrintReasoning(text string) {
 	}
 	// Clean up text
 	text = strings.TrimSpace(text)
-	
+
 	fmt.Printf("\n%s%s %s%s\n", Magenta, s.reasoningIcon, text, Reset)
 }
 
@@ -66,9 +66,9 @@ func (s *Stylist) StartActionBlock() {
 
 // LogToolExecution logs the start of a tool execution inside the block
 func (s *Stylist) LogToolExecution(toolName, params string) {
-	fmt.Printf("%s%s %sTool: %s%s %s%s%s\n", 
-		Gray, Vertical, 
-		Cyan, toolName, Reset, 
+	fmt.Printf("%s%s %sTool: %s%s %s%s%s\n",
+		Gray, Vertical,
+		Cyan, toolName, Reset,
 		White, params, Reset)
 }
 
@@ -88,7 +88,7 @@ func (s *Stylist) LogToolResult(success bool, outputSnippet string) {
 	snippet = strings.ReplaceAll(snippet, "\n", " ")
 
 	fmt.Printf("%s%s %s Result: %s\n", Gray, Vertical, icon, snippet)
-	
+
 	// Close the block segment
 	fmt.Printf("%s%s%s\n", Gray, CornerBL, strings.Repeat("─", 40))
 }

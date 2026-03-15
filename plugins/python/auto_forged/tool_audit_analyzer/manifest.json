@@ -1,0 +1,13 @@
+{
+  "name": "tool_audit_analyzer",
+  "description": "Analyzes bash tool command audit logs to extract performance metrics, success rates, and error patterns from Gorkbot tool usage statistics",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

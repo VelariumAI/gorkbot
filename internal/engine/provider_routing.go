@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/velariumai/gorkbot/internal/arc"
+	"github.com/velariumai/gorkbot/pkg/adaptive"
 	"github.com/velariumai/gorkbot/pkg/ai"
 	"github.com/velariumai/gorkbot/pkg/discovery"
 	"github.com/velariumai/gorkbot/pkg/providers"
@@ -47,6 +47,17 @@ func (o *Orchestrator) SetPrimary(ctx context.Context, providerName, modelID str
 	}
 	o.Primary = prov
 	o.primaryModelName = prov.Name() + "/" + modelID
+	
+	// Update context manager max tokens for the new model
+	if o.ContextMgr != nil {
+		meta := prov.GetMetadata()
+		if meta.ContextSize > 0 {
+			o.ContextMgr.mu.Lock()
+			o.ContextMgr.maxTokens = meta.ContextSize
+			o.ContextMgr.mu.Unlock()
+		}
+	}
+
 	if o.Registry != nil {
 		o.Registry.SetAIProvider(prov)
 	}
@@ -115,10 +126,10 @@ func (o *Orchestrator) intelligentSecondarySelect(ctx context.Context, task stri
 	if o.Intelligence != nil {
 		rd := o.Intelligence.Router.Route(task)
 		switch rd.Budget.CostTier {
-		case arc.CostTierCheap:
+		case adaptive.CostTierCheap:
 			cap = discovery.CapSpeed // cheap tasks → fast/cheap models
 			preferCheap = true
-		case arc.CostTierPremium:
+		case adaptive.CostTierPremium:
 			cap = discovery.CapReasoning
 		default:
 			cap = discovery.CapGeneral

@@ -24,13 +24,13 @@ const (
 
 // StreamMonitor watches the output stream for issues
 type StreamMonitor struct {
-	buffer       strings.Builder
-	windowSize   int
-	history      []string
-	mu           sync.Mutex
-	repetition   int
-	lastSegment  string
-	
+	buffer      strings.Builder
+	windowSize  int
+	history     []string
+	mu          sync.Mutex
+	repetition  int
+	lastSegment string
+
 	// Intelligent State
 	consecutiveLines int
 	isCodeBlock      bool
@@ -51,7 +51,7 @@ func (sm *StreamMonitor) WriteToken(token string) WatchdogSeverity {
 	defer sm.mu.Unlock()
 
 	sm.buffer.WriteString(token)
-	
+
 	// Track code block state
 	if strings.Contains(token, "```") {
 		sm.isCodeBlock = !sm.isCodeBlock
@@ -63,13 +63,13 @@ func (sm *StreamMonitor) WriteToken(token string) WatchdogSeverity {
 	}
 
 	content := sm.buffer.String()
-	
+
 	// 1. Pathological Phrase Repetition (High Severity)
 	// "I will I will I will" - identical repetition without structure
 	if currentLen > 50 {
 		tail := content[currentLen-50:]
 		prevContent := content[:currentLen-50]
-		
+
 		if strings.HasSuffix(prevContent, tail) {
 			sm.repetition++
 		} else {
@@ -103,7 +103,7 @@ func (sm *StreamMonitor) WriteToken(token string) WatchdogSeverity {
 		// It's repeating identical unstructured text. Kill it.
 		return SeverityCritical
 	}
-	
+
 	if sm.repetition >= 1 && !isStructured {
 		// Just started repeating
 		return SeverityInfo

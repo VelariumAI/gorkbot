@@ -17,11 +17,11 @@ type CreateToolTool struct {
 func NewCreateToolTool() *CreateToolTool {
 	return &CreateToolTool{
 		BaseTool: BaseTool{
-			name:              "create_tool",
-			description:       "Create a new custom tool by generating Go code (DIY tool creator)",
-			category:          CategoryMeta,
+			name:               "create_tool",
+			description:        "Create a new custom tool by generating Go code (DIY tool creator)",
+			category:           CategoryMeta,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -344,11 +344,11 @@ type ListToolsTool struct {
 func NewListToolsTool() *ListToolsTool {
 	return &ListToolsTool{
 		BaseTool: BaseTool{
-			name:              "list_tools",
-			description:       "List all available tools with their descriptions and permissions",
-			category:          CategoryMeta,
+			name:               "list_tools",
+			description:        "List all available tools with their descriptions and permissions",
+			category:           CategoryMeta,
 			requiresPermission: false,
-			defaultPermission: PermissionAlways,
+			defaultPermission:  PermissionAlways,
 		},
 	}
 }
@@ -461,9 +461,9 @@ func (t *ListToolsTool) Execute(ctx context.Context, params map[string]interface
 		Success: true,
 		Output:  output,
 		Data: map[string]interface{}{
-			"format": format,
+			"format":   format,
 			"category": categoryFilter,
-			"count": len(tools),
+			"count":    len(tools),
 		},
 	}, nil
 }
@@ -476,11 +476,11 @@ type ToolInfoTool struct {
 func NewToolInfoTool() *ToolInfoTool {
 	return &ToolInfoTool{
 		BaseTool: BaseTool{
-			name:              "tool_info",
-			description:       "Get detailed information about a specific tool",
-			category:          CategoryMeta,
+			name:               "tool_info",
+			description:        "Get detailed information about a specific tool",
+			category:           CategoryMeta,
 			requiresPermission: false,
-			defaultPermission: PermissionAlways,
+			defaultPermission:  PermissionAlways,
 		},
 	}
 }
@@ -789,10 +789,10 @@ func (t *ModifyToolTool) Execute(ctx context.Context, params map[string]interfac
 		Success: true,
 		Output:  sb.String(),
 		Data: map[string]interface{}{
-			"tool_name":       name,
-			"is_static":       isStatic,
-			"live":            true,
-			"needs_rebuild":   isStatic,
+			"tool_name":     name,
+			"is_static":     isStatic,
+			"live":          true,
+			"needs_rebuild": isStatic,
 		},
 	}, nil
 }

@@ -1,0 +1,13 @@
+{
+  "name": "torch_timed_sequence",
+  "description": "Executes a timed torch (flashlight) sequence: turns off for a duration, then strobes with configurable on/off intervals for a total duration. Uses termux-torch command.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

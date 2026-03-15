@@ -17,7 +17,7 @@ func GetDynamicBrainContext() string {
 	}
 
 	brainDir := filepath.Join(home, ".gorkbot", "brain")
-	
+
 	// Create default brain files if directory doesn't exist
 	if _, err := os.Stat(brainDir); os.IsNotExist(err) {
 		os.MkdirAll(brainDir, 0755)

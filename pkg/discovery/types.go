@@ -4,12 +4,13 @@ import "time"
 
 // Provider constants for the discovery manager.
 const (
-	ProviderXAI       = "xai"
-	ProviderGoogle    = "google"
-	ProviderAnthropic = "anthropic"
-	ProviderOpenAI    = "openai"
+	ProviderXAI        = "xai"
+	ProviderGoogle     = "google"
+	ProviderAnthropic  = "anthropic"
+	ProviderOpenAI     = "openai"
 	ProviderMiniMax    = "minimax"
 	ProviderOpenRouter = "openrouter"
+	ProviderMoonshot   = "moonshot"
 )
 
 // CapabilityClass classifies a model's primary strength based on its ID keywords.

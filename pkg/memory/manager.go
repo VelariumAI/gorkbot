@@ -50,7 +50,7 @@ func (mm *MemoryManager) LoadDefaultSession() (*Session, error) {
 	defer mm.mu.Unlock()
 
 	path := filepath.Join(mm.sessionsDir, "default.json")
-	
+
 	// Try to load existing
 	if _, err := os.Stat(path); err == nil {
 		data, err := os.ReadFile(path)
@@ -88,7 +88,7 @@ func (mm *MemoryManager) SaveSession() error {
 	}
 
 	mm.current.UpdatedAt = time.Now()
-	
+
 	path := filepath.Join(mm.sessionsDir, fmt.Sprintf("%s.json", mm.current.ID))
 	data, err := json.MarshalIndent(mm.current, "", "  ")
 	if err != nil {
@@ -123,14 +123,14 @@ func (mm *MemoryManager) ConsolidateMemory(ctx context.Context, provider ai.AIPr
 
 	// Summarize middle
 	middleMsgs := msgs[1 : len(msgs)-10]
-	
+
 	var sb strings.Builder
 	for _, m := range middleMsgs {
 		sb.WriteString(fmt.Sprintf("%s: %s\n", m.Role, m.Content))
 	}
 
 	prompt := fmt.Sprintf("Summarize the following conversation history into a concise list of key facts, user preferences, and project context. Keep it under 200 words:\n\n%s", sb.String())
-	
+
 	summary, err := provider.Generate(ctx, prompt)
 	if err != nil {
 		return fmt.Errorf("summarization failed: %w", err)
@@ -141,7 +141,7 @@ func (mm *MemoryManager) ConsolidateMemory(ctx context.Context, provider ai.AIPr
 	if systemPrompt != "" {
 		newHistory.AddSystemMessage(systemPrompt)
 	}
-	
+
 	// Inject summary as a system context
 	newHistory.AddSystemMessage(fmt.Sprintf("PREVIOUS CONTEXT SUMMARY:\n%s", summary))
 
@@ -152,6 +152,6 @@ func (mm *MemoryManager) ConsolidateMemory(ctx context.Context, provider ai.AIPr
 
 	mm.current.History = newHistory
 	mm.Logger.Info("Memory consolidated", "new_count", newHistory.Count())
-	
+
 	return mm.SaveSession()
 }

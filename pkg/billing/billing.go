@@ -248,7 +248,7 @@ func (bm *BillingManager) SaveDailyLog() {
 	}
 
 	logPath := filepath.Join(bm.configDir, "usage_history.jsonl")
-	
+
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return
@@ -256,11 +256,11 @@ func (bm *BillingManager) SaveDailyLog() {
 	defer f.Close()
 
 	entry := map[string]interface{}{
-		"date":        time.Now().Format(time.RFC3339),
-		"total_cost":  bm.TotalSession,
-		"models":      bm.Session,
+		"date":       time.Now().Format(time.RFC3339),
+		"total_cost": bm.TotalSession,
+		"models":     bm.Session,
 	}
-	
+
 	b, _ := json.Marshal(entry)
 	f.Write(append(b, '\n'))
 }

@@ -18,11 +18,11 @@ type ScraplingFetchTool struct {
 func NewScraplingFetchTool() *ScraplingFetchTool {
 	return &ScraplingFetchTool{
 		BaseTool: BaseTool{
-			name:        "scrapling_fetch",
-			description: "Fetch web pages using Scrapling with CSS/XPath selector support. Use when you need to extract specific elements from a page (e.g., 'div.content', '//table/tr'). Returns extracted content as text.",
-			category:    CategoryWeb,
+			name:               "scrapling_fetch",
+			description:        "Fetch web pages using Scrapling with CSS/XPath selector support. Use when you need to extract specific elements from a page (e.g., 'div.content', '//table/tr'). Returns extracted content as text.",
+			category:           CategoryWeb,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -183,11 +183,11 @@ type ScraplingStealthTool struct {
 func NewScraplingStealthTool() *ScraplingStealthTool {
 	return &ScraplingStealthTool{
 		BaseTool: BaseTool{
-			name:        "scrapling_stealth",
-			description: "Stealthy web scraping with Cloudflare bypass and anti-bot evasion. Use when accessing protected sites that block regular requests. Returns extracted content as text.",
-			category:    CategoryWeb,
+			name:               "scrapling_stealth",
+			description:        "Stealthy web scraping with Cloudflare bypass and anti-bot evasion. Use when accessing protected sites that block regular requests. Returns extracted content as text.",
+			category:           CategoryWeb,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -296,11 +296,11 @@ type ScraplingDynamicTool struct {
 func NewScraplingDynamicTool() *ScraplingDynamicTool {
 	return &ScraplingDynamicTool{
 		BaseTool: BaseTool{
-			name:        "scrapling_dynamic",
-			description: "Full browser automation for dynamic JavaScript-heavy websites. Use when you need to render pages that require JavaScript execution. Returns extracted content as text.",
-			category:    CategoryWeb,
+			name:               "scrapling_dynamic",
+			description:        "Full browser automation for dynamic JavaScript-heavy websites. Use when you need to render pages that require JavaScript execution. Returns extracted content as text.",
+			category:           CategoryWeb,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -405,11 +405,11 @@ type ScraplingExtractTool struct {
 func NewScraplingExtractTool() *ScraplingExtractTool {
 	return &ScraplingExtractTool{
 		BaseTool: BaseTool{
-			name:        "scrapling_extract",
-			description: "Extract content from URLs using Scrapling CLI with CSS selector support. Use for simple extractions without writing code. Returns extracted content as text.",
-			category:    CategoryWeb,
+			name:               "scrapling_extract",
+			description:        "Extract content from URLs using Scrapling CLI with CSS selector support. Use for simple extractions without writing code. Returns extracted content as text.",
+			category:           CategoryWeb,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -503,11 +503,11 @@ type ScraplingSearchTool struct {
 func NewScraplingSearchTool() *ScraplingSearchTool {
 	return &ScraplingSearchTool{
 		BaseTool: BaseTool{
-			name:        "scrapling_search",
-			description: "Web search using Scrapling to scrape search engines (DuckDuckGo, Google, Bing). Returns clean search results. Use when web_search is unavailable.",
-			category:    CategoryWeb,
+			name:               "scrapling_search",
+			description:        "Web search using Scrapling to scrape search engines (DuckDuckGo, Google, Bing). Returns clean search results. Use when web_search is unavailable.",
+			category:           CategoryWeb,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }

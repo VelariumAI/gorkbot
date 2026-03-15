@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/velariumai/gorkbot/pkg/scheduler"
+	"github.com/velariumai/gorkbot/pkg/security"
 )
 
 // ---- schedule_task --------------------------------------------------------
@@ -239,6 +240,9 @@ func (t *CancelScheduledTaskTool) Execute(ctx context.Context, params map[string
 	if id == "" {
 		return &ToolResult{Success: false, Error: "id is required"}, nil
 	}
+	if err := security.ValidateInput(id); err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("invalid id: %v", err)}, nil
+	}
 
 	sched, _ := ctx.Value(scheduler.SchedulerKey).(*scheduler.Scheduler)
 	if sched == nil {
@@ -297,6 +301,9 @@ func (t *PauseResumeScheduledTaskTool) Execute(ctx context.Context, params map[s
 
 	if id == "" || action == "" {
 		return &ToolResult{Success: false, Error: "id and action are required"}, nil
+	}
+	if err := security.ValidateInput(id); err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("invalid id: %v", err)}, nil
 	}
 
 	sched, _ := ctx.Value(scheduler.SchedulerKey).(*scheduler.Scheduler)

@@ -1,0 +1,13 @@
+{
+  "name": "extract_tool_stats",
+  "description": "Extracts tool usage statistics and validation results from Gorkbot markdown audit reports. Parses markdown tables to identify tool names, categories, success rates, and status.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

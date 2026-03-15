@@ -16,9 +16,9 @@ type LogcatDumpTool struct {
 func NewLogcatDumpTool() *LogcatDumpTool {
 	return &LogcatDumpTool{
 		BaseTool: BaseTool{
-			name:        "logcat_dump",
-			description: "Dump recent Android system logs with optional filtering. Useful for debugging app crashes or system events.",
-			category:          CategorySystem,
+			name:               "logcat_dump",
+			description:        "Dump recent Android system logs with optional filtering. Useful for debugging app crashes or system events.",
+			category:           CategorySystem,
 			requiresPermission: true,
 			defaultPermission:  PermissionSession,
 		},
@@ -93,9 +93,9 @@ type ClipboardManagerTool struct {
 func NewClipboardManagerTool() *ClipboardManagerTool {
 	return &ClipboardManagerTool{
 		BaseTool: BaseTool{
-			name:        "clipboard_manager",
-			description: "Read or write to the Android system clipboard using Termux:API.",
-			category:          CategorySystem,
+			name:               "clipboard_manager",
+			description:        "Read or write to the Android system clipboard using Termux:API.",
+			category:           CategorySystem,
 			requiresPermission: true,
 			defaultPermission:  PermissionSession,
 		},
@@ -150,9 +150,9 @@ type NotificationListenerTool struct {
 func NewNotificationListenerTool() *NotificationListenerTool {
 	return &NotificationListenerTool{
 		BaseTool: BaseTool{
-			name:        "notification_listener",
-			description: "List active Android notifications using Termux:API.",
-			category:          CategorySystem,
+			name:               "notification_listener",
+			description:        "List active Android notifications using Termux:API.",
+			category:           CategorySystem,
 			requiresPermission: true,
 			defaultPermission:  PermissionSession,
 		},

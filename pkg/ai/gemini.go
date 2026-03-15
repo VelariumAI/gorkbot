@@ -21,15 +21,38 @@ type GeminiProvider struct {
 	Model            string
 	Client           *http.Client
 	VerboseThoughts  bool
-	ProjectID        string // Google Cloud Project ID for Vertex AI (Professional/Enterprise)
-	Location         string // GCP Region (default: us-central1)
-	supportsThinking bool   // true when the active model supports native thinking mode
+	ProjectID        string  // Google Cloud Project ID for Vertex AI (Professional/Enterprise)
+	Location         string  // GCP Region (default: us-central1)
+	supportsThinking bool    // true when the active model supports native thinking mode
+	temperature      float32 // effective temperature; valid only when temperatureSet
+	temperatureSet   bool    // distinguishes explicit 0.0 from "not configured"
+}
+
+// WithTemperature returns a shallow copy of the provider configured to use the
+// specified temperature. Implements the consultation.TemperatureConfigurable
+// optional interface so the ConsultationMediator can force temp=0.0 for fully
+// deterministic Secondary evaluation without modifying the primary instance.
+func (g *GeminiProvider) WithTemperature(temp float32) AIProvider {
+	cp := *g
+	cp.temperature = temp
+	cp.temperatureSet = true
+	return &cp
+}
+
+// effectiveTemp returns the active temperature.
+// Returns 0.7 (the model default) unless WithTemperature was explicitly called.
+// Using a boolean flag rather than a -1 sentinel makes temp=0.0 unambiguous.
+func (g *GeminiProvider) effectiveTemp() float32 {
+	if g.temperatureSet {
+		return g.temperature
+	}
+	return 0.7
 }
 
 // Gemini request structure
 type GeminiRequest struct {
-	Contents         []GeminiContent  `json:"contents"`
-	GenerationConfig GeminiConfig     `json:"generationConfig,omitempty"`
+	Contents         []GeminiContent `json:"contents"`
+	GenerationConfig GeminiConfig    `json:"generationConfig,omitempty"`
 }
 
 type GeminiContent struct {
@@ -39,7 +62,7 @@ type GeminiContent struct {
 
 type GeminiPart struct {
 	Text    string `json:"text,omitempty"`
-	Thought bool   `json:"thought,omitempty"` 
+	Thought bool   `json:"thought,omitempty"`
 }
 
 type GeminiConfig struct {
@@ -87,16 +110,15 @@ func NewGeminiProvider(apiKey string, defaultModel string, verboseThoughts bool)
 	}
 
 	return &GeminiProvider{
-		APIKey:          apiKey,
-		Model:           model,
-		Client:          NewRetryClient(),
-		VerboseThoughts: verboseThoughts,
-		ProjectID:       projectID,
-		Location:        location,
+		APIKey:           apiKey,
+		Model:            model,
+		Client:           NewRetryClient(),
+		VerboseThoughts:  verboseThoughts,
+		ProjectID:        projectID,
+		Location:         location,
 		supportsThinking: geminiModelSupportsThinking(model),
 	}
 }
-
 
 func (g *GeminiProvider) Name() string {
 	return "Gemini"
@@ -172,7 +194,7 @@ func (g *GeminiProvider) GenerateWithHistory(ctx context.Context, history *Conve
 	reqBody := GeminiRequest{
 		Contents: contents,
 		GenerationConfig: GeminiConfig{
-			Temperature: 0.7,
+			Temperature: g.effectiveTemp(),
 		},
 	}
 	// Only request thinking tokens for models that actually support it — prevents 400 errors.
@@ -225,7 +247,7 @@ func (g *GeminiProvider) Generate(ctx context.Context, prompt string) (string, e
 			},
 		},
 		GenerationConfig: GeminiConfig{
-			Temperature: 0.7,
+			Temperature: g.effectiveTemp(),
 		},
 	}
 	// Only request thinking tokens for models that actually support it — prevents 400 errors.
@@ -294,7 +316,7 @@ func (g *GeminiProvider) Stream(ctx context.Context, prompt string, out io.Write
 			},
 		},
 		GenerationConfig: GeminiConfig{
-			Temperature: 0.7,
+			Temperature: g.effectiveTemp(),
 		},
 	}
 	// Only request thinking tokens for models that actually support it — prevents 400 errors.
@@ -340,7 +362,7 @@ func (g *GeminiProvider) Stream(ctx context.Context, prompt string, out io.Write
 		}
 
 		data := strings.TrimPrefix(line, "data: ")
-		
+
 		var chunk GeminiStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue
@@ -386,7 +408,7 @@ func (g *GeminiProvider) StreamWithHistory(ctx context.Context, history *Convers
 	reqBody := GeminiRequest{
 		Contents: contents,
 		GenerationConfig: GeminiConfig{
-			Temperature: 0.7,
+			Temperature: g.effectiveTemp(),
 		},
 	}
 	// Only request thinking tokens for models that actually support it — prevents 400 errors.

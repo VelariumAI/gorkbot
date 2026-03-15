@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/velariumai/gorkbot/internal/platform"
 )
 
 // ----------------------------------------------------------------------------
@@ -250,7 +252,7 @@ func (s *Server) handleAgentCard(w http.ResponseWriter, r *http.Request) {
 		"name":        "Gorkbot",
 		"description": "Multi-provider AI orchestration agent",
 		"url":         scheme + "://" + host,
-		"version":     "2.8.0",
+		"version":     platform.Version,
 		"capabilities": map[string]interface{}{
 			"streaming":         true,
 			"pushNotifications": false,
@@ -278,7 +280,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":    "ok",
-		"version":   "2.8.0",
+		"version":   platform.Version,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	})
 }

@@ -336,11 +336,11 @@ func (t *MemeGeneratorTool) Execute(ctx context.Context, args map[string]interfa
 	out, _ := args["output"].(string)
 
 	// Requires imagemagick 'convert'
-	cmd := exec.CommandContext(ctx, "convert", img, 
+	cmd := exec.CommandContext(ctx, "convert", img,
 		"-font", "Impact", "-pointsize", "40", "-fill", "white", "-stroke", "black", "-strokewidth", "2", "-gravity", "North", "-annotate", "+0+10", top,
 		"-gravity", "South", "-annotate", "+0+10", bot,
 		out)
-	
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return &ToolResult{Success: false, Error: fmt.Sprintf("Meme gen failed: %v\n%s", err, string(output))}, nil

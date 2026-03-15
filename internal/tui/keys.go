@@ -5,8 +5,8 @@ import "github.com/charmbracelet/bubbles/key"
 // KeyMap defines the keybindings for the application
 type KeyMap struct {
 	// Global
-	Quit        key.Binding
-	Help        key.Binding
+	Quit key.Binding
+	Help key.Binding
 
 	// Chat
 	Submit      key.Binding
@@ -24,7 +24,8 @@ type KeyMap struct {
 	ShowSettings key.Binding
 
 	// Mode cycling (Normal → Plan → Auto)
-	CycleMode key.Binding
+	CycleMode    key.Binding
+	CycleModeTab key.Binding // Shift+Tab alternative
 
 	// Tools View
 	ShowTools key.Binding
@@ -37,6 +38,9 @@ type KeyMap struct {
 
 	// Conversation Bookmarks overlay
 	ShowBookmarks key.Binding
+
+	// Toggle compact tab bar
+	ToggleTabs key.Binding
 
 	// List Navigation (for model selection)
 	Up     key.Binding
@@ -72,38 +76,51 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("pgdown"),
 			key.WithHelp("pgdn", "scroll down"),
 		),
+		// Tab (0x09) is no longer intercepted by the hotkey manager.
 		FocusInput: key.NewBinding(
 			key.WithKeys("ctrl+i"),
-			key.WithHelp("ctrl+i", "focus input"),
+			key.WithHelp("tab", "focus input"),
 		),
+		// ctrl+l is intercepted by hotkey (CmdClearReset) — kept here for help display.
 		ClearScreen: key.NewBinding(
 			key.WithKeys("ctrl+l"),
-			key.WithHelp("ctrl+l", "clear"),
+			key.WithHelp("ctrl+l", "clear history"),
 		),
 		Interrupt: key.NewBinding(
 			key.WithKeys("ctrl+x"),
 			key.WithHelp("ctrl+x", "interrupt"),
 		),
+		// ctrl+g (0x07) is intercepted by the hotkey manager as CmdModelsSelect.
+		// Also reachable via the Esc+M leader sequence.
 		SelectModel: key.NewBinding(
-			key.WithKeys("ctrl+t"),
-			key.WithHelp("ctrl+t", "models"),
-		),
-		ShowSettings: key.NewBinding(
 			key.WithKeys("ctrl+g"),
-			key.WithHelp("ctrl+g", "settings"),
+			key.WithHelp("ctrl+g", "models"),
 		),
+		// ctrl+s intercepted by hotkey (CmdSettings) — kept for help display only.
+		ShowSettings: key.NewBinding(
+			key.WithKeys("ctrl+s"),
+			key.WithHelp("ctrl+s", "settings"),
+		),
+		// ctrl+n is NOT intercepted — reaches BubbleTea to cycle execution mode.
 		CycleMode: key.NewBinding(
-			key.WithKeys("ctrl+p"),
-			key.WithHelp("ctrl+p", "cycle mode"),
+			key.WithKeys("ctrl+n"),
+			key.WithHelp("ctrl+n", "cycle mode"),
 		),
+		CycleModeTab: key.NewBinding(
+			key.WithKeys("shift+tab"),
+			key.WithHelp("shift+tab", "cycle mode"),
+		),
+		// ctrl+t intercepted by hotkey (CmdToolsMenu) — kept for help display only.
 		ShowTools: key.NewBinding(
-			key.WithKeys("ctrl+e"),
-			key.WithHelp("ctrl+e", "show tools"),
+			key.WithKeys("ctrl+t"),
+			key.WithHelp("ctrl+t", "tools"),
 		),
+		// ctrl+f is NOT intercepted — reaches BubbleTea to fold/unfold reasoning.
 		FoldFrames: key.NewBinding(
-			key.WithKeys("ctrl+r"),
-			key.WithHelp("ctrl+r", "fold/unfold reasoning"),
+			key.WithKeys("ctrl+f"),
+			key.WithHelp("ctrl+f", "fold reasoning"),
 		),
+		// ctrl+\ (0x1C) is NOT intercepted — reaches BubbleTea directly.
 		ShowDiagnostics: key.NewBinding(
 			key.WithKeys("ctrl+\\"),
 			key.WithHelp("ctrl+\\", "diagnostics"),
@@ -111,6 +128,10 @@ func DefaultKeyMap() KeyMap {
 		ShowBookmarks: key.NewBinding(
 			key.WithKeys("ctrl+b"),
 			key.WithHelp("ctrl+b", "bookmarks"),
+		),
+		ToggleTabs: key.NewBinding(
+			key.WithKeys("ctrl+u"),
+			key.WithHelp("ctrl+u", "compact tabs"),
 		),
 		Up: key.NewBinding(
 			key.WithKeys("up", "k"),
@@ -131,18 +152,19 @@ func DefaultKeyMap() KeyMap {
 	}
 }
 
-// ShortHelp returns keybindings to be shown in the mini help view
+// ShortHelp returns keybindings to be shown in the mini help view.
+// Only lists keys that actually reach BubbleTea (not intercepted by hotkey manager).
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Help, k.Quit, k.SelectModel, k.ShowTools, k.ShowSettings, k.CycleMode, k.FoldFrames}
+	return []key.Binding{k.Submit, k.SelectModel, k.ShowTools, k.ShowSettings, k.CycleMode, k.FoldFrames, k.Quit}
 }
 
-// FullHelp returns keybindings for the full help view
+// FullHelp returns keybindings for the full help view.
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Submit, k.NewLine},
-		{k.ScrollUp, k.ScrollDown},
-		{k.ClearScreen, k.SelectModel},
-		{k.CycleMode, k.Interrupt},
-		{k.Quit, k.Help},
+		{k.Submit, k.NewLine, k.Interrupt},
+		{k.ScrollUp, k.ScrollDown, k.FocusInput},
+		{k.SelectModel, k.ShowTools, k.ShowSettings},
+		{k.CycleMode, k.FoldFrames, k.ShowDiagnostics},
+		{k.ShowBookmarks, k.ClearScreen, k.Quit},
 	}
 }

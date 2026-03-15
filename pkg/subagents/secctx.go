@@ -33,10 +33,10 @@ const (
 // Finding represents a discovered security issue.
 type Finding struct {
 	ID       string
-	Type     string         // SQLi, XSS, IDOR, SSRF, RCE, AuthnBypass, etc.
+	Type     string // SQLi, XSS, IDOR, SSRF, RCE, AuthnBypass, etc.
 	Severity FindingSeverity
 	Detail   string
-	FoundBy  string    // which agent discovered it
+	FoundBy  string // which agent discovered it
 	At       time.Time
 }
 

@@ -25,11 +25,11 @@ type FeedbackRecord struct {
 // FeedbackManager persists routing outcomes to a JSONL file and feeds them
 // into an AdaptiveRouter so future routing decisions improve over time.
 type FeedbackManager struct {
-	mu          sync.Mutex
-	logger      *slog.Logger
-	path        string // ~/.config/gorkbot/router_feedback.jsonl
-	file        *os.File
-	adaptive    *AdaptiveRouter
+	mu       sync.Mutex
+	logger   *slog.Logger
+	path     string // ~/.config/gorkbot/router_feedback.jsonl
+	file     *os.File
+	adaptive *AdaptiveRouter
 }
 
 // NewFeedbackManager creates a FeedbackManager that persists to dir/router_feedback.jsonl.

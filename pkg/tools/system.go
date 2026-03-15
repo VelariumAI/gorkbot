@@ -14,11 +14,11 @@ type ListProcessesTool struct {
 func NewListProcessesTool() *ListProcessesTool {
 	return &ListProcessesTool{
 		BaseTool: BaseTool{
-			name:              "list_processes",
-			description:       "List running processes with details (PID, CPU, memory, command)",
-			category:          CategorySystem,
+			name:               "list_processes",
+			description:        "List running processes with details (PID, CPU, memory, command)",
+			category:           CategorySystem,
 			requiresPermission: false,
-			defaultPermission: PermissionAlways,
+			defaultPermission:  PermissionAlways,
 		},
 	}
 }
@@ -87,11 +87,11 @@ type KillProcessTool struct {
 func NewKillProcessTool() *KillProcessTool {
 	return &KillProcessTool{
 		BaseTool: BaseTool{
-			name:              "kill_process",
-			description:       "Terminate a process by PID or name",
-			category:          CategorySystem,
+			name:               "kill_process",
+			description:        "Terminate a process by PID or name",
+			category:           CategorySystem,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -158,11 +158,11 @@ type EnvVarTool struct {
 func NewEnvVarTool() *EnvVarTool {
 	return &EnvVarTool{
 		BaseTool: BaseTool{
-			name:              "env_var",
-			description:       "Get or set environment variables",
-			category:          CategorySystem,
+			name:               "env_var",
+			description:        "Get or set environment variables",
+			category:           CategorySystem,
 			requiresPermission: true,
-			defaultPermission: PermissionSession,
+			defaultPermission:  PermissionSession,
 		},
 	}
 }
@@ -249,11 +249,11 @@ type SystemInfoTool struct {
 func NewSystemInfoTool() *SystemInfoTool {
 	return &SystemInfoTool{
 		BaseTool: BaseTool{
-			name:              "system_info",
-			description:       "Get system information (OS, CPU, memory, disk, uptime)",
-			category:          CategorySystem,
+			name:               "system_info",
+			description:        "Get system information (OS, CPU, memory, disk, uptime)",
+			category:           CategorySystem,
 			requiresPermission: false,
-			defaultPermission: PermissionAlways,
+			defaultPermission:  PermissionAlways,
 		},
 	}
 }
@@ -316,11 +316,11 @@ type DiskUsageTool struct {
 func NewDiskUsageTool() *DiskUsageTool {
 	return &DiskUsageTool{
 		BaseTool: BaseTool{
-			name:              "disk_usage",
-			description:       "Analyze disk usage of directories and files",
-			category:          CategorySystem,
+			name:               "disk_usage",
+			description:        "Analyze disk usage of directories and files",
+			category:           CategorySystem,
 			requiresPermission: false,
-			defaultPermission: PermissionAlways,
+			defaultPermission:  PermissionAlways,
 		},
 	}
 }

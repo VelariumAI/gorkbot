@@ -32,7 +32,7 @@ func (km *KeyManager) GetOrCreateKey() ([]byte, error) {
 		if _, err := rand.Read(key); err != nil {
 			return nil, fmt.Errorf("failed to generate random key: %w", err)
 		}
-		
+
 		// Save key securely
 		if err := os.WriteFile(km.keyPath, key, 0600); err != nil {
 			return nil, fmt.Errorf("failed to save key: %w", err)

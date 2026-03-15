@@ -1,0 +1,13 @@
+{
+  "name": "shell_system_demo",
+  "description": "Executes safe shell commands and reads system files for demo purposes. Supports echo, read_file, and basic system queries.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

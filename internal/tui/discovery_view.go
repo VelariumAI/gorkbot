@@ -31,11 +31,11 @@ var (
 			Foreground(lipgloss.Color("240")).
 			Italic(true)
 
-	treeRunningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))   // blue
-	treeDoneStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))   // green
-	treeFailStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))  // red
-	treeVerifyStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))  // yellow
-	treeDepthStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))  // dim
+	treeRunningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))  // blue
+	treeDoneStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))  // green
+	treeFailStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196")) // red
+	treeVerifyStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("220")) // yellow
+	treeDepthStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // dim
 
 	splitDivider = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240"))

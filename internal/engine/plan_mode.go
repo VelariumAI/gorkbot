@@ -2,8 +2,67 @@ package engine
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 )
+
+// ExecutePlanMode is the entry point for ARC Router's Complex/Plan mode execution.
+// It securely executes the provided planFunc while ensuring interim reasoning buffers
+// are evaluated and token usage strictly incremented without polluting context.
+func ExecutePlanMode(orch *Orchestrator, planningBuf *strings.Builder, planFunc func() error) (err error) {
+	// Edge-Case Anticipation: handle nil dependencies gracefully
+	if orch == nil {
+		return fmt.Errorf("ExecutePlanMode: orchestrator is nil")
+	}
+
+	// State-Safe Execution: defer block guarantees token accrual and buffer reset
+	// whether the function succeeds, fails via tool error/network, or panics.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("planning mode panicked: %v", r)
+		}
+
+		if planningBuf == nil || orch.ContextMgr == nil {
+			return
+		}
+
+		// Explicit Token Tracking: strictly increment usage
+		tokensUsed := orch.ContextMgr.TrackTokens(planningBuf)
+
+		// Summarized History Commit: append system note, avoid context contamination
+		if orch.ConversationHistory != nil {
+			summaryMsg := fmt.Sprintf("[System: Planning phase completed - %d tokens used]", tokensUsed)
+			orch.ConversationHistory.AddMessage("system", summaryMsg)
+		}
+
+		// Safely evaluate and wipe buffer
+		planningBuf.Reset()
+	}()
+
+	if planFunc != nil {
+		return planFunc()
+	}
+	return nil
+}
+
+// TrackTokens calculates and strictly increments token usage based on buffer size,
+// without writing raw content to the history.
+func (cm *ContextManager) TrackTokens(buf *strings.Builder) int {
+	if cm == nil || buf == nil {
+		return 0
+	}
+	// Approximate 4 bytes per token for buffer text
+	tokens := buf.Len() / 4
+	if tokens == 0 && buf.Len() > 0 {
+		tokens = 1
+	}
+
+	cm.mu.Lock()
+	cm.inputTokens += tokens
+	cm.totalInputTokens += tokens
+	cm.mu.Unlock()
+	return tokens
+}
 
 // ExecutionMode controls which tools are allowed and how permissions are handled.
 type ExecutionMode int
@@ -34,21 +93,21 @@ var modeDescriptions = map[ExecutionMode]string{
 
 // planModeBlockedTools lists tools that are blocked in ModePlan.
 var planModeBlockedTools = map[string]bool{
-	"bash":         true,
-	"write_file":   true,
-	"edit_file":    true,
-	"multi_edit_file": true,
-	"delete_file":  true,
-	"git_commit":   true,
-	"git_push":     true,
-	"git_pull":     true,
-	"kill_process": true,
+	"bash":                     true,
+	"write_file":               true,
+	"edit_file":                true,
+	"multi_edit_file":          true,
+	"delete_file":              true,
+	"git_commit":               true,
+	"git_push":                 true,
+	"git_pull":                 true,
+	"kill_process":             true,
 	"start_background_process": true,
 	"stop_background_process":  true,
-	"pkg_install":  true,
-	"db_migrate":   true,
-	"create_tool":  true,
-	"modify_tool":  true,
+	"pkg_install":              true,
+	"db_migrate":               true,
+	"create_tool":              true,
+	"modify_tool":              true,
 }
 
 // autoEditApprovedTools lists tools that are auto-approved in ModeAutoEdit.
@@ -126,7 +185,7 @@ func (mm *ModeManager) Name() string {
 }
 
 // SetMode switches the mode by name string ("NORMAL", "PLAN", "AUTO").
-// Satisfies the cci.ModeManagerIface interface.
+// Satisfies the adaptive.ModeManagerIface interface.
 func (mm *ModeManager) SetMode(name string) {
 	switch name {
 	case "PLAN":

@@ -9,31 +9,31 @@ import (
 type ErrorCode string
 
 const (
-	ErrCodePermission    ErrorCode = "PERMISSION_DENIED"
-	ErrCodeNotFound      ErrorCode = "NOT_FOUND"
-	ErrCodeTimeout       ErrorCode = "TIMEOUT"
-	ErrCodeNetworkFail   ErrorCode = "NETWORK_ERROR"
-	ErrCodeInvalidParam  ErrorCode = "INVALID_PARAMETER"
-	ErrCodeRateLimit     ErrorCode = "RATE_LIMITED"
-	ErrCodeAuthFail      ErrorCode = "AUTH_FAILED"
+	ErrCodePermission     ErrorCode = "PERMISSION_DENIED"
+	ErrCodeNotFound       ErrorCode = "NOT_FOUND"
+	ErrCodeTimeout        ErrorCode = "TIMEOUT"
+	ErrCodeNetworkFail    ErrorCode = "NETWORK_ERROR"
+	ErrCodeInvalidParam   ErrorCode = "INVALID_PARAMETER"
+	ErrCodeRateLimit      ErrorCode = "RATE_LIMITED"
+	ErrCodeAuthFail       ErrorCode = "AUTH_FAILED"
 	ErrCodeOutputTooLarge ErrorCode = "OUTPUT_TOO_LARGE"
-	ErrCodeCommandFail   ErrorCode = "COMMAND_FAILED"
-	ErrCodeUnknown       ErrorCode = "UNKNOWN"
+	ErrCodeCommandFail    ErrorCode = "COMMAND_FAILED"
+	ErrCodeUnknown        ErrorCode = "UNKNOWN"
 )
 
 // RecoveryAction describes a concrete next step the AI should take.
 type RecoveryAction string
 
 const (
-	ActionRetry          RecoveryAction = "retry"
-	ActionRetryWithSudo  RecoveryAction = "retry_with_sudo"
-	ActionCheckPath      RecoveryAction = "check_path"
-	ActionCheckNetwork   RecoveryAction = "check_network"
-	ActionReduceScope    RecoveryAction = "reduce_scope"
-	ActionWaitRetry      RecoveryAction = "wait_and_retry"
-	ActionFixParam       RecoveryAction = "fix_parameter"
-	ActionCheckAuth      RecoveryAction = "check_auth"
-	ActionNone           RecoveryAction = "none"
+	ActionRetry         RecoveryAction = "retry"
+	ActionRetryWithSudo RecoveryAction = "retry_with_sudo"
+	ActionCheckPath     RecoveryAction = "check_path"
+	ActionCheckNetwork  RecoveryAction = "check_network"
+	ActionReduceScope   RecoveryAction = "reduce_scope"
+	ActionWaitRetry     RecoveryAction = "wait_and_retry"
+	ActionFixParam      RecoveryAction = "fix_parameter"
+	ActionCheckAuth     RecoveryAction = "check_auth"
+	ActionNone          RecoveryAction = "none"
 )
 
 // ToolError is a structured error with recovery guidance returned in tool results.

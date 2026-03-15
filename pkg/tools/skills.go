@@ -20,11 +20,11 @@ type WebSearchTool struct {
 func NewWebSearchTool() *WebSearchTool {
 	return &WebSearchTool{
 		BaseTool: BaseTool{
-			name:        "web_search",
-			description: "Search the web for real-time information. Returns clean search results with titles, URLs, and snippets. Use when you need to find web resources on a topic.",
-			category:    CategoryWeb,
+			name:               "web_search",
+			description:        "Search the web for real-time information. Returns clean search results with titles, URLs, and snippets. Use when you need to find web resources on a topic.",
+			category:           CategoryWeb,
 			requiresPermission: true,
-			defaultPermission: PermissionSession,
+			defaultPermission:  PermissionSession,
 		},
 	}
 }
@@ -70,9 +70,9 @@ func (t *WebSearchTool) Execute(ctx context.Context, params map[string]interface
 	quietPluginPath := filepath.Join(os.Getenv("HOME"), "project/gorkbot/plugins/python/scrapling_search/quiet_search.py")
 
 	input := map[string]interface{}{
-		"query":        query,
-		"num_results":  numResults,
-		"engine":       "duckduckgo",
+		"query":       query,
+		"num_results": numResults,
+		"engine":      "duckduckgo",
 	}
 	inputJSON, _ := json.Marshal(input)
 
@@ -95,9 +95,9 @@ func (t *WebSearchTool) Execute(ctx context.Context, params map[string]interface
 
 	// Parse the JSON response
 	var result struct {
-		Success  bool     `json:"success"`
-		Output   string   `json:"output"`
-		Error    string   `json:"error"`
+		Success bool   `json:"success"`
+		Output  string `json:"output"`
+		Error   string `json:"error"`
 	}
 
 	if err := json.Unmarshal(outputBytes, &result); err != nil {
@@ -153,11 +153,11 @@ type WebReaderTool struct {
 func NewWebReaderTool() *WebReaderTool {
 	return &WebReaderTool{
 		BaseTool: BaseTool{
-			name:        "web_reader",
-			description: "Extract and parse clean text content from web pages. Similar to web_fetch but with more extraction options like link extraction. Use when you need to get readable content from a URL.",
-			category:    CategoryWeb,
+			name:               "web_reader",
+			description:        "Extract and parse clean text content from web pages. Similar to web_fetch but with more extraction options like link extraction. Use when you need to get readable content from a URL.",
+			category:           CategoryWeb,
 			requiresPermission: true,
-			defaultPermission: PermissionSession,
+			defaultPermission:  PermissionSession,
 		},
 	}
 }
@@ -289,11 +289,11 @@ type DOCXTool struct {
 func NewDOCXTool() *DOCXTool {
 	return &DOCXTool{
 		BaseTool: BaseTool{
-			name:              "docx",
-			description:       "Create or edit Word documents (.docx files)",
-			category:          CategoryFile,
+			name:               "docx",
+			description:        "Create or edit Word documents (.docx files)",
+			category:           CategoryFile,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -366,11 +366,11 @@ type XLSXTool struct {
 func NewXLSXTool() *XLSXTool {
 	return &XLSXTool{
 		BaseTool: BaseTool{
-			name:              "xlsx",
-			description:       "Create or read Excel spreadsheets (.xlsx files) - basic CSV conversion",
-			category:          CategoryFile,
+			name:               "xlsx",
+			description:        "Create or read Excel spreadsheets (.xlsx files) - basic CSV conversion",
+			category:           CategoryFile,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -441,11 +441,11 @@ type PDFTool struct {
 func NewPDFTool() *PDFTool {
 	return &PDFTool{
 		BaseTool: BaseTool{
-			name:              "pdf",
-			description:       "Create or read PDF documents (requires pdftotext/pandoc for reading)",
-			category:          CategoryFile,
+			name:               "pdf",
+			description:        "Create or read PDF documents (requires pdftotext/pandoc for reading)",
+			category:           CategoryFile,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -514,11 +514,11 @@ type PPTXTool struct {
 func NewPPTXTool() *PPTXTool {
 	return &PPTXTool{
 		BaseTool: BaseTool{
-			name:              "pptx",
-			description:       "Create or read PowerPoint presentations (.pptx files, requires pandoc)",
-			category:          CategoryFile,
+			name:               "pptx",
+			description:        "Create or read PowerPoint presentations (.pptx files, requires pandoc)",
+			category:           CategoryFile,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -587,11 +587,11 @@ type FrontendDesignTool struct {
 func NewFrontendDesignTool() *FrontendDesignTool {
 	return &FrontendDesignTool{
 		BaseTool: BaseTool{
-			name:              "frontend_design",
-			description:       "Generate UI designs and frontend code using AI assistance",
-			category:          CategoryMeta,
+			name:               "frontend_design",
+			description:        "Generate UI designs and frontend code using AI assistance",
+			category:           CategoryMeta,
 			requiresPermission: false,
-			defaultPermission: PermissionAlways,
+			defaultPermission:  PermissionAlways,
 		},
 	}
 }

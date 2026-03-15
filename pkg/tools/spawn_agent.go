@@ -113,8 +113,8 @@ func (t *SpawnAgentTool) Execute(ctx context.Context, params map[string]interfac
 	spawner := BackgroundSpawnerFromContext(ctx)
 	if spawner == nil {
 		return &ToolResult{
-			Success: false,
-			Output:  "background agent manager not available in this context",
+			Success:      false,
+			Output:       "background agent manager not available in this context",
 			OutputFormat: FormatError,
 		}, nil
 	}
@@ -122,15 +122,15 @@ func (t *SpawnAgentTool) Execute(ctx context.Context, params map[string]interfac
 	id, err := spawner.SpawnFromTool(ctx, label, prompt, model)
 	if err != nil {
 		return &ToolResult{
-			Success: false,
-			Output:  fmt.Sprintf("failed to spawn agent: %v", err),
+			Success:      false,
+			Output:       fmt.Sprintf("failed to spawn agent: %v", err),
 			OutputFormat: FormatError,
 		}, nil
 	}
 
 	return &ToolResult{
-		Success: true,
-		Output:  fmt.Sprintf("Background agent spawned.\nagent_id: %s\nlabel: %s\n\nUse collect_agent with agent_id=%q to retrieve the result when ready.", id, label, id),
+		Success:      true,
+		Output:       fmt.Sprintf("Background agent spawned.\nagent_id: %s\nlabel: %s\n\nUse collect_agent with agent_id=%q to retrieve the result when ready.", id, label, id),
 		OutputFormat: FormatText,
 	}, nil
 }
@@ -189,8 +189,8 @@ func (t *CollectAgentTool) Execute(ctx context.Context, params map[string]interf
 	spawner := BackgroundSpawnerFromContext(ctx)
 	if spawner == nil {
 		return &ToolResult{
-			Success: false,
-			Output:  "background agent manager not available in this context",
+			Success:      false,
+			Output:       "background agent manager not available in this context",
 			OutputFormat: FormatError,
 		}, nil
 	}
@@ -198,15 +198,15 @@ func (t *CollectAgentTool) Execute(ctx context.Context, params map[string]interf
 	result, err := spawner.CollectFromTool(ctx, agentID, timeoutSec)
 	if err != nil {
 		return &ToolResult{
-			Success: false,
-			Output:  fmt.Sprintf("agent %s failed or timed out: %v", agentID, err),
+			Success:      false,
+			Output:       fmt.Sprintf("agent %s failed or timed out: %v", agentID, err),
 			OutputFormat: FormatError,
 		}, nil
 	}
 
 	return &ToolResult{
-		Success: true,
-		Output:  fmt.Sprintf("=== Result from background agent %s ===\n\n%s", agentID, result),
+		Success:      true,
+		Output:       fmt.Sprintf("=== Result from background agent %s ===\n\n%s", agentID, result),
 		OutputFormat: FormatText,
 	}, nil
 }
@@ -245,8 +245,8 @@ func (t *ListAgentsTool) Execute(ctx context.Context, params map[string]interfac
 	spawner := BackgroundSpawnerFromContext(ctx)
 	if spawner == nil {
 		return &ToolResult{
-			Success: true,
-			Output:  "No background agent manager available (no agents spawned yet).",
+			Success:      true,
+			Output:       "No background agent manager available (no agents spawned yet).",
 			OutputFormat: FormatText,
 		}, nil
 	}
@@ -254,8 +254,8 @@ func (t *ListAgentsTool) Execute(ctx context.Context, params map[string]interfac
 	agents := spawner.ListRunningFromTool()
 	if len(agents) == 0 {
 		return &ToolResult{
-			Success: true,
-			Output:  "No background agents in this session.",
+			Success:      true,
+			Output:       "No background agents in this session.",
 			OutputFormat: FormatText,
 		}, nil
 	}
@@ -270,8 +270,8 @@ func (t *ListAgentsTool) Execute(ctx context.Context, params map[string]interfac
 	}
 
 	return &ToolResult{
-		Success: true,
-		Output:  lines,
+		Success:      true,
+		Output:       lines,
 		OutputFormat: FormatText,
 	}, nil
 }

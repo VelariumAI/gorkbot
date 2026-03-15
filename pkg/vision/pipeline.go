@@ -13,8 +13,8 @@ import (
 // AnalysisResult is the output of any vision pipeline operation.
 type AnalysisResult struct {
 	Analysis        string
-	CaptureStrategy string        // which capture method was used (empty for file/URL inputs)
-	ImageSize       int           // encoded byte count sent to API
+	CaptureStrategy string // which capture method was used (empty for file/URL inputs)
+	ImageSize       int    // encoded byte count sent to API
 	Duration        time.Duration
 }
 

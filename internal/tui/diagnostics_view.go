@@ -185,16 +185,31 @@ func (m *Model) renderDiagnosticsView() string {
 		healthLines = append(healthLines, kv("Agents:", fmt.Sprintf("%d running / %d total", len(running), len(all))))
 	}
 
-	// Top tool
-	if orch.Registry != nil && orch.Registry.GetAnalytics() != nil {
-		top := orch.Registry.GetAnalytics().GetTopTools(1)
-		if len(top) > 0 {
-			rate := 0.0
-			if top[0].ExecutionCount > 0 {
-				rate = float64(top[0].SuccessCount) / float64(top[0].ExecutionCount) * 100
+	// Top tool — prefer all-time audit DB, fall back to session analytics.
+	if orch.Registry != nil {
+		reported := false
+		if adb := orch.Registry.GetAuditDB(); adb != nil {
+			if top, err := adb.TopTools(1); err == nil && len(top) > 0 {
+				t := top[0]
+				rate := 0.0
+				if t.ExecutionCount > 0 {
+					rate = float64(t.SuccessCount) / float64(t.ExecutionCount) * 100
+				}
+				healthLines = append(healthLines, kv("Top tool (all-time):",
+					fmt.Sprintf("%s (%d calls, %.0f%%)", t.ToolName, t.ExecutionCount, rate)))
+				reported = true
 			}
-			healthLines = append(healthLines, kv("Top tool:",
-				fmt.Sprintf("%s (%d calls, %.0f%%)", top[0].ToolName, top[0].ExecutionCount, rate)))
+		}
+		if !reported && orch.Registry.GetAnalytics() != nil {
+			top := orch.Registry.GetAnalytics().GetTopTools(1)
+			if len(top) > 0 {
+				rate := 0.0
+				if top[0].ExecutionCount > 0 {
+					rate = float64(top[0].SuccessCount) / float64(top[0].ExecutionCount) * 100
+				}
+				healthLines = append(healthLines, kv("Top tool (session):",
+					fmt.Sprintf("%s (%d calls, %.0f%%)", top[0].ToolName, top[0].ExecutionCount, rate)))
+			}
 		}
 	}
 

@@ -33,7 +33,7 @@ func (r *Router) SelectModel(req RouteRequest) (*RouteDecision, error) {
 
 	// 2. Determine Task Needs
 	complexity := analyzePromptComplexity(req.Prompt)
-	
+
 	// Override complexity if quality preference is explicit
 	if req.QualityPreference > 0.8 {
 		complexity = ComplexityAdvanced
@@ -45,7 +45,7 @@ func (r *Router) SelectModel(req RouteRequest) (*RouteDecision, error) {
 		score int
 		tier  ModelTier
 	}
-	
+
 	var scoredCandidates []scoredModel
 
 	for _, m := range candidates {
@@ -54,7 +54,7 @@ func (r *Router) SelectModel(req RouteRequest) (*RouteDecision, error) {
 		tier := classifyModelTier(m)
 
 		// -- Filter: Hard Constraints --
-		
+
 		// Context Window
 		if req.ContextSize > m.Capabilities.MaxContextTokens {
 			continue
@@ -97,14 +97,14 @@ func (r *Router) SelectModel(req RouteRequest) (*RouteDecision, error) {
 		// Instead of hard filtering "nano/micro", we nuke their score
 		// so they are only picked if they are the ONLY valid option.
 		id := strings.ToLower(string(m.ID))
-		if strings.Contains(id, "nano") || 
-		   strings.Contains(id, "micro") || 
-		   strings.Contains(id, "8b") ||
-		   strings.Contains(id, "1b") ||
-		   strings.Contains(id, "2b") {
+		if strings.Contains(id, "nano") ||
+			strings.Contains(id, "micro") ||
+			strings.Contains(id, "8b") ||
+			strings.Contains(id, "1b") ||
+			strings.Contains(id, "2b") {
 			score -= 500
 		}
-		
+
 		// Deprecated/Legacy Filter
 		if strings.Contains(id, "001") || strings.Contains(id, "1.0") {
 			score -= 300
@@ -114,7 +114,7 @@ func (r *Router) SelectModel(req RouteRequest) (*RouteDecision, error) {
 	}
 
 	if len(scoredCandidates) == 0 {
-		return nil, fmt.Errorf("no models satisfy requirements (Context: %d, Vision: %v, Tools: %v)", 
+		return nil, fmt.Errorf("no models satisfy requirements (Context: %d, Vision: %v, Tools: %v)",
 			req.ContextSize, req.RequiresVision, req.RequiresTools)
 	}
 
@@ -126,7 +126,7 @@ func (r *Router) SelectModel(req RouteRequest) (*RouteDecision, error) {
 	// 5. Build Decision
 	best := scoredCandidates[0]
 	var fallback *registry.ModelDefinition
-	
+
 	if len(scoredCandidates) > 1 {
 		fallback = &scoredCandidates[1].model
 	}
@@ -134,17 +134,21 @@ func (r *Router) SelectModel(req RouteRequest) (*RouteDecision, error) {
 	// Explain logic
 	tierName := "Standard"
 	switch best.tier {
-	case TierFast: tierName = "Fast"
-	case TierReasoning: tierName = "Reasoning"
-	}
-	
-	compName := "Standard"
-	switch complexity {
-	case ComplexitySimple: compName = "Simple"
-	case ComplexityAdvanced: compName = "Advanced"
+	case TierFast:
+		tierName = "Fast"
+	case TierReasoning:
+		tierName = "Reasoning"
 	}
 
-	reasoning := fmt.Sprintf("Task '%s'. Selected '%s' (%s) score=%d. (Role Bias: %v)", 
+	compName := "Standard"
+	switch complexity {
+	case ComplexitySimple:
+		compName = "Simple"
+	case ComplexityAdvanced:
+		compName = "Advanced"
+	}
+
+	reasoning := fmt.Sprintf("Task '%s'. Selected '%s' (%s) score=%d. (Role Bias: %v)",
 		compName, best.model.Name, tierName, best.score, req.Role)
 
 	return &RouteDecision{
@@ -176,10 +180,10 @@ func (r *Router) SelectSystemModels() (*SystemConfiguration, error) {
 	for _, m := range candidates {
 		// Grade every model
 		score := calculateDynamicScore(m)
-		
+
 		// Filter out low-quality/legacy models immediately for system selection
 		if score < 0 {
-			continue 
+			continue
 		}
 
 		// Sort into buckets
@@ -194,7 +198,7 @@ func (r *Router) SelectSystemModels() (*SystemConfiguration, error) {
 	if len(grokCandidates) == 0 {
 		return nil, fmt.Errorf("no xAI (Grok) models available for Primary role")
 	}
-	
+
 	// Sort by score descending
 	sort.Slice(grokCandidates, func(i, j int) bool {
 		return grokCandidates[i].score > grokCandidates[j].score
@@ -215,7 +219,7 @@ func (r *Router) SelectSystemModels() (*SystemConfiguration, error) {
 	return &SystemConfiguration{
 		PrimaryModel:    primary,
 		SpecialistModel: specialist,
-		Reasoning:       fmt.Sprintf("Selected Primary: %s (Score: %d), Specialist: %s (Score: %d)", 
+		Reasoning: fmt.Sprintf("Selected Primary: %s (Score: %d), Specialist: %s (Score: %d)",
 			primary.Name, grokCandidates[0].score, specialist.Name, geminiCandidates[0].score),
 	}, nil
 }

@@ -15,18 +15,17 @@ import (
 	"context"
 	"strings"
 
-	"github.com/velariumai/gorkbot/internal/arc"
-	"github.com/velariumai/gorkbot/pkg/cci"
+	"github.com/velariumai/gorkbot/pkg/adaptive"
 	"github.com/velariumai/gorkbot/pkg/tools"
 )
 
 // InitCCI initializes the CCILayer and attaches it to the Orchestrator.
 // Should be called from InitEnhancements() after configDir is known.
 func (o *Orchestrator) InitCCI(configDir, cwd string) {
-	layer := cci.NewCCILayer(configDir, cwd, o.Logger)
+	layer := adaptive.NewCCILayer(configDir, cwd, o.Logger)
 
 	// Wire the ARC trigger table as the specialist routing function.
-	layer.TriggerFn = arc.MatchTrigger
+	layer.TriggerFn = adaptive.MatchTrigger
 
 	o.CCI = layer
 
@@ -66,7 +65,7 @@ func (o *Orchestrator) HandleCCIGap(subsystem string) string {
 	if o.CCI == nil {
 		return ""
 	}
-	var mm cci.ModeManagerIface
+	var mm adaptive.ModeManagerIface
 	if o.ModeManager != nil {
 		mm = o.ModeManager
 	}

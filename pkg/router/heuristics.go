@@ -12,10 +12,10 @@ import (
 type ModelTier int
 
 const (
-	TierUnknown ModelTier = iota
-	TierFast              // Low context, efficiency focused
-	TierStandard          // Balanced
-	TierReasoning         // High context, high version number
+	TierUnknown   ModelTier = iota
+	TierFast                // Low context, efficiency focused
+	TierStandard            // Balanced
+	TierReasoning           // High context, high version number
 )
 
 // TaskComplexity represents the estimated difficulty of a prompt
@@ -39,7 +39,7 @@ func calculateDynamicScore(m registry.ModelDefinition) int {
 	// Avoid matching "1206" (dates) or "001" (builds) as massive version numbers.
 	re := regexp.MustCompile(`(?:v|-)?(\d+(\.\d+)?)`)
 	matches := re.FindAllStringSubmatch(id, -1)
-	
+
 	maxVer := 0.0
 	for _, m := range matches {
 		if len(m) >= 2 {
@@ -54,10 +54,10 @@ func calculateDynamicScore(m registry.ModelDefinition) int {
 			}
 		}
 	}
-	
+
 	if maxVer > 0 {
 		// Grok 3 (150pts) vs Gemini 1.5 (75pts)
-		score += int(maxVer * 50) 
+		score += int(maxVer * 50)
 	}
 
 	// 2. Context Window Proxy (Capacity = Power)
@@ -84,15 +84,19 @@ func calculateDynamicScore(m registry.ModelDefinition) int {
 	if strings.Contains(id, "flash") || strings.Contains(id, "fast") {
 		// Fast models are good, but "lighter" than Pro.
 		// We don't penalize much, but Pro beats Flash.
-		score += 50 
+		score += 50
 	}
 	if strings.Contains(id, "mini") || strings.Contains(id, "nano") || strings.Contains(id, "micro") {
 		score -= 100 // Explicitly lightweight
 	}
-	
+
 	// 4. Vision/Tools Bonus
-	if m.Capabilities.SupportsVision { score += 20 }
-	if m.Capabilities.SupportsTools { score += 20 }
+	if m.Capabilities.SupportsVision {
+		score += 20
+	}
+	if m.Capabilities.SupportsTools {
+		score += 20
+	}
 
 	return score
 }
@@ -100,7 +104,7 @@ func calculateDynamicScore(m registry.ModelDefinition) int {
 // classifyModelTier dynamically assigns a tier based on score
 func classifyModelTier(m registry.ModelDefinition) ModelTier {
 	score := calculateDynamicScore(m)
-	
+
 	// These thresholds need to be relative to the ecosystem
 	if score > 400 {
 		return TierReasoning
@@ -126,7 +130,7 @@ func analyzePromptComplexity(prompt string) TaskComplexity {
 
 	// Keyword Heuristics - Reasoning Indicators
 	reasoningKeywords := []string{
-		"architect", "design", "refactor", "debug", "analyze", 
+		"architect", "design", "refactor", "debug", "analyze",
 		"explain why", "compare", "strategy", "plan", "complex",
 		"algorithm", "security", "optimize", "synthesis",
 	}
@@ -138,7 +142,7 @@ func analyzePromptComplexity(prompt string) TaskComplexity {
 	}
 
 	score := 0
-	
+
 	for _, kw := range reasoningKeywords {
 		if strings.Contains(p, kw) {
 			score += 2

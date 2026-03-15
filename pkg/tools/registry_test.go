@@ -7,10 +7,10 @@ import (
 // TestToolNormalization tests parameter normalization
 func TestToolNormalization(t *testing.T) {
 	tests := []struct {
-		name       string
-		toolName   string
-		params     map[string]interface{}
-		expected   map[string]interface{}
+		name     string
+		toolName string
+		params   map[string]interface{}
+		expected map[string]interface{}
 	}{
 		{
 			name:     "query to pattern",

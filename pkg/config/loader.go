@@ -128,6 +128,20 @@ Run:   ./myapp
 	return os.WriteFile(path, []byte(template), 0644)
 }
 
+// LoadSubdirInstructions returns the GORKBOT.md content for the directory
+// containing filePath. Returns "" if no GORKBOT.md is found in that directory.
+// This enables lazy injection of subdirectory-specific instructions when a file
+// in that directory is first accessed.
+func (l *Loader) LoadSubdirInstructions(filePath string) string {
+	dir := filepath.Dir(filePath)
+	// Resolve to absolute path.
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(l.cwd, dir)
+	}
+	path := filepath.Join(dir, "GORKBOT.md")
+	return readFile(path)
+}
+
 // ActiveFiles returns the list of config files that are currently loaded.
 func (l *Loader) ActiveFiles() []string {
 	var files []string

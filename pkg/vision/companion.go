@@ -409,11 +409,11 @@ local.properties
 
 // ─── Exported accessors for vision_install tool ───────────────────────────────
 
-func CompanionSettingsGradle() string    { return companionSettingsGradle }
-func CompanionRootGradle() string        { return companionRootGradle }
-func CompanionAppGradle() string         { return companionAppGradle }
-func CompanionManifest() string          { return companionManifest }
+func CompanionSettingsGradle() string     { return companionSettingsGradle }
+func CompanionRootGradle() string         { return companionRootGradle }
+func CompanionAppGradle() string          { return companionAppGradle }
+func CompanionManifest() string           { return companionManifest }
 func CompanionPermissionActivity() string { return companionPermissionActivity }
-func CompanionScreenService() string     { return companionScreenService }
-func CompanionBootReceiver() string      { return companionBootReceiver }
-func CompanionGitignore() string         { return companionGitignore }
+func CompanionScreenService() string      { return companionScreenService }
+func CompanionBootReceiver() string       { return companionBootReceiver }
+func CompanionGitignore() string          { return companionGitignore }

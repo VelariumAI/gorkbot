@@ -196,11 +196,11 @@ var builtins = map[string]*Theme{
 
 // Manager loads, stores, and activates themes.
 type Manager struct {
-	mu          sync.RWMutex
-	themesDir   string
-	activeFile  string
-	active      *Theme
-	userThemes  map[string]*Theme
+	mu         sync.RWMutex
+	themesDir  string
+	activeFile string
+	active     *Theme
+	userThemes map[string]*Theme
 }
 
 // NewManager creates a theme manager. themesDir is where user theme JSON files live.

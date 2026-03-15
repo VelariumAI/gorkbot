@@ -17,10 +17,10 @@ type Role struct {
 
 // DefaultRoles provides a balanced set of analytical perspectives
 var DefaultRoles = []Role{
-	{Name: "Advocate",   Stance: "advocate",   Focus: "benefits and opportunities"},
-	{Name: "Critic",     Stance: "critic",      Focus: "risks, flaws, and failure modes"},
-	{Name: "Pragmatist", Stance: "pragmatist",  Focus: "implementation complexity and trade-offs"},
-	{Name: "Contrarian", Stance: "contrarian",  Focus: "alternative approaches and unconventional angles"},
+	{Name: "Advocate", Stance: "advocate", Focus: "benefits and opportunities"},
+	{Name: "Critic", Stance: "critic", Focus: "risks, flaws, and failure modes"},
+	{Name: "Pragmatist", Stance: "pragmatist", Focus: "implementation complexity and trade-offs"},
+	{Name: "Contrarian", Stance: "contrarian", Focus: "alternative approaches and unconventional angles"},
 }
 
 // Bee represents a single analyst in the colony

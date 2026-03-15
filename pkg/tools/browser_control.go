@@ -16,11 +16,11 @@ type BrowserControlTool struct {
 func NewBrowserControlTool() *BrowserControlTool {
 	return &BrowserControlTool{
 		BaseTool: BaseTool{
-			name:              "browser_control",
-			description:       "Comprehensive browser automation (navigate, click, type, screenshot, evaluate, wait). Supports React/SPA.",
-			category:          CategoryWeb,
+			name:               "browser_control",
+			description:        "Comprehensive browser automation (navigate, click, type, screenshot, evaluate, wait). Supports React/SPA.",
+			category:           CategoryWeb,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -87,9 +87,9 @@ func (t *BrowserControlTool) Execute(ctx context.Context, params map[string]inte
 	scriptPath := filepath.Join(projectRoot, "scripts/browser_bridge.js")
 
 	// Command to run the node script
-	command := fmt.Sprintf("node %s %s %s", 
-		shellescape(scriptPath), 
-		shellescape(action), 
+	command := fmt.Sprintf("node %s %s %s",
+		shellescape(scriptPath),
+		shellescape(action),
 		shellescape(string(paramsJSON)))
 
 	bashTool := NewBashTool()

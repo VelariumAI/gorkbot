@@ -1,20 +1,25 @@
 package tui
 
 import (
-        "context"
-        "fmt"
-        "time"
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"time"
 
-        "github.com/charmbracelet/bubbles/key"
-        "github.com/charmbracelet/bubbles/list"
-        "github.com/charmbracelet/bubbles/spinner"
-        "github.com/charmbracelet/bubbles/textarea"
-        tea "github.com/charmbracelet/bubbletea"
-        "github.com/charmbracelet/glamour"
-        "github.com/velariumai/gorkbot/internal/engine"
-        "github.com/velariumai/gorkbot/pkg/commands"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textarea"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
+	"github.com/velariumai/gorkbot/internal/engine"
+	"github.com/velariumai/gorkbot/pkg/commands"
+	"github.com/velariumai/gorkbot/pkg/dag"
 	"github.com/velariumai/gorkbot/pkg/tools"
+	"github.com/velariumai/gorkbot/pkg/tui/hotkeys"
 )
+
 // Update handles all messages and updates the model
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -35,11 +40,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// 1b. Dynamic Auth Wizard — intercepts key events when awaiting credentials
+	if m.awaitingAuth {
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			switch keyMsg.Type {
+			case tea.KeyEnter:
+				val := m.authInput.Value()
+				if m.authRequest != nil && m.authRequest.ResponseChan != nil {
+					m.authRequest.ResponseChan <- val
+				}
+				m.awaitingAuth = false
+				return m, nil
+			case tea.KeyEsc:
+				if m.authRequest != nil && m.authRequest.ResponseChan != nil {
+					m.authRequest.ResponseChan <- ""
+				}
+				m.awaitingAuth = false
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.authInput, cmd = m.authInput.Update(msg)
+			return m, cmd
+		}
+	}
+
 	// 1. Overlay Handling (Modal Priority)
 	if m.activeOverlay != nil {
 		newOverlay, cmd := m.activeOverlay.Update(msg)
 		cmds = append(cmds, cmd)
-		
+
 		if newOverlay == nil {
 			// Overlay requested close
 			m.activeOverlay = nil
@@ -121,23 +150,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case ToastMsg:
-		m.toasts = append(m.toasts, activeToast{
-			Icon:      msg.Icon,
-			Text:      msg.Text,
-			Color:     msg.Color,
-			ExpiresAt: time.Now().Add(4 * time.Second),
-		})
-		if len(m.toasts) > 3 {
-			m.toasts = m.toasts[len(m.toasts)-3:]
+		// All queue management (priority sort, dedup, ID-based update) is in pushToast.
+		if cmd := m.pushToast(msg); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
-		m.recalcViewportHeight()
-		cmds = append(cmds, toastDismissTick())
 
 	case toastDismissTickMsg:
 		now := time.Now()
 		kept := m.toasts[:0]
 		for _, t := range m.toasts {
-			if t.ExpiresAt.After(now) {
+			// KindPersistent toasts have zero ExpiresAt and are never auto-dismissed.
+			if t.ExpiresAt.IsZero() || t.ExpiresAt.After(now) {
 				kept = append(kept, t)
 			}
 		}
@@ -146,8 +169,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.toasts) > 0 {
 			cmds = append(cmds, toastDismissTick())
 		}
-		if prevLen > 0 && len(m.toasts) == 0 {
-			m.recalcViewportHeight() // height freed
+		// Recalc on any count change — each visible toast occupies 1 line (max 3).
+		if len(m.toasts) != prevLen {
+			m.recalcViewportHeight()
 		}
 	}
 
@@ -159,7 +183,89 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// DAG view messages are handled regardless of current state so events keep
+	// flowing even if the user briefly navigates away.
+	switch msg := msg.(type) {
+	case DAGEventMsg, DAGTickMsg:
+		// Intercept DAGEventMsg to feed the unified hook output tree
+		if evMsg, ok := msg.(DAGEventMsg); ok && m.dagVM != nil && m.dagVM.graph != nil {
+			task := m.dagVM.graph.Get(evMsg.TaskID)
+			if task != nil {
+				hookID := "dag_" + evMsg.TaskID
+				switch evMsg.Status {
+				case dag.StatusRunning:
+					if findHook(m.activeHooks, hookID) == nil {
+						cmds = append(cmds, func() tea.Msg {
+							return HookStartMsg{
+								ID:    hookID,
+								Icon:  "⚡",
+								Label: task.Description,
+							}
+						})
+					} else if evMsg.Progress > 0 {
+						cmds = append(cmds, func() tea.Msg {
+							return HookUpdateMsg{
+								ID:       hookID,
+								Metadata: fmt.Sprintf("%.0f%%", evMsg.Progress*100),
+							}
+						})
+					}
+				case dag.StatusCompleted:
+					cmds = append(cmds, func() tea.Msg {
+						return HookDoneMsg{
+							ID:      hookID,
+							Success: true,
+							Elapsed: time.Since(task.StartedAt),
+						}
+					})
+				case dag.StatusFailed, dag.StatusSkipped:
+					cmds = append(cmds, func() tea.Msg {
+						return HookDoneMsg{
+							ID:      hookID,
+							Success: false,
+							Elapsed: time.Since(task.StartedAt),
+							Summary: evMsg.ErrMsg,
+						}
+					})
+				}
+			}
+		}
+
+		model, cmd := m.updateDAGView(msg)
+		cmds = append(cmds, cmd)
+		return model, tea.Batch(cmds...)
+	}
+
+	// ── Extended thinking panel messages ───────────────────────────────────
+	switch msg := msg.(type) {
+	case thinkingResetMsg:
+		m.thinkingBuf.Reset()
+		m.thinkingActive = false
+		return m, nil
+	case ThinkingTokenMsg:
+		m.thinkingBuf.WriteString(msg.Content)
+		m.thinkingActive = true
+		m.genPhase = phaseThinking
+		return m, nil
+	case ThinkingDoneMsg:
+		m.thinkingActive = false
+		// Keep buffer visible until StreamCompleteMsg clears it.
+		return m, nil
+	}
+
 	switch m.state {
+	case analyticsView:
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			switch keyMsg.String() {
+			case "esc", "ctrl+a", "ctrl+h":
+				m.state = chatView
+				return m, nil
+			}
+		}
+	case dagView:
+		model, cmd := m.updateDAGView(msg)
+		cmds = append(cmds, cmd)
+		return model, tea.Batch(cmds...)
 	case modelSelectView: // also handles modelListView (same const)
 		model, cmd := m.updateModelSelectView(msg)
 		cmds = append(cmds, cmd)
@@ -231,7 +337,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// 3. Chat View Handling (Default)
 	var cmd tea.Cmd
-	
+
 	switch msg := msg.(type) {
 	case tea.MouseMsg:
 		// Handle mouse clicks to restore focus/keyboard (always handle this)
@@ -262,6 +368,159 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		_, cmd = m.handleKeyMsg(msg)
 		cmds = append(cmds, cmd)
+
+	case hotkeys.Command:
+		switch msg {
+		case hotkeys.CmdToolsMenu:
+			m.state = toolsTableView
+			m.updateToolsTable()
+			return m, nil
+		case hotkeys.CmdSettings:
+			var debugOn bool
+			if m.commands != nil && m.commands.Orch != nil {
+				debugOn = m.debugMode
+			}
+			var appStateSetter func(cats []string) error
+			var providerSetter func(ids []string) error
+			if m.commands != nil && m.commands.Orch != nil {
+				if m.commands.Orch.PersistDisabledCategories != nil {
+					appStateSetter = m.commands.Orch.PersistDisabledCategories
+				}
+				if m.commands.Orch.PersistDisabledProviders != nil {
+					providerSetter = m.commands.Orch.PersistDisabledProviders
+				}
+			}
+			var toolReg *tools.Registry
+			if m.commands != nil {
+				toolReg = m.commands.GetToolRegistry()
+			}
+			var orchAdapter *commands.OrchestratorAdapter
+			if m.commands != nil {
+				orchAdapter = m.commands.Orch
+			}
+			m.activeOverlay = NewSettingsOverlay(m.width, m.height, orchAdapter, toolReg, appStateSetter, debugOn, providerSetter, m.integrationGetter, m.integrationSetter)
+			return m, nil
+		case hotkeys.CmdModelsSelect:
+			m.state = modelListView
+			m.initModelSelectState()
+			m.updateProviderKeyStatuses()
+			return m, m.updateModelListItems()
+		case hotkeys.CmdContextStatus:
+			if m.state == diagnosticsView {
+				m.state = chatView
+			} else {
+				m.state = diagnosticsView
+			}
+			return m, nil
+		case hotkeys.CmdDebugToggle:
+			if m.orchestrator != nil {
+				active := m.orchestrator.ToggleDebug()
+				m.addSystemMessage(fmt.Sprintf("Developer Debug Mode: %v", active))
+				m.updateViewportContent()
+			}
+			return m, nil
+		case hotkeys.CmdHistorySearch:
+			if !m.generating {
+				m.histSearchMode = true
+				m.histSearchQuery = ""
+				m.rebuildHistMatches()
+			}
+			return m, nil
+
+		case hotkeys.CmdForceRefresh:
+			hotkeys.ClearTerminal()
+			m.updateViewportContent()
+			return m, tea.ClearScreen
+		case hotkeys.CmdClearReset:
+			m.orchestrator.ClearHistory()
+			m.addSystemMessage("Conversation history cleared.")
+			m.updateViewportContent()
+			return m, nil
+		case hotkeys.CmdDuplicateSess:
+			if m.orchestrator != nil {
+				res := m.orchestrator.SaveSession("")
+				m.addSystemMessage(fmt.Sprintf("Session duplicated/saved: %s", res))
+				m.updateViewportContent()
+			}
+			return m, nil
+
+		case hotkeys.CmdExpandDetails:
+			// Toggle collapse state of the most recent tool/tool_call/internal/a2a message.
+			for i := len(m.messages) - 1; i >= 0; i-- {
+				role := m.messages[i].Role
+				if role == "tool" || role == "tool_call" || role == "internal" || role == "a2a" {
+					m.messages[i].Collapsed = !m.messages[i].Collapsed
+					m.updateViewportContent()
+					// Scroll to show the newly expanded content.
+					if !m.messages[i].Collapsed {
+						m.userScrolledUp = false
+						m.viewport.GotoBottom()
+					}
+					break
+				}
+			}
+			return m, nil
+
+		case hotkeys.CmdExpandAll:
+			// Toggle ALL collapsible messages: if any are expanded → collapse all;
+			// if all are collapsed → expand all.
+			hasExpanded := false
+			for _, msg := range m.messages {
+				role := msg.Role
+				if (role == "tool" || role == "tool_call" || role == "internal" || role == "a2a") && !msg.Collapsed {
+					hasExpanded = true
+					break
+				}
+			}
+			for i, msg := range m.messages {
+				role := msg.Role
+				if role == "tool" || role == "tool_call" || role == "internal" || role == "a2a" {
+					m.messages[i].Collapsed = hasExpanded // collapse if any open, else expand
+				}
+			}
+			m.updateViewportContent()
+			return m, nil
+
+		case hotkeys.CmdOmniSearch:
+			// Toggle search mode. When opening, reset query and matches.
+			if m.searchMode {
+				m.searchMode = false
+				m.searchQuery = ""
+				m.searchMatches = nil
+				m.searchMatchIdx = 0
+				m.updateViewportContent()
+			} else {
+				m.searchMode = true
+				m.searchQuery = ""
+				m.searchMatches = nil
+				m.searchMatchIdx = 0
+				// Unfocus textarea so key events reach handleSearchInput.
+				m.textarea.Blur()
+			}
+			return m, nil
+
+		case hotkeys.CmdExportJSON:
+			// Export full session as a JSON file with auto-generated name.
+			jsonContent := m.exportAsJSON()
+			if jsonContent == "" {
+				m.addSystemMessage("**Export failed**: could not serialise session.")
+				m.updateViewportContent()
+				return m, nil
+			}
+			home, _ := os.UserHomeDir()
+			path := fmt.Sprintf("%s/gorkbot_export_%s.json", home, time.Now().Format("20060102_150405"))
+			if err := writeExportFile(path, jsonContent); err != nil {
+				m.addSystemMessage(fmt.Sprintf("**Export failed**: %v", err))
+			} else {
+				m.addSystemMessage(fmt.Sprintf("Session exported to `%s` (%d messages).", path, len(m.messages)))
+			}
+			m.updateViewportContent()
+			return m, nil
+
+		case hotkeys.CmdHardQuit:
+			m.quitting = true
+			return m, tea.Quit
+		}
 
 	case TokenMsg:
 		_, cmd = m.handleTokenMsg(msg)
@@ -318,6 +577,38 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ToolCallMsg:
 		// Render the outgoing tool call request box before the result arrives.
 		m.addToolCallMessage(msg.ToolName, msg.Params)
+		// Start tracking this tool in the activity panel.
+		icon, label := toolActivityLabel(msg.ToolName, msg.Params)
+		m.currentActivity = &activityEntry{Icon: icon, Label: label, StartedAt: time.Now()}
+		m.genPhase = phaseTool
+		// ── Hook: emit HookStartMsg inline ───────────────────────────────────
+		hookMsg := HookStartMsg{
+			ID:    msg.ToolName + "_" + fmt.Sprintf("%d", time.Now().UnixNano()),
+			Icon:  icon,
+			Label: label,
+		}
+		// Store the hook ID so ToolProgressMsg can finalise it.
+		if m.toolStartTimes == nil {
+			m.toolStartTimes = make(map[string]time.Time)
+		}
+		m.toolStartTimes[msg.ToolName] = time.Now()
+		// Process the hook start directly (avoids tea.Cmd round-trip).
+		entry := HookEntry{
+			ID:        hookMsg.ID,
+			Icon:      hookMsg.Icon,
+			Label:     hookMsg.Label,
+			Active:    true,
+			CreatedAt: time.Now(),
+		}
+		if len(m.activeHooks) >= 32 {
+			m.activeHooks = m.activeHooks[1:]
+		}
+		m.activeHooks = append(m.activeHooks, entry)
+		if !m.hookTickActive {
+			m.hookTickActive = true
+			cmds = append(cmds, hookTick())
+		}
+		m.recalcViewportHeight()
 		m.updateViewportContent()
 		if !m.userScrolledUp {
 			m.viewport.GotoBottom()
@@ -341,6 +632,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.permissionChan = msg.ResponseChan
 		// No cmd
 
+	case AuthRequestMsg:
+		m.authRequest = &msg
+		m.awaitingAuth = true
+		m.authInput.Placeholder = "Enter credential for " + msg.ToolName
+		m.authInput.Focus()
+		m.authInput.SetValue("")
+		// No cmd
+
 	case CompletionMsg:
 		// Append completion to textarea
 		current := m.textarea.Value()
@@ -353,30 +652,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ModeChangeMsg:
 		// Reflect mode change from orchestrator (e.g., via /mode command)
 		m.statusBar.SetMode(msg.ModeName)
-
-	case ContextUpdateMsg:
-		// Capture previous pct before update (for threshold-crossing toasts).
-		prevPct := m.statusBar.ContextPct()
-		// Update status bar with latest context window stats.
-		m.statusBar.UpdateContext(msg.UsedPct, msg.CostUSD)
-		// Feed analytics dashboard.
-		if m.analytics != nil {
-			m.analytics.ContextUsedPct = msg.UsedPct
-			m.analytics.ContextUsedToks = msg.UsedToks
-			m.analytics.ContextMaxToks = msg.MaxToks
-			m.analytics.RecordTokens(msg.UsedToks, msg.CostUSD)
-			m.statusBar.SetTokenRateHistory(m.analytics.TokenRateHistory)
-		}
-		// Emit threshold-crossing toasts.
-		if msg.UsedPct >= 0.95 && prevPct < 0.95 {
-			cmds = append(cmds, func() tea.Msg {
-				return ToastMsg{Icon: "⚠", Text: "Context critical (95%+) — /compress now", Color: ErrorRed}
-			})
-		} else if msg.UsedPct >= 0.80 && prevPct < 0.80 {
-			cmds = append(cmds, func() tea.Msg {
-				return ToastMsg{Icon: "⚡", Text: "Context at 80% — approaching limit", Color: WarningYellow}
-			})
-		}
 
 	case InterruptMsg:
 		// Programmatic interrupt (e.g., from hook or orchestrator)
@@ -413,6 +688,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
+			// ── Hook: seal the most-recent active hook for this tool ──────────
+			elapsedD := time.Duration(msg.Elapsed * float64(time.Second))
+			// Walk backwards through activeHooks to find the matching entry.
+			for i := len(m.activeHooks) - 1; i >= 0; i-- {
+				if m.activeHooks[i].Active && strings.HasPrefix(m.activeHooks[i].ID, msg.ToolName+"_") {
+					m.activeHooks[i].Active = false
+					m.activeHooks[i].IsFinal = true
+					m.activeHooks[i].IsError = !msg.Success
+					m.activeHooks[i].Elapsed = elapsedD
+					m.activeHooks[i].Metadata = formatElapsed(elapsedD)
+					break
+				}
+			}
 		} else {
 			// Add the tool to the live panel and record start time.
 			m.activeTools = append(m.activeTools, msg.ToolName)
@@ -421,6 +709,70 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.statusBar.SetActiveTools(len(m.activeTools))
+
+	// ── Consultation pipeline → hook integration ─────────────────────────────
+	case ConsultationStageMsg:
+		stageLabel := consultationStageLabel(msg.Stage)
+		if msg.Detail != "" {
+			stageLabel += ": " + msg.Detail
+		}
+		hookID := fmt.Sprintf("consult_stage_%d", int(msg.Stage))
+		// Seal previous consultation stage hook if any.
+		for i := range m.activeHooks {
+			if strings.HasPrefix(m.activeHooks[i].ID, "consult_stage_") && m.activeHooks[i].Active {
+				m.activeHooks[i].Active = false
+				m.activeHooks[i].IsFinal = true
+				elapsed := time.Since(m.activeHooks[i].CreatedAt)
+				m.activeHooks[i].Elapsed = elapsed
+				m.activeHooks[i].Metadata = formatElapsed(elapsed)
+			}
+		}
+		entry := HookEntry{
+			ID:        hookID,
+			Icon:      "◐",
+			Label:     stageLabel,
+			Active:    true,
+			CreatedAt: time.Now(),
+		}
+		if len(m.activeHooks) >= 32 {
+			m.activeHooks = m.activeHooks[1:]
+		}
+		m.activeHooks = append(m.activeHooks, entry)
+		if !m.hookTickActive {
+			m.hookTickActive = true
+			cmds = append(cmds, hookTick())
+		}
+
+	case ConsultationDoneMsg:
+		// Seal the last active consultation hook.
+		for i := len(m.activeHooks) - 1; i >= 0; i-- {
+			if strings.HasPrefix(m.activeHooks[i].ID, "consult_stage_") && m.activeHooks[i].Active {
+				m.activeHooks[i].Active = false
+				m.activeHooks[i].IsFinal = true
+				elapsed := time.Since(m.activeHooks[i].CreatedAt)
+				m.activeHooks[i].Elapsed = elapsed
+				suffix := ""
+				if msg.FromCache {
+					suffix = " (cache hit)"
+				} else if msg.Retries > 0 {
+					suffix = fmt.Sprintf(" (%d retries)", msg.Retries)
+				}
+				m.activeHooks[i].Metadata = formatElapsed(elapsed) + suffix
+				break
+			}
+		}
+
+	case ConsultationErrorMsg:
+		// Seal as error.
+		for i := len(m.activeHooks) - 1; i >= 0; i-- {
+			if strings.HasPrefix(m.activeHooks[i].ID, "consult_stage_") && m.activeHooks[i].Active {
+				m.activeHooks[i].Active = false
+				m.activeHooks[i].IsFinal = true
+				m.activeHooks[i].IsError = true
+				m.activeHooks[i].Metadata = "failed"
+				break
+			}
+		}
 
 	case ProcessOutputMsg:
 		// Stream process output to the chat
@@ -453,6 +805,99 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.userScrolledUp {
 			m.viewport.GotoBottom()
 		}
+
+	// ── Hook output messages (Claude Code-style) ───────────────────────────
+	case HookStartMsg:
+		entry := HookEntry{
+			ID:        msg.ID,
+			Icon:      msg.Icon,
+			Label:     msg.Label,
+			Active:    true,
+			CreatedAt: time.Now(),
+		}
+		if entry.Icon == "" {
+			entry.Icon = "⚙"
+		}
+		if msg.ParentID == "" {
+			// Top-level: cap the list at 32 entries to prevent memory leak.
+			if len(m.activeHooks) >= 32 {
+				m.activeHooks = m.activeHooks[1:]
+			}
+			m.activeHooks = append(m.activeHooks, entry)
+		} else {
+			// Nested: find parent and append child (depth already checked by sender).
+			if ptr := findHook(m.activeHooks, msg.ParentID); ptr != nil {
+				if ptr.Depth < maxHookDepth-1 {
+					entry.Depth = ptr.Depth + 1
+					ptr.SubEntries = append(ptr.SubEntries, entry)
+				}
+			} else {
+				// Parent not found: add as top-level fallback.
+				m.activeHooks = append(m.activeHooks, entry)
+			}
+		}
+		// Start tick loop if not already running.
+		if !m.hookTickActive {
+			m.hookTickActive = true
+			cmds = append(cmds, hookTick())
+		}
+		m.recalcViewportHeight()
+
+	case HookUpdateMsg:
+		if ptr := findHook(m.activeHooks, msg.ID); ptr != nil {
+			if msg.Metadata != "" {
+				ptr.Metadata = msg.Metadata
+			}
+			if msg.Output != "" {
+				if msg.AppendOutput {
+					// Keep only first 2 lines worth of output.
+					combined := ptr.Output + msg.Output
+					lines := strings.SplitN(combined, "\n", 4)
+					if len(lines) > 2 {
+						lines = lines[:2]
+					}
+					ptr.Output = strings.Join(lines, "\n")
+				} else {
+					ptr.Output = msg.Output
+				}
+			}
+		}
+
+	case HookDoneMsg:
+		if ptr := findHook(m.activeHooks, msg.ID); ptr != nil {
+			ptr.Active = false
+			ptr.IsFinal = true
+			ptr.IsError = !msg.Success
+			ptr.Elapsed = msg.Elapsed
+			if msg.Summary != "" {
+				ptr.Metadata = msg.Summary
+			}
+		}
+
+	case HookCollapseMsg:
+		if ptr := findHook(m.activeHooks, msg.ID); ptr != nil {
+			ptr.Collapsed = !ptr.Collapsed
+		}
+
+	case AtCompleteResultMsg:
+		if msg.Query == m.atCompleteQuery {
+			m.atCompleteItems = msg.Items
+			m.atCompleteIdx = 0
+		}
+
+	case HookTickMsg:
+		// Advance spinner frame.
+		m.hookSpinFrame++
+		// Re-schedule only while generating (avoids idle CPU cost).
+		if m.generating || hasActiveHooks(m.activeHooks) {
+			cmds = append(cmds, hookTick())
+			// Debouncer: avoid tearing view if tokens are actively streaming in
+			if time.Since(m.lastTokenTime) > 100*time.Millisecond {
+				m.updateViewportContent()
+			}
+		} else {
+			m.hookTickActive = false
+		}
 	}
 
 	// Update child components if not generating
@@ -475,9 +920,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Update Status Bar
 	// Sync active processes
 	if m.processManager != nil {
+		liveToks := m.liveTokenCount
+		if m.analytics != nil {
+			// Include live tokens in the analytics view display as well
+			// This ensures the Context Window gauge moves in real-time
+			actualUsed := m.analytics.ContextUsedToks + liveToks
+			if m.analytics.ContextMaxToks > 0 {
+				m.analytics.ContextUsedPct = float64(actualUsed) / float64(m.analytics.ContextMaxToks)
+			}
+			
+			// Update session total and rate sparkline in real-time
+			// We use the cumulative session total (ContextUsedToks is per-session historically)
+			// totalTokensSum := m.analytics.TotalTokens (already includes previous turns)
+			// But RecordTokens expects the ABSOLUTE total.
+			// m.analytics.TotalTokens is updated at end of turn.
+			// Let's just update the analytics fields directly.
+			if liveToks > 0 {
+				m.analytics.RecordTokens(m.analytics.TotalTokens+liveToks, m.analytics.SessionCostUS)
+			}
+			
+			liveToks += m.analytics.ContextUsedToks
+		}
 		m.statusBar.UpdateState(
 			m.currentModel,
-			m.countTokens(), // Helper to estimate tokens?
+			liveToks,
 			m.processManager.ListProcesses(),
 		)
 	}
@@ -519,7 +985,7 @@ func (m *Model) updateModelList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.handleWindowSize(msg)
 	}
-	
+
 	m.modelList, cmd = m.modelList.Update(msg)
 	return m, cmd
 }
@@ -536,7 +1002,7 @@ func (m *Model) updateToolsTableState(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.handleWindowSize(msg)
 	}
-	
+
 	var tableModel tea.Model
 	tableModel, cmd = m.toolsTable.Update(msg)
 	m.toolsTable = tableModel.(TableModel)
@@ -554,10 +1020,10 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	if m.height < minHeight {
 		m.height = minHeight
 	}
-	
+
 	// Update list size
 	m.modelList.SetSize(msg.Width, msg.Height)
-	
+
 	// Update table height - fill available space but leave room for header/footer if any
 	// bubbles/table doesn't auto-resize width well, we might need to manually set column widths
 	// For now, just set height
@@ -586,11 +1052,8 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 		statusBarHeight = 1
 	)
 
-	// Calculate fixed height (add 1 line for active toast notification zone).
-	notifyHeight := 0
-	if len(m.toasts) > 0 {
-		notifyHeight = 1
-	}
+	// Each visible toast occupies 1 line; at most 3 are rendered at once.
+	notifyHeight := min(len(m.toasts), 3)
 	fixedComponentsHeight := brandingHeight + tabsHeight + separatorHeight + inputHeight + statusBarHeight + notifyHeight
 	if m.generating {
 		fixedComponentsHeight += loadingHeight
@@ -613,10 +1076,10 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 	// Update textarea width
 	m.textarea.SetWidth(m.width - 2)
-	
+
 	// Update help width
 	m.help.Width = m.width
-	
+
 	// Update status bar width
 	m.statusBar.SetDimensions(m.width, statusBarHeight)
 
@@ -675,6 +1138,63 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Search mode: route all input to the search handler.
+	if m.searchMode {
+		return m.handleSearchKeyMsg(msg)
+	}
+
+	// History search mode (Ctrl+R): route all input to history handler.
+	if m.histSearchMode {
+		handled, cmd := m.handleHistSearchKey(msg.String())
+		if handled {
+			return m, cmd
+		}
+	}
+
+	// Rewind menu navigation.
+	if m.rewindMenuOpen {
+		switch msg.String() {
+		case "up", "k":
+			if m.rewindCursor > 0 {
+				m.rewindCursor--
+			}
+			return m, nil
+		case "down", "j":
+			if m.rewindCursor < len(m.rewindItems)-1 {
+				m.rewindCursor++
+			}
+			return m, nil
+		case "enter":
+			if len(m.rewindItems) > 0 && m.orchestrator != nil {
+				item := m.rewindItems[m.rewindCursor]
+				if _, err := m.orchestrator.Checkpoints.Rewind(item.ID, m.orchestrator.ConversationHistory); err == nil {
+					m.addSystemMessage(fmt.Sprintf("_⏮ Rewound to checkpoint: %s_", item.Description))
+					m.updateViewportContent()
+				}
+			}
+			m.rewindMenuOpen = false
+			return m, nil
+		case "esc":
+			m.rewindMenuOpen = false
+			return m, nil
+		}
+		return m, nil
+	}
+
+	// @ autocomplete: check active before normal key routing.
+	if m.atCompleteActive {
+		handled, cmd := m.handleAtCompleteKey(msg.String())
+		if handled {
+			return m, cmd
+		}
+		// Not handled — let the key fall through to normal routing,
+		// but append char to query if it's a regular character.
+		if len(msg.String()) == 1 {
+			m.atCompleteQuery += msg.String()
+			return m, fetchAtComplete(m.atCompleteCWD, m.atCompleteQuery)
+		}
+	}
+
 	// Ctrl+X — interrupt in-progress generation
 	if key.Matches(msg, m.keymap.Interrupt) {
 		if m.generating && m.orchestrator != nil {
@@ -694,6 +1214,16 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.textarea.Blur()
 			m.textarea.Focus()
 			return m, nil
+		}
+		return m, nil
+	}
+
+	// Shift+Tab — cycle execution mode (alternative to Ctrl+N)
+	if key.Matches(msg, m.keymap.CycleModeTab) {
+		if m.orchestrator != nil {
+			modeName := m.orchestrator.CycleMode()
+			m.statusBar.SetMode(modeName)
+			return m, func() tea.Msg { return SuccessToast("⚡", "Mode: "+modeName) }
 		}
 		return m, nil
 	}
@@ -735,7 +1265,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.initModelSelectState()
 		m.updateProviderKeyStatuses()
 		return m, m.updateModelListItems()
-		
+
 	case key.Matches(msg, m.keymap.ShowTools):
 		m.state = toolsTableView
 		m.updateToolsTable()
@@ -760,12 +1290,11 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.commands != nil {
 			toolReg = m.commands.GetToolRegistry()
 		}
-		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn, providerSetter)
+		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn, providerSetter, m.integrationGetter, m.integrationSetter)
 		return m, nil
 
-	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "cloud brains"))):
-		m.state = discoveryView
-		return m, nil
+	// ctrl+d (0x04) is intercepted by the hotkey manager (CmdDuplicateSess).
+	// Discovery view is reachable via the tab bar or /disc command instead.
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("ctrl+a", "analytics"))):
 		m.state = analyticsView
@@ -784,6 +1313,11 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.discCursor = 0
 		return m, nil
 
+	case key.Matches(msg, m.keymap.ToggleTabs):
+		m.compactTabs = !m.compactTabs
+		m.recalcViewportHeight()
+		return m, nil
+
 	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+|"), key.WithHelp("ctrl+|", "side panel"))):
 		m.sidePanelOpen = !m.sidePanelOpen
 		if m.sidePanelOpen {
@@ -791,17 +1325,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.sidePanelWidth < 24 {
 				m.sidePanelWidth = 24
 			}
-			m.viewport.Width = m.width - m.sidePanelWidth - 1
-			if !m.generating {
-				m.updateViewportContent()
-			}
+			// V.2: Do NOT change viewport.Width or rendererWidth — keeps glamour
+			// render width fixed so text doesn't reflow when panel opens.
+			m.recalcViewportHeight()
 			return m, sidePanelTick()
 		} else {
 			m.sidePanelWidth = 0
-			m.viewport.Width = m.width
-		}
-		if !m.generating {
-			m.updateViewportContent()
+			m.recalcViewportHeight()
 		}
 		return m, nil
 
@@ -849,6 +1379,23 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.textarea.Blur()
 			m.textarea.Focus()
 			return m, textarea.Blink
+		}
+
+		// Double-Esc rewind menu: open when two Esc presses are within 500ms at idle.
+		if !m.generating && !m.searchMode && !m.histSearchMode &&
+			!m.awaitingHITL && !m.awaitingPermission &&
+			!m.interventionMode && m.activeOverlay == nil {
+			if time.Since(m.lastEscTime) < 500*time.Millisecond {
+				if m.orchestrator != nil && m.orchestrator.Checkpoints != nil {
+					items := m.orchestrator.Checkpoints.List()
+					if len(items) > 0 {
+						m.rewindItems = items
+						m.rewindMenuOpen = true
+						m.rewindCursor = 0
+					}
+				}
+			}
+			m.lastEscTime = time.Now()
 		}
 	}
 
@@ -966,6 +1513,17 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Handle Enter key for submission
+	// Detect @ for file autocomplete trigger.
+	if msg.String() == "@" && !m.generating {
+		cur := m.textarea.Value()
+		m.atCompleteAt = len(cur)
+		m.atCompleteActive = true
+		m.atCompleteQuery = ""
+		m.atCompleteIdx = 0
+		// Use cached CWD — no syscall per keystroke.
+		return m, fetchAtComplete(m.atCompleteCWD, "")
+	}
+
 	if msg.Type == tea.KeyEnter {
 		// Check if Alt is pressed (for multi-line)
 		if !msg.Alt {
@@ -1001,7 +1559,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg {
 				ctx := context.Background()
 				prompt := fmt.Sprintf("Complete the following user input for a chat interface. Provide ONLY the completion suffix, nothing else. If no clear completion is possible, return empty string.\n\nInput: %s", input)
-				
+
 				completion, err := m.orchestrator.Consultant.Generate(ctx, prompt)
 				if err == nil && completion != "" {
 					return CompletionMsg{Content: completion}
@@ -1017,11 +1575,74 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleSearchKeyMsg handles all keyboard input while search mode is active.
+// It owns the full key event and returns before normal handleKeyMsg processing.
+func (m *Model) handleSearchKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		// Exit search, restore normal view.
+		m.searchMode = false
+		m.searchQuery = ""
+		m.searchMatches = nil
+		m.searchMatchIdx = 0
+		m.textarea.Focus()
+		m.updateViewportContent()
+		return m, nil
+
+	case tea.KeyBackspace, tea.KeyDelete:
+		if len(m.searchQuery) > 0 {
+			runes := []rune(m.searchQuery)
+			m.searchQuery = string(runes[:len(runes)-1])
+			m.rebuildSearchMatches()
+			m.updateViewportContent()
+		}
+		return m, nil
+
+	case tea.KeyEnter:
+		// Advance to next match (wrap around).
+		if len(m.searchMatches) > 0 {
+			m.searchMatchIdx = (m.searchMatchIdx + 1) % len(m.searchMatches)
+			m.updateViewportContent()
+		}
+		return m, nil
+
+	case tea.KeyUp:
+		// Previous match.
+		if len(m.searchMatches) > 0 {
+			m.searchMatchIdx--
+			if m.searchMatchIdx < 0 {
+				m.searchMatchIdx = len(m.searchMatches) - 1
+			}
+			m.updateViewportContent()
+		}
+		return m, nil
+
+	case tea.KeyDown:
+		// Next match.
+		if len(m.searchMatches) > 0 {
+			m.searchMatchIdx = (m.searchMatchIdx + 1) % len(m.searchMatches)
+			m.updateViewportContent()
+		}
+		return m, nil
+
+	case tea.KeyRunes:
+		// Append typed characters to the search query.
+		m.searchQuery += string(msg.Runes)
+		m.rebuildSearchMatches()
+		m.searchMatchIdx = 0
+		m.updateViewportContent()
+		return m, nil
+	}
+	return m, nil
+}
+
 // handleTokenMsg handles incoming tokens from AI response
 func (m *Model) handleTokenMsg(msg TokenMsg) (tea.Model, tea.Cmd) {
 	if !m.generating {
 		return m, nil
 	}
+
+	m.lastTokenTime = time.Now()
 
 	if msg.Content == "[__GORKBOT_STREAM_RETRY__]" {
 		if m.currentResponse.Len() > 0 {
@@ -1046,6 +1667,7 @@ func (m *Model) handleTokenMsg(msg TokenMsg) (tea.Model, tea.Cmd) {
 
 	// Append token to current response
 	m.currentResponse.WriteString(msg.Content)
+	m.liveTokenCount++
 
 	// Update the streaming message in real-time for live display
 	m.updateStreamingMessage()
@@ -1083,6 +1705,13 @@ func (m *Model) handleStreamComplete(msg StreamCompleteMsg) (tea.Model, tea.Cmd)
 		m.generating = false
 	}
 	m.streamChunkCount = 0
+	// Clear extended-thinking panel now that generation is done.
+	m.thinkingBuf.Reset()
+	m.thinkingActive = false
+
+	// ── Orphan protection: seal any hooks still marked active ────────────────
+	m.activeHooks = sealAllHooks(m.activeHooks)
+	m.hookTickActive = false
 
 	// Expand viewport — the loading indicator line is now gone.
 	// handleWindowSize reserved 1 line for it; without this the scroll area
@@ -1119,7 +1748,7 @@ func (m *Model) handleHITLRequest(msg HITLRequestMsg) (tea.Model, tea.Cmd) {
 		m.state = stateHITLApproval
 
 		planDisplay := fmt.Sprintf(
-			"## ⚡ SENSE HITL — v1.5.3 Validation Required\n\n"+
+			"## ⚡ SENSE HITL — v2.0 Validation Required\n\n"+
 				"**Tool:** `%s`\n\n%s",
 			req.ToolName, req.Plan,
 		)
@@ -1167,6 +1796,60 @@ func (m *Model) handleToolExecution(msg ToolExecutionMsg) (tea.Model, tea.Cmd) {
 		if start, ok := m.toolStartTimes[msg.ToolName]; ok {
 			elapsed = time.Since(start)
 			delete(m.toolStartTimes, msg.ToolName)
+		}
+	}
+
+	// Commit current activity to the log and transition to synthesizing phase.
+	if m.currentActivity != nil {
+		m.currentActivity.Done = true
+		m.currentActivity.Success = msg.Result == nil || msg.Result.Error == ""
+		m.currentActivity.Elapsed = elapsed
+		m.activityLog = append(m.activityLog, *m.currentActivity)
+		if len(m.activityLog) > 4 {
+			m.activityLog = m.activityLog[len(m.activityLog)-4:]
+		}
+		m.currentActivity = nil
+	}
+	m.genPhase = phaseSynthesizing
+
+	// If auth is required, trigger the dynamic wizard
+	if msg.Result != nil && msg.Result.AuthRequired {
+		if prog := m.getProgram(); prog != nil {
+			go func() {
+				respChan := make(chan string)
+				prog.Send(AuthRequestMsg{
+					ToolName:     msg.ToolName,
+					AuthType:     msg.Result.AuthType,
+					Description:  msg.Result.Output,
+					ResponseChan: respChan,
+				})
+				
+				// Block until credential received
+				credential := <-respChan
+				if credential != "" {
+					// Persist and signal recovery
+					var status string
+					if m.orchestrator != nil {
+						status = m.orchestrator.SetProviderKey(context.Background(), "google", credential)
+					}
+					
+					success := !strings.Contains(strings.ToLower(status), "failed")
+					errMsg := ""
+					if !success {
+						errMsg = status
+					}
+
+					prog.Send(APIKeySavedMsg{
+						Provider: "google",
+						Valid:    success,
+						ErrMsg:   errMsg,
+					})
+
+					if success {
+						prog.Send(InfoToast("🔐", "Credential saved. You can now retry your request."))
+					}
+				}
+			}()
 		}
 	}
 
@@ -1264,27 +1947,26 @@ func (m *Model) handlePhraseTick(msg PhraseTickMsg) (tea.Model, tea.Cmd) {
 }
 
 // handlePlanningTokenMsg receives a streaming token destined for the planning box.
-// It accumulates tokens in planningBuf for intent extraction and throttled display.
+// Tokens are counted for the "Reasoning... N tokens" display in the activity panel.
 // currentResponse is NOT updated here; the final answer arrives via PlanningCommitMsg.
 func (m *Model) handlePlanningTokenMsg(msg PlanningTokenMsg) (tea.Model, tea.Cmd) {
 	if !m.generating {
 		return m, nil
 	}
 
-	// Retry signal: the stream rewound; clear planning buffer to show fresh start.
+	m.lastTokenTime = time.Now()
+
+	// Retry signal: the stream rewound; reset token count.
 	if msg.Content == "[__GORKBOT_STREAM_RETRY__]" {
 		m.planningBuf.Reset()
-		m.planningIntent = ""
+		m.thinkingTokens = 0
 		m.updateViewportContent()
 		return m, nil
 	}
 
 	m.planningBuf.WriteString(msg.Content)
-
-	// Extract intent from the latest buffer content.
-	if intent := extractPlanningIntent(m.planningBuf.String()); intent != "" {
-		m.planningIntent = intent
-	}
+	m.thinkingTokens++
+	m.liveTokenCount++
 
 	// Throttle viewport re-renders (same interval as streaming).
 	m.streamChunkCount++
@@ -1298,7 +1980,7 @@ func (m *Model) handlePlanningTokenMsg(msg PlanningTokenMsg) (tea.Model, tea.Cmd
 // The previous reasoning segment is discarded; only the final segment is committed.
 func (m *Model) handlePlanningBoxClear(_ PlanningBoxClearMsg) (tea.Model, tea.Cmd) {
 	m.planningBuf.Reset()
-	m.planningIntent = ""
+	m.thinkingTokens = 0
 	m.streamChunkCount = 0
 	m.updateViewportContent()
 	return m, nil
@@ -1310,9 +1992,11 @@ func (m *Model) handlePlanningBoxClear(_ PlanningBoxClearMsg) (tea.Model, tea.Cm
 // legacy currentResponse commit path (but still recalcs the viewport).
 func (m *Model) handlePlanningCommit(msg PlanningCommitMsg) (tea.Model, tea.Cmd) {
 	m.planningActive = false
-	m.planningShowDots = false
 	m.planningBuf.Reset()
-	m.planningIntent = ""
+	m.genPhase = phaseIdle
+	m.thinkingTokens = 0
+	m.activityLog = nil
+	m.currentActivity = nil
 	m.generating = false
 	m.streamChunkCount = 0
 
@@ -1326,13 +2010,33 @@ func (m *Model) handlePlanningCommit(msg PlanningCommitMsg) (tea.Model, tea.Cmd)
 	return m, nil
 }
 
-// handlePlanningTick cycles the planning box label between "Planning..." and
-// the latest intent sentence every 2 s while planningActive is true.
+// handlePlanningTick refreshes the activity panel every 2s while generating.
+// This keeps the elapsed timer and token count up-to-date in the UI.
 func (m *Model) handlePlanningTick(_ PlanningTickMsg) (tea.Model, tea.Cmd) {
 	if !m.planningActive {
 		return m, nil
 	}
-	m.planningShowDots = !m.planningShowDots
+
+	// Sync context stats into analytics while we wait for long generations
+	if m.orchestrator != nil {
+		if cm := m.orchestrator.ContextMgr; cm != nil {
+			totalIn, totalOut := cm.TotalUsage()
+			usedPct := cm.UsedPct()
+			usedToks := cm.TokensUsed()
+			maxToks := cm.MaxTokens()
+			totalToks := totalIn + totalOut
+			costUSD := cm.TotalCostUSD()
+
+			if m.analytics != nil {
+				m.analytics.ContextUsedPct = usedPct
+				m.analytics.ContextUsedToks = usedToks
+				m.analytics.ContextMaxToks = maxToks
+				m.analytics.RecordTokens(totalToks, costUSD)
+			}
+			m.statusBar.UpdateContext(usedPct, costUSD)
+		}
+	}
+
 	m.updateViewportContent()
 	return m, planningTick()
 }
@@ -1343,7 +2047,13 @@ func (m *Model) handleErrorMsg(msg ErrorMsg) (tea.Model, tea.Cmd) {
 	m.generating = false
 	m.planningActive = false
 	m.planningBuf.Reset()
-	m.planningIntent = ""
+	m.genPhase = phaseIdle
+	m.thinkingTokens = 0
+	m.currentActivity = nil
+
+	// ── Orphan protection: seal any hooks still marked active ────────────────
+	m.activeHooks = sealAllHooks(m.activeHooks)
+	m.hookTickActive = false
 
 	// Add error message to chat
 	m.addSystemMessage("**Error:** " + msg.Err.Error())
@@ -1361,17 +2071,32 @@ func (m *Model) handleStartGeneration(msg StartGenerationMsg) (tea.Model, tea.Cm
 	m.streamChunkCount = 0    // Reset throttle counter for new generation
 	m.responseSegStart = 0    // New turn starts a fresh segment
 	m.streamAfterTool = false // No pending tool transition
+	m.liveTokenCount = 0      // Reset live token count
 
-	// Activate the planning box for this generation turn.
+	// Activate the planning box / activity panel for this generation turn.
 	m.planningActive = true
-	m.planningShowDots = true
 	m.planningBuf.Reset()
-	m.planningIntent = ""
+	m.genPhase = phaseThinking
+	m.thinkingTokens = 0
+	m.activityLog = nil
+	m.currentActivity = nil
+
+	// Clear hooks from the previous turn (keep only recently-completed ones
+	// for at most 8 entries; seal any still-active ones first).
+	m.activeHooks = sealAllHooks(m.activeHooks)
+	if len(m.activeHooks) > 8 {
+		m.activeHooks = m.activeHooks[len(m.activeHooks)-8:]
+	}
+
+	// Start hook tick loop.
+	if !m.hookTickActive {
+		m.hookTickActive = true
+	}
 
 	return m, tea.Batch(
-		m.spinner.Tick,
 		phraseTick(),
 		planningTick(),
+		hookTick(),
 	)
 }
 
@@ -1414,26 +2139,64 @@ func (m *Model) handleEndGeneration(msg EndGenerationMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Sync context stats + mode from orchestrator into the status bar.
+	var toastCmd tea.Cmd
 	if m.orchestrator != nil {
 		if cm := m.orchestrator.ContextMgr; cm != nil {
-			m.statusBar.UpdateContext(cm.UsedPct(), cm.TotalCostUSD())
+			prevPct := m.statusBar.ContextPct()
+			totalIn, totalOut := cm.TotalUsage()
+			usedPct := cm.UsedPct()
+			usedToks := cm.TokensUsed()
+			maxToks := cm.MaxTokens()
+			totalToks := totalIn + totalOut
+			costUSD := cm.TotalCostUSD()
+
+			m.liveTokenCount = 0
+			m.statusBar.UpdateContext(usedPct, costUSD)
+
+			if m.analytics != nil {
+				m.analytics.ContextUsedPct = usedPct
+				m.analytics.ContextUsedToks = usedToks
+				m.analytics.ContextMaxToks = maxToks
+				m.analytics.RecordTokens(totalToks, costUSD)
+				m.statusBar.SetTokenRateHistory(m.analytics.TokenRateHistory)
+			}
+
+			// Emit threshold-crossing toasts with appropriate priority levels.
+			if usedPct >= 0.95 && prevPct < 0.95 {
+				toastCmd = func() tea.Msg {
+					return CriticalToast("Context critical (95%+) — /compress now")
+				}
+			} else if usedPct >= 0.80 && prevPct < 0.80 {
+				toastCmd = func() tea.Msg {
+					return WarnToast("Context at 80% — approaching limit")
+				}
+			}
 		}
 		if mm := m.orchestrator.ModeManager; mm != nil {
 			m.statusBar.SetMode(mm.Name())
 		}
 	}
 
+	// ── Orphan protection: seal any hooks still marked active ────────────────
+	m.activeHooks = sealAllHooks(m.activeHooks)
+	m.hookTickActive = false
+
 	// Re-focus textarea after generation ends
 	// This ensures keyboard appears on mobile after AI responds
 	m.textarea.Blur()
 	m.textarea.Focus()
 
+	if toastCmd != nil {
+		return m, tea.Batch(textarea.Blink, toastCmd)
+	}
 	return m, textarea.Blink
 }
 
 // handleClearScreen handles screen clearing
 func (m *Model) handleClearScreen(msg ClearScreenMsg) (tea.Model, tea.Cmd) {
 	m.messages = []Message{}
+	m.activeHooks = nil // clear hook history on screen clear
+	m.hookTickActive = false
 	m.addSystemMessage("# Screen Cleared\n\nConversation history has been reset.")
 	m.updateViewportContent()
 	return m, nil
@@ -1451,19 +2214,28 @@ func (m *Model) handleQuit(msg QuitMsg) (tea.Model, tea.Cmd) {
 func (m *Model) recalcViewportHeight() {
 	const (
 		brandingHeight  = 0 // header moved to splash screen
-		tabsHeight      = 2
 		separatorHeight = 1
-		loadingHeight   = 4 // 4-line Block G spinner
+		loadingHeight   = 1 // single-line degraded spinner
 		inputHeight     = 5
 		statusBarHeight = 1
 	)
 
-	notifyHeight := 0
-	if len(m.toasts) > 0 {
-		notifyHeight = 1
+	tabsHeight := 2
+	if m.compactTabs {
+		tabsHeight = 1
 	}
 
-	fixed := brandingHeight + tabsHeight + separatorHeight + inputHeight + statusBarHeight + notifyHeight
+	// Each visible toast occupies 1 line; at most 3 are rendered at once.
+	notifyHeight := min(len(m.toasts), 3)
+
+	// Hook section: 1 header line + maxHookSectionLines tree lines.
+	// Only reserve space when hooks are active (generating or still alive).
+	hookHeight := 0
+	if len(m.activeHooks) > 0 && (m.generating || hasActiveHooks(m.activeHooks)) {
+		hookHeight = 1 + maxHookSectionLines // 1 header + 8 = 9
+	}
+
+	fixed := brandingHeight + tabsHeight + separatorHeight + inputHeight + statusBarHeight + notifyHeight + hookHeight
 	if m.generating {
 		fixed += loadingHeight
 	}
@@ -1494,23 +2266,13 @@ func (m *Model) handleInterventionRequest(msg InterventionRequestMsg) (tea.Model
 }
 
 // RespondToIntervention sends the user's response back to the orchestrator
+// and resets all intervention state so normal key handling resumes.
 func (m *Model) RespondToIntervention(response engine.InterventionResponse) {
 	if m.interventionChan != nil {
 		m.interventionChan <- response
-		close(m.interventionChan) // Close channel after sending response
+		close(m.interventionChan)
 		m.interventionChan = nil
 	}
 	m.interventionMode = false
 	m.interventionPrompt = ""
 }
-
-// countTokens estimates token count from messages
-func (m *Model) countTokens() int {
-        // Crude estimation: 4 chars = 1 token
-        count := 0
-        for _, msg := range m.messages {
-                count += len(msg.Content) / 4
-        }
-        return count
-}
-

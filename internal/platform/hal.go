@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // HALProfile describes the hardware and environment detected at startup.
@@ -28,13 +29,15 @@ type HALProfile struct {
 	// Environment
 	Platform string // "termux", "sbc", "windows", "linux", "darwin", "unknown"
 	IsTermux bool
-	IsSBC    bool   // Raspberry Pi, Orange Pi, Rock Pi, etc.
-	IsWSL    bool   // Windows Subsystem for Linux
+	IsSBC    bool // Raspberry Pi, Orange Pi, Rock Pi, etc.
+	IsWSL    bool // Windows Subsystem for Linux
 
 	// Resource thresholds
 	TotalRAMMB     int64
 	FreeRAMMB      int64
 	RAMSpillActive bool // true when free RAM < RAMSpillThresholdMB
+	CPUCores       int
+	CPUScore       int // Micro-benchmark result (lower is faster)
 
 	// Configuration
 	RAMSpillThresholdMB int64 // default: 256 MB (practical floor for API-only work)
@@ -50,6 +53,8 @@ const DefaultRAMSpillThresholdMB int64 = 256
 func ProbeHAL(logger *slog.Logger) HALProfile {
 	p := HALProfile{
 		RAMSpillThresholdMB: DefaultRAMSpillThresholdMB,
+		CPUCores:            runtime.NumCPU(),
+		CPUScore:            runQuickBenchmark(),
 	}
 
 	goos := runtime.GOOS
@@ -206,6 +211,15 @@ func readMemInfoMB() (int64, int64, error) {
 	// "usable free" = MemFree + Buffers + Cached (Linux memory accounting).
 	usableFree := free + buffers + cached
 	return total, usableFree, nil
+}
+
+func runQuickBenchmark() int {
+	start := time.Now()
+	var dummy uint64
+	for i := 0; i < 5000000; i++ {
+		dummy += uint64(i * i)
+	}
+	return int(time.Since(start).Microseconds())
 }
 
 func itoa(n int) string {

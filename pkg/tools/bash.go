@@ -10,7 +10,32 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/velariumai/gorkbot/pkg/security"
 )
+
+// expandWorkdir resolves environment variables and the leading `~` in a
+// workdir path so that callers can use "$HOME", "${HOME}", or "~/project"
+// without hitting a literal "$HOME" path that doesn't exist on Termux.
+//
+// Go's exec.Cmd.Dir is set verbatim — unlike a shell, it never expands
+// variables. This causes "chdir $HOME: no such file or directory" errors
+// in audit logs when the AI supplies an unresolved path.
+func expandWorkdir(dir string) string {
+	if dir == "" {
+		return dir
+	}
+	// Expand $VAR and ${VAR} references.
+	dir = os.ExpandEnv(dir)
+	// Handle bare ~ prefix (os.ExpandEnv doesn't expand ~).
+	if strings.HasPrefix(dir, "~/") || dir == "~" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			dir = home + dir[1:]
+		}
+	}
+	return dir
+}
 
 // BashTool executes bash commands
 type BashTool struct {
@@ -21,11 +46,11 @@ type BashTool struct {
 func NewBashTool() *BashTool {
 	return &BashTool{
 		BaseTool: BaseTool{
-			name:        "bash",
-			description: "Execute bash commands in the terminal. Returns stdout, stderr, and exit code. Use for running shell commands, scripts, or system operations. Always escape user input using shell escaping to prevent injection.",
-			category:    CategoryShell,
+			name:               "bash",
+			description:        "Execute bash commands in the terminal. Returns stdout, stderr, and exit code. Use for running shell commands, scripts, or system operations. Always escape user input using shell escaping to prevent injection.",
+			category:           CategoryShell,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -90,7 +115,7 @@ func (t *BashTool) Execute(ctx context.Context, params map[string]interface{}) (
 	// Execute command
 	cmd := exec.CommandContext(cmdCtx, "bash", "-c", command)
 	if workdir != "" {
-		cmd.Dir = workdir
+		cmd.Dir = expandWorkdir(workdir) // resolve $HOME, ${VAR}, ~
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -152,11 +177,11 @@ type ReadFileTool struct {
 func NewReadFileTool() *ReadFileTool {
 	return &ReadFileTool{
 		BaseTool: BaseTool{
-			name:        "read_file",
-			description: "Read the complete contents of a file from the filesystem. Returns the raw text content of the file. Use when you need to view file contents.",
-			category:    CategoryFile,
+			name:               "read_file",
+			description:        "Read the complete contents of a file from the filesystem. Returns the raw text content of the file. Use when you need to view file contents.",
+			category:           CategoryFile,
 			requiresPermission: true,
-			defaultPermission: PermissionSession,
+			defaultPermission:  PermissionSession,
 		},
 	}
 }
@@ -186,13 +211,22 @@ func (t *ReadFileTool) Parameters() json.RawMessage {
 }
 
 func (t *ReadFileTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
-	path, ok := params["path"].(string)
+	rawPath, ok := params["path"].(string)
 	if !ok {
 		return &ToolResult{
 			Success:      false,
 			Error:        "path parameter must be a string",
 			OutputFormat: FormatError,
 		}, fmt.Errorf("invalid path parameter")
+	}
+
+	path, err := security.ValidatePath(rawPath)
+	if err != nil {
+		return &ToolResult{
+			Success:      false,
+			Error:        fmt.Sprintf("security validation failed: %v", err),
+			OutputFormat: FormatError,
+		}, err
 	}
 
 	// Use bash tool to read file (leverages existing permissions)
@@ -210,11 +244,11 @@ type WriteFileTool struct {
 func NewWriteFileTool() *WriteFileTool {
 	return &WriteFileTool{
 		BaseTool: BaseTool{
-			name:        "write_file",
-			description: "Write content to a file (creates new file or overwrites existing). Use for creating or updating text files. Returns success/failure status.",
-			category:    CategoryFile,
+			name:               "write_file",
+			description:        "Write content to a file (creates new file or overwrites existing). Use for creating or updating text files. Returns success/failure status.",
+			category:           CategoryFile,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -248,9 +282,14 @@ func (t *WriteFileTool) Parameters() json.RawMessage {
 }
 
 func (t *WriteFileTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
-	path, ok := params["path"].(string)
+	rawPath, ok := params["path"].(string)
 	if !ok {
 		return &ToolResult{Success: false, Error: "path parameter must be a string", OutputFormat: FormatError}, fmt.Errorf("invalid path")
+	}
+
+	path, err := security.ValidatePath(rawPath)
+	if err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("security validation failed: %v", err), OutputFormat: FormatError}, err
 	}
 
 	content, ok := params["content"].(string)

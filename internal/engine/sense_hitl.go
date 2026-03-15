@@ -2,9 +2,9 @@ package engine
 
 // sense_hitl.go — SENSE Human-in-the-Loop (HITL) Plan-and-Execute Guard
 //
-// Implements the SENSE v1.5.3 requirement: for high-stakes actions, Grokster
+// Implements the SENSE v2.0 requirement: for high-stakes actions, Gorkbot
 // MUST generate a structured plan, pause for explicit user approval (the
-// "v1.5.3 validation signal"), and execute ONLY after approval is granted.
+// "SENSE validation signal"), and execute ONLY after approval is granted.
 //
 // Integration points:
 //   - HITLGuard.IsHighStakes(toolName, params) — decides whether to gate an action.
@@ -55,12 +55,12 @@ type HITLCallback func(req HITLRequest) HITLDecision
 
 // highStakesTools lists tool names that always require HITL approval.
 var highStakesTools = map[string]bool{
-	"bash":        true,
-	"delete_file": true,
-	"git_push":    true,
-	"git_commit":  true,
-	"pkg_install": true,
-	"db_migrate":  true,
+	"bash":         true,
+	"delete_file":  true,
+	"git_push":     true,
+	"git_commit":   true,
+	"pkg_install":  true,
+	"db_migrate":   true,
 	"http_request": true,
 	"create_tool":  true,
 	"modify_tool":  true,
@@ -171,7 +171,7 @@ func (g *HITLGuard) buildHeuristicPlan(toolName string, params map[string]interf
 			"2. Execute `%s` with the listed parameters.\n"+
 			"3. Return results to the AI for further processing.\n\n"+
 			"---\n"+
-			"*v1.5.3 validation required — type 'approve' to continue or 'reject' to cancel.*",
+			"*SENSE v2.0 validation required — type 'approve' to continue or 'reject' to cancel.*",
 		toolName, paramsStr, toolName)
 }
 

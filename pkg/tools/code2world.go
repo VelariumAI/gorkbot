@@ -219,7 +219,7 @@ func buildCode2WorldHTML(desc, actionType, expected, snippet, risks string) stri
 <div class="header">
   <h1>⚡ Gorkbot with SENSE</h1>
   <div class="sub">Code2World Action Preview</div>
-  <span class="badge">v1.5.3 VALIDATION REQUIRED</span>
+  <span class="badge">SENSE v2.0 VALIDATION REQUIRED</span>
 </div>
 
 <div class="card">
@@ -240,7 +240,7 @@ func buildCode2WorldHTML(desc, actionType, expected, snippet, risks string) stri
 <div class="status-bar">
   <span>Generated: %s</span>
   <span class="status-badge">⚠️ PREVIEW ONLY — NOT EXECUTED</span>
-  <span>Gorkbot-SENSE v1.5.3 · Velarium AI</span>
+  <span>Gorkbot-SENSE v2.0 · Velarium AI</span>
 </div>
 
 </body>

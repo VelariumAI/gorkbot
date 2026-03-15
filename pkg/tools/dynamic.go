@@ -33,11 +33,11 @@ type DynamicToolConfig struct {
 
 // DynamicToolsFile is the top-level JSON file that persists all dynamic tools.
 type DynamicToolsFile struct {
-	Version        string              `json:"version"`
-	Tools          []DynamicToolConfig `json:"tools"`
+	Version string              `json:"version"`
+	Tools   []DynamicToolConfig `json:"tools"`
 	// PendingRebuild lists tools that were modified/overridden at runtime and
 	// need a `go build` before the changes become part of the compiled binary.
-	PendingRebuild []string            `json:"pending_rebuild,omitempty"`
+	PendingRebuild []string `json:"pending_rebuild,omitempty"`
 }
 
 // DynamicScriptTool is a runtime-registered tool backed by a DynamicToolConfig.

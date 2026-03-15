@@ -37,18 +37,18 @@ func (wm *WorkspaceManager) CreateCheckpoint() (string, error) {
 	// It doesn't modify the working tree or the stash list.
 	// Note: 'git stash create' only stashes tracked files. We may want to add untracked?
 	// But 'git stash store' is needed if we want it in the reflog. Let's just create a commit.
-	
+
 	// A simpler and safer approach that includes untracked files:
 	// We'll just run git stash push -u -m "gorkbot_checkpoint" and immediately apply it so it stays in stash list for easy rollback.
 	// Actually, the requirement is "create a hidden git stash or temporary branch."
 
 	msg := fmt.Sprintf("gorkbot_checkpoint_%d", time.Now().Unix())
-	
+
 	// 'git stash create' doesn't include untracked.
 	// Let's use 'git stash push --include-untracked -m "..."' and then 'git stash apply'
 	// Wait, 'git stash push' modifies the working tree (it resets it). Then 'apply' restores it.
 	// But what if apply has conflicts? It shouldn't, because we just stashed it.
-	
+
 	cmdPush := exec.Command("git", "stash", "push", "--include-untracked", "-m", msg)
 	cmdPush.Dir = wm.rootDir
 	if out, err := cmdPush.CombinedOutput(); err != nil {
@@ -73,7 +73,7 @@ func (wm *WorkspaceManager) CreateCheckpoint() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("git rev-parse failed: %v", err)
 	}
-	
+
 	return strings.TrimSpace(string(revOut)), nil
 }
 

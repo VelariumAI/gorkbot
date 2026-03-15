@@ -2,8 +2,9 @@
 // with YAML frontmatter and makes them available as slash commands.
 //
 // Skill files live in:
-//   ~/.config/gorkbot/skills/          (user-global)
-//   <project>/.gorkbot/skills/         (project-level)
+//
+//	~/.config/gorkbot/skills/          (user-global)
+//	<project>/.gorkbot/skills/         (project-level)
 //
 // Format example (.gorkbot/skills/code-review.md):
 //
@@ -23,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -175,6 +177,152 @@ Analyze {{target}} and provide:
 3. Actionable recommendations
 `, name, strings.Title(name))
 	return os.WriteFile(path, []byte(content), 0644)
+}
+
+// validSkillName is the compiled regexp for skill name validation.
+var validSkillName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
+// FirstUserDir returns the first configured user directory (or "" if none).
+// This is the preferred target for writing new skill files.
+func (l *Loader) FirstUserDir() string {
+	for _, d := range l.dirs {
+		return d
+	}
+	return ""
+}
+
+// Create writes a new skill file to the first writable user directory.
+// name must match ^[a-z0-9][a-z0-9._-]{0,63}$ and must not already exist.
+// If content is empty a minimal template is generated from name and description.
+func (l *Loader) Create(name, description, content string, tags, platforms []string) error {
+	if !validSkillName.MatchString(name) {
+		return fmt.Errorf("invalid skill name %q: must match ^[a-z0-9][a-z0-9._-]{0,63}$", name)
+	}
+	if strings.Contains(name, "..") || strings.Contains(name, "/") {
+		return fmt.Errorf("invalid skill name %q: must not contain '..' or '/'", name)
+	}
+
+	// Determine target directory — first existing dir or create it.
+	dir := l.FirstUserDir()
+	if dir == "" {
+		return fmt.Errorf("no user skill directories configured")
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("cannot create skill directory %q: %w", dir, err)
+	}
+
+	destPath := filepath.Join(dir, name+".md")
+	if _, err := os.Stat(destPath); err == nil {
+		return fmt.Errorf("skill %q already exists at %s", name, destPath)
+	}
+
+	if content == "" {
+		// Generate minimal frontmatter template.
+		tagsYAML := "[]"
+		if len(tags) > 0 {
+			tagsYAML = "[" + strings.Join(tags, ", ") + "]"
+		}
+		platformsYAML := "[]"
+		if len(platforms) > 0 {
+			platformsYAML = "[" + strings.Join(platforms, ", ") + "]"
+		}
+		if description == "" {
+			description = name + " skill"
+		}
+		content = fmt.Sprintf("---\nname: %s\ndescription: %s\ntags: %s\nplatforms: %s\n---\n\n%s skill template.\n",
+			name, description, tagsYAML, platformsYAML, name)
+	}
+
+	return os.WriteFile(destPath, []byte(content), 0644)
+}
+
+// Patch finds skill 'name' and does a find-and-replace of oldText→newText.
+// Returns an error if the skill is not found or oldText is not present.
+func (l *Loader) Patch(name, oldText, newText string) error {
+	def, ok := l.Get(name)
+	if !ok {
+		return fmt.Errorf("skill %q not found", name)
+	}
+	if def.SourceFile == "" {
+		return fmt.Errorf("skill %q has no source file (built-in skills cannot be patched)", name)
+	}
+
+	data, err := os.ReadFile(def.SourceFile)
+	if err != nil {
+		return fmt.Errorf("cannot read skill file %q: %w", def.SourceFile, err)
+	}
+
+	original := string(data)
+	if !strings.Contains(original, oldText) {
+		return fmt.Errorf("old_text %q not found in skill %q", oldText, name)
+	}
+
+	// Replace only the first occurrence.
+	updated := strings.Replace(original, oldText, newText, 1)
+	return os.WriteFile(def.SourceFile, []byte(updated), 0644)
+}
+
+// Delete removes skill 'name' from the filesystem.
+// Only deletes skills whose SourceFile is under one of the configured dirs.
+// Built-in (embedded) skills cannot be deleted.
+func (l *Loader) Delete(name string) error {
+	def, ok := l.Get(name)
+	if !ok {
+		return fmt.Errorf("skill %q not found", name)
+	}
+	if def.SourceFile == "" {
+		return fmt.Errorf("skill %q is a built-in skill and cannot be deleted", name)
+	}
+
+	// Verify the source file is under one of our configured dirs.
+	cleanSource := filepath.Clean(def.SourceFile)
+	allowed := false
+	for _, d := range l.dirs {
+		cleanDir := filepath.Clean(d)
+		if !strings.HasSuffix(cleanDir, string(filepath.Separator)) {
+			cleanDir += string(filepath.Separator)
+		}
+		if strings.HasPrefix(cleanSource+string(filepath.Separator), cleanDir) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return fmt.Errorf("skill %q source file %q is outside configured skill directories", name, def.SourceFile)
+	}
+
+	return os.Remove(cleanSource)
+}
+
+// View returns the full raw content of skill 'name'.
+// For user-defined skills it reads the source file; for built-in skills it
+// reads from the embedded filesystem.
+func (l *Loader) View(name string) (string, error) {
+	def, ok := l.Get(name)
+	if !ok {
+		return "", fmt.Errorf("skill %q not found", name)
+	}
+
+	// Built-in skills have SourceFile set to "builtin/<name>.md" (embed path).
+	if def.SourceFile != "" && !filepath.IsAbs(def.SourceFile) {
+		// Likely an embedded path — try the embedded FS.
+		data, err := builtinSkills.ReadFile(def.SourceFile)
+		if err == nil {
+			return string(data), nil
+		}
+	}
+
+	if def.SourceFile == "" {
+		// Reconstruct from parsed fields if no source file.
+		return fmt.Sprintf("---\nname: %s\ndescription: %s\n---\n\n%s\n",
+			def.Name, def.Description, def.Template), nil
+	}
+
+	data, err := os.ReadFile(def.SourceFile)
+	if err != nil {
+		return "", fmt.Errorf("cannot read skill file %q: %w", def.SourceFile, err)
+	}
+	return string(data), nil
 }
 
 // parseSkillFile reads a skill markdown file and parses its frontmatter.

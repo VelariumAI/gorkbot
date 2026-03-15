@@ -4,13 +4,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sync"
 )
 
+// permPattern holds a glob pattern and its associated permission level.
+type permPattern struct {
+	Pattern string          `json:"pattern"`
+	Level   PermissionLevel `json:"level"`
+}
+
 // PermissionManager manages tool permissions with persistent storage
 type PermissionManager struct {
 	permissions map[string]PermissionLevel
+	patterns    []permPattern // glob-pattern permissions, checked after exact miss
 	configPath  string
 	mu          sync.RWMutex
 }
@@ -18,6 +26,7 @@ type PermissionManager struct {
 // PermissionConfig is the persistent storage format
 type PermissionConfig struct {
 	Permissions map[string]PermissionLevel `json:"permissions"`
+	Patterns    []permPattern              `json:"patterns,omitempty"`
 	Version     string                     `json:"version"`
 }
 
@@ -41,7 +50,8 @@ func NewPermissionManager(configDir string) (*PermissionManager, error) {
 	return pm, nil
 }
 
-// GetPermission returns the permission level for a tool
+// GetPermission returns the permission level for a tool.
+// Exact-name match takes priority; glob patterns are checked on miss.
 func (pm *PermissionManager) GetPermission(toolName string) PermissionLevel {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
@@ -50,8 +60,32 @@ func (pm *PermissionManager) GetPermission(toolName string) PermissionLevel {
 		return perm
 	}
 
+	// Fall through to glob-pattern matching.
+	for _, p := range pm.patterns {
+		if ok, _ := path.Match(p.Pattern, toolName); ok {
+			return p.Level
+		}
+	}
+
 	// Default to asking user
 	return PermissionOnce
+}
+
+// SetPatternPermission sets a glob-pattern permission rule.
+// Pattern syntax follows path.Match (e.g. "file_*", "git_*").
+func (pm *PermissionManager) SetPatternPermission(pattern string, level PermissionLevel) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	// Update existing entry if pattern already present.
+	for i, p := range pm.patterns {
+		if p.Pattern == pattern {
+			pm.patterns[i].Level = level
+			return pm.save()
+		}
+	}
+	pm.patterns = append(pm.patterns, permPattern{Pattern: pattern, Level: level})
+	return pm.save()
 }
 
 // SetPermission sets the permission level for a tool
@@ -107,6 +141,7 @@ func (pm *PermissionManager) load() error {
 	}
 
 	pm.permissions = config.Permissions
+	pm.patterns = config.Patterns
 	return nil
 }
 
@@ -114,6 +149,7 @@ func (pm *PermissionManager) load() error {
 func (pm *PermissionManager) save() error {
 	config := PermissionConfig{
 		Permissions: pm.permissions,
+		Patterns:    pm.patterns,
 		Version:     "1.0",
 	}
 

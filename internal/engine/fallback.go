@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/velariumai/gorkbot/pkg/ai"
@@ -75,6 +76,24 @@ func isProviderOutage(err error) bool {
 	return false
 }
 
+// isContextOverflowErr returns true when the error message indicates a context
+// token limit was exceeded.  Used by the SENSE tracer to classify streaming errors.
+func isContextOverflowErr(msg string) bool {
+	lower := strings.ToLower(msg)
+	signals := []string{
+		"context length", "context window", "context_length_exceeded",
+		"maximum context", "max tokens", "token limit", "too many tokens",
+		"input is too long", "tokens exceeds", "reduce your prompt",
+		"context_too_long", "request too large",
+	}
+	for _, s := range signals {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // asNetErr unwraps err into a net.Error, traversing one level of wrapping.
 func asNetErr(err error, target *net.Error) bool {
 	if ne, ok := err.(net.Error); ok {
@@ -110,6 +129,83 @@ func secondModelFor(providerID string) string {
 	return string(models[1].ID)
 }
 
+// raceProviderPings fires pings for all candidate providers in parallel and
+// returns the (providerID, modelID) of the first one that responds successfully.
+// Slower winners are cancelled via context. Providers that fail are disabled
+// for the session. Returns ("", "") when every candidate is unreachable.
+func (o *Orchestrator) raceProviderPings(ctx context.Context, pm *providers.Manager, probeOrder []string) (providerID, modelID string) {
+	type result struct {
+		id    string
+		model string
+	}
+
+	winCh := make(chan result, 1)
+	pingCtx, pingCancel := context.WithTimeout(ctx, 8*time.Second)
+	defer pingCancel()
+
+	var wg sync.WaitGroup
+	// priority serialises winner selection so the highest-priority ready
+	// provider wins when two respond within the same scheduler tick.
+	var mu sync.Mutex
+	bestPriority := len(probeOrder) + 1
+
+	for idx, id := range probeOrder {
+		if pm.IsSessionDisabled(id) {
+			continue
+		}
+		base, err := pm.GetBase(id)
+		if err != nil {
+			continue
+		}
+		wg.Add(1)
+		go func(id string, priority int, p ai.AIProvider) {
+			defer wg.Done()
+			if err := p.Ping(pingCtx); err != nil {
+				pm.DisableForSession(id)
+				if o.Logger != nil {
+					o.Logger.Info("Provider ping failed (race)", "provider", id, "error", err)
+				}
+				return
+			}
+			mu.Lock()
+			if priority < bestPriority {
+				bestPriority = priority
+				select {
+				case winCh <- result{id, bestModelFor(id)}:
+				default:
+					// Replace winner if we are higher priority.
+					// Drain and resend.
+					select {
+					case <-winCh:
+					default:
+					}
+					winCh <- result{id, bestModelFor(id)}
+				}
+			}
+			mu.Unlock()
+		}(id, idx, base)
+	}
+
+	// Close winCh after all goroutines finish so we can range-receive.
+	go func() { wg.Wait(); close(winCh) }()
+
+	// Give the race up to the ping deadline.
+	select {
+	case w, ok := <-winCh:
+		if !ok {
+			return "", ""
+		}
+		// Drain remaining wins — we already have the best one.
+		go func() {
+			for range winCh {
+			}
+		}()
+		return w.id, w.model
+	case <-pingCtx.Done():
+		return "", ""
+	}
+}
+
 // RunProviderCascade pings providers in priority order, disables failures,
 // then hot-swaps Primary + Consultant.
 // Returns (retryable, statusMsg).
@@ -138,33 +234,8 @@ func (o *Orchestrator) RunProviderCascade(ctx context.Context, failedID string) 
 		probeOrder = append(probeOrder, providerPriority[(startIdx+i)%len(providerPriority)])
 	}
 
-	// 3. Find first reachable provider.
-	newPrimary := ""
-	newPrimaryModel := ""
-	for _, id := range probeOrder {
-		if pm.IsSessionDisabled(id) {
-			continue
-		}
-		base, err := pm.GetBase(id)
-		if err != nil {
-			// No key or already disabled.
-			continue
-		}
-		pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
-		pingErr := base.Ping(pingCtx)
-		pingCancel()
-		if pingErr != nil {
-			pm.DisableForSession(id)
-			if o.Logger != nil {
-				o.Logger.Info("Provider ping failed, disabling for session",
-					"provider", id, "error", pingErr)
-			}
-			continue
-		}
-		newPrimary = id
-		newPrimaryModel = bestModelFor(id)
-		break
-	}
+	// 3. Race all candidate providers in parallel; first ping wins.
+	newPrimary, newPrimaryModel := o.raceProviderPings(ctx, pm, probeOrder)
 
 	if newPrimary == "" {
 		return false, "All providers unreachable — check API keys/credits"
