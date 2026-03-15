@@ -29,7 +29,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/velariumai/gorkbot/internal/engine"
-	"github.com/velariumai/gorkbot/internal/mel"
+	"github.com/velariumai/gorkbot/pkg/adaptive"
 	"github.com/velariumai/gorkbot/internal/platform"
 	"github.com/velariumai/gorkbot/internal/tui"
 	"github.com/velariumai/gorkbot/pkg/a2a"
@@ -482,7 +482,7 @@ func main() {
 	})
 
 	// 6.3c Unified Memory — wraps AgeMem + Engrams + MEL
-	orch.UnifiedMem = memory.NewUnifiedMemory(orch.AgeMem, orch.Engrams, func() *mel.VectorStore {
+	orch.UnifiedMem = memory.NewUnifiedMemory(orch.AgeMem, orch.Engrams, func() *adaptive.VectorStore {
 		if orch.Intelligence != nil {
 			return orch.Intelligence.Store
 		}
@@ -800,7 +800,7 @@ type tuiExtras struct {
 }
 
 func runTUI(orch *engine.Orchestrator, pm *process.Manager, reg *registry.ModelRegistry, modelName, consultantName string, sysConfig *router.SystemConfiguration, themeMgr *theme.Manager, mcpMgr *mcp.Manager, appState *config.AppStateManager, extras *tuiExtras, discMgr ...*discovery.Manager) {
-	model, err := tui.NewModel(orch, pm, modelName, consultantName)
+	model, err := tui.NewModel(orch, pm, modelName, consultantName, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating TUI: %v\n", err)
 		os.Exit(1)
