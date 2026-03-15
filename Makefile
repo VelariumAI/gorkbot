@@ -58,7 +58,7 @@ install: build build-web
 # Add ~/bin to PATH if not already there:
 #   echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
 
-install-global: build-llm download-nomic build-web
+install-global: init-submodules build-llm download-nomic build-web
 	@install -m 755 $(BUILD_DIR)/$(APP_NAME) $(INSTALL_DIR)/$(APP_NAME)
 	@install -m 755 $(BUILD_DIR)/$(WEB_APP_NAME) $(INSTALL_DIR)/$(WEB_APP_NAME)
 	@bash scripts/write_launcher.sh $(INSTALL_DIR) $(APP_NAME) $(SHORT_NAME)
