@@ -23,27 +23,27 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/velariumai/gorkbot/pkg/cci"
+	"github.com/velariumai/gorkbot/pkg/adaptive"
 )
 
 // CCIAccessor is the minimal interface the tools need from CCILayer.
-// The concrete type is *cci.CCILayer; using an interface avoids a direct
+// The concrete type is *adaptive.CCILayer; using an interface avoids a direct
 // import of internal/engine from pkg/tools (which would be a cycle).
 type CCIAccessor interface {
 	GetStatus() string
 }
 
-// cciLayerKey is the context key used to store a *cci.CCILayer in ctx.
+// cciLayerKey is the context key used to store a *adaptive.CCILayer in ctx.
 type cciLayerKey struct{}
 
 // WithCCILayer stores the CCI layer in the context so tools can retrieve it.
-func WithCCILayer(ctx context.Context, layer *cci.CCILayer) context.Context {
+func WithCCILayer(ctx context.Context, layer *adaptive.CCILayer) context.Context {
 	return context.WithValue(ctx, cciLayerKey{}, layer)
 }
 
 // cciFromCtx retrieves the CCILayer from context. Returns nil if not set.
-func cciFromCtx(ctx context.Context) *cci.CCILayer {
-	v, _ := ctx.Value(cciLayerKey{}).(*cci.CCILayer)
+func cciFromCtx(ctx context.Context) *adaptive.CCILayer {
+	v, _ := ctx.Value(cciLayerKey{}).(*adaptive.CCILayer)
 	return v
 }
 
@@ -51,11 +51,11 @@ func cciFromCtx(ctx context.Context) *cci.CCILayer {
 
 type cciListSubsystems struct{}
 
-func (t *cciListSubsystems) Name() string        { return "mcp_context_list_subsystems" }
-func (t *cciListSubsystems) Category() ToolCategory { return CategoryMeta }
-func (t *cciListSubsystems) RequiresPermission() bool { return false }
+func (t *cciListSubsystems) Name() string                       { return "mcp_context_list_subsystems" }
+func (t *cciListSubsystems) Category() ToolCategory             { return CategoryMeta }
+func (t *cciListSubsystems) RequiresPermission() bool           { return false }
 func (t *cciListSubsystems) DefaultPermission() PermissionLevel { return PermissionAlways }
-func (t *cciListSubsystems) OutputFormat() OutputFormat { return FormatText }
+func (t *cciListSubsystems) OutputFormat() OutputFormat         { return FormatText }
 func (t *cciListSubsystems) Description() string {
 	return "List all documented subsystems in the CCI Tier 3 cold memory knowledge base."
 }
@@ -87,11 +87,11 @@ func (t *cciListSubsystems) Execute(ctx context.Context, _ map[string]interface{
 
 type cciGetSubsystem struct{}
 
-func (t *cciGetSubsystem) Name() string        { return "mcp_context_get_subsystem" }
-func (t *cciGetSubsystem) Category() ToolCategory { return CategoryMeta }
-func (t *cciGetSubsystem) RequiresPermission() bool { return false }
+func (t *cciGetSubsystem) Name() string                       { return "mcp_context_get_subsystem" }
+func (t *cciGetSubsystem) Category() ToolCategory             { return CategoryMeta }
+func (t *cciGetSubsystem) RequiresPermission() bool           { return false }
 func (t *cciGetSubsystem) DefaultPermission() PermissionLevel { return PermissionAlways }
-func (t *cciGetSubsystem) OutputFormat() OutputFormat { return FormatText }
+func (t *cciGetSubsystem) OutputFormat() OutputFormat         { return FormatText }
 func (t *cciGetSubsystem) Description() string {
 	return "Retrieve the Tier 3 architectural specification for a specific subsystem from the CCI cold memory. Returns empty if undocumented (gap event — switch to PLAN mode)."
 }
@@ -130,7 +130,7 @@ func (t *cciGetSubsystem) Execute(ctx context.Context, params map[string]interfa
 	}
 	return &ToolResult{
 		Success: true,
-		Output:  cci.FormatSubsystemDoc(name, content),
+		Output:  adaptive.FormatSubsystemDoc(name, content),
 	}, nil
 }
 
@@ -138,11 +138,11 @@ func (t *cciGetSubsystem) Execute(ctx context.Context, params map[string]interfa
 
 type cciSuggestSpecialist struct{}
 
-func (t *cciSuggestSpecialist) Name() string        { return "mcp_context_suggest_specialist" }
-func (t *cciSuggestSpecialist) Category() ToolCategory { return CategoryMeta }
-func (t *cciSuggestSpecialist) RequiresPermission() bool { return false }
+func (t *cciSuggestSpecialist) Name() string                       { return "mcp_context_suggest_specialist" }
+func (t *cciSuggestSpecialist) Category() ToolCategory             { return CategoryMeta }
+func (t *cciSuggestSpecialist) RequiresPermission() bool           { return false }
 func (t *cciSuggestSpecialist) DefaultPermission() PermissionLevel { return PermissionAlways }
-func (t *cciSuggestSpecialist) OutputFormat() OutputFormat { return FormatText }
+func (t *cciSuggestSpecialist) OutputFormat() OutputFormat         { return FormatText }
 func (t *cciSuggestSpecialist) Description() string {
 	return "Suggest the appropriate CCI Tier 2 specialist domain for a given task description."
 }
@@ -197,11 +197,11 @@ func (t *cciSuggestSpecialist) Execute(ctx context.Context, params map[string]in
 
 type cciUpdateSubsystem struct{}
 
-func (t *cciUpdateSubsystem) Name() string        { return "mcp_context_update_subsystem" }
-func (t *cciUpdateSubsystem) Category() ToolCategory { return CategoryMeta }
-func (t *cciUpdateSubsystem) RequiresPermission() bool { return true }
+func (t *cciUpdateSubsystem) Name() string                       { return "mcp_context_update_subsystem" }
+func (t *cciUpdateSubsystem) Category() ToolCategory             { return CategoryMeta }
+func (t *cciUpdateSubsystem) RequiresPermission() bool           { return true }
 func (t *cciUpdateSubsystem) DefaultPermission() PermissionLevel { return PermissionSession }
-func (t *cciUpdateSubsystem) OutputFormat() OutputFormat { return FormatText }
+func (t *cciUpdateSubsystem) OutputFormat() OutputFormat         { return FormatText }
 func (t *cciUpdateSubsystem) Description() string {
 	return "Write or update a Tier 3 CCI subsystem specification (living documentation). Used after code changes to keep specs synchronized."
 }
@@ -247,11 +247,11 @@ func (t *cciUpdateSubsystem) Execute(ctx context.Context, params map[string]inte
 
 type cciListSpecialists struct{}
 
-func (t *cciListSpecialists) Name() string        { return "mcp_context_list_specialists" }
-func (t *cciListSpecialists) Category() ToolCategory { return CategoryMeta }
-func (t *cciListSpecialists) RequiresPermission() bool { return false }
+func (t *cciListSpecialists) Name() string                       { return "mcp_context_list_specialists" }
+func (t *cciListSpecialists) Category() ToolCategory             { return CategoryMeta }
+func (t *cciListSpecialists) RequiresPermission() bool           { return false }
 func (t *cciListSpecialists) DefaultPermission() PermissionLevel { return PermissionAlways }
-func (t *cciListSpecialists) OutputFormat() OutputFormat { return FormatText }
+func (t *cciListSpecialists) OutputFormat() OutputFormat         { return FormatText }
 func (t *cciListSpecialists) Description() string {
 	return "List all available CCI Tier 2 specialist domains."
 }
@@ -281,11 +281,11 @@ func (t *cciListSpecialists) Execute(ctx context.Context, _ map[string]interface
 
 type cciStatus struct{}
 
-func (t *cciStatus) Name() string        { return "mcp_context_status" }
-func (t *cciStatus) Category() ToolCategory { return CategoryMeta }
-func (t *cciStatus) RequiresPermission() bool { return false }
+func (t *cciStatus) Name() string                       { return "mcp_context_status" }
+func (t *cciStatus) Category() ToolCategory             { return CategoryMeta }
+func (t *cciStatus) RequiresPermission() bool           { return false }
 func (t *cciStatus) DefaultPermission() PermissionLevel { return PermissionAlways }
-func (t *cciStatus) OutputFormat() OutputFormat { return FormatText }
+func (t *cciStatus) OutputFormat() OutputFormat         { return FormatText }
 func (t *cciStatus) Description() string {
 	return "Display the full CCI (Codified Context Infrastructure) system status: hot memory, specialists, cold docs."
 }

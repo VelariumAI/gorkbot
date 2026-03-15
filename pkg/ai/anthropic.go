@@ -27,12 +27,32 @@ type anthropicBlock struct {
 	Text string `json:"text,omitempty"`
 }
 
+// anthropicCacheControl marks a content block for prompt caching.
+type anthropicCacheControl struct {
+	Type string `json:"type"` // "ephemeral"
+}
+
+// anthropicBlockWithCache wraps a text block with optional cache_control.
+type anthropicBlockWithCache struct {
+	Type         string                 `json:"type"`
+	Text         string                 `json:"text,omitempty"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
 type anthropicRequest struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens"`
-	System    string             `json:"system,omitempty"`
+	System    interface{}        `json:"system,omitempty"` // string OR []anthropicBlockWithCache
 	Messages  []anthropicMessage `json:"messages"`
 	Stream    bool               `json:"stream,omitempty"`
+}
+
+// anthropicUsage tracks token consumption including cache statistics.
+type anthropicUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 }
 
 type anthropicContentBlock struct {
@@ -52,14 +72,25 @@ type anthropicResponse struct {
 type anthropicStreamEvent struct {
 	Type  string `json:"type"`
 	Delta *struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type     string `json:"type"`
+		Text     string `json:"text"`     // text_delta
+		Thinking string `json:"thinking"` // thinking_delta
 	} `json:"delta,omitempty"`
 	Error *struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
+	// message_start event carries usage (including cache stats)
+	Message *struct {
+		Usage *anthropicUsage `json:"usage,omitempty"`
+	} `json:"message,omitempty"`
 }
+
+// ThinkingStartSentinel and ThinkingEndSentinel bracket thinking tokens so
+// downstream consumers (streamCallbackWriter) can route them separately from
+// regular response tokens without changing the io.Writer contract.
+const ThinkingStartSentinel = "\x02"
+const ThinkingEndSentinel = "\x03"
 
 // Anthropic model listing response
 type anthropicModelListResponse struct {
@@ -67,6 +98,43 @@ type anthropicModelListResponse struct {
 		ID          string `json:"id"`
 		DisplayName string `json:"display_name"`
 	} `json:"data"`
+}
+
+// injectCacheControl adds cache_control breakpoints to the system prompt and
+// last 3 user messages, enabling Anthropic's prompt caching feature.
+// Strategy: mark system prompt + up to 3 recent user messages as cacheable.
+// Deep-copies the messages slice before modifying to avoid mutating callers.
+// Only applied when len(msgs) >= 2.
+func injectCacheControl(systemMsg string, msgs []anthropicMessage) (interface{}, []anthropicMessage) {
+	// Build system as block array with cache_control on last block
+	sysBlock := []anthropicBlockWithCache{{
+		Type: "text",
+		Text: systemMsg,
+		CacheControl: &anthropicCacheControl{Type: "ephemeral"},
+	}}
+
+	// Deep copy messages
+	newMsgs := make([]anthropicMessage, len(msgs))
+	copy(newMsgs, msgs)
+
+	// Mark last 3 user messages with cache_control
+	marked := 0
+	for i := len(newMsgs) - 1; i >= 0 && marked < 3; i-- {
+		if newMsgs[i].Role == "user" {
+			// Convert string content to block array with cache_control
+			content, ok := newMsgs[i].Content.(string)
+			if ok && content != "" {
+				newMsgs[i].Content = []anthropicBlockWithCache{{
+					Type: "text",
+					Text: content,
+					CacheControl: &anthropicCacheControl{Type: "ephemeral"},
+				}}
+				marked++
+			}
+		}
+	}
+
+	return sysBlock, newMsgs
 }
 
 // ── AnthropicProvider ─────────────────────────────────────────────────────────
@@ -78,6 +146,7 @@ type AnthropicProvider struct {
 	Model            string
 	client           *http.Client
 	supportsThinking bool
+	ThinkingBudget   int  // 0 = disabled; >0 = enabled with this token budget
 	bearerAuth       bool // if true, use "Authorization: Bearer" instead of "x-api-key" (for MiniMax compat)
 }
 
@@ -217,15 +286,42 @@ func (a *AnthropicProvider) Stream(ctx context.Context, prompt string, out io.Wr
 func (a *AnthropicProvider) StreamWithHistory(ctx context.Context, history *ConversationHistory, out io.Writer) error {
 	systemMsg, msgs := a.convertHistory(history)
 
+	// Apply prompt caching when we have enough messages to benefit.
+	var cachedSystem interface{} = systemMsg
+	cachedMsgs := msgs
+	if len(msgs) >= 2 && systemMsg != "" {
+		cachedSystem, cachedMsgs = injectCacheControl(systemMsg, msgs)
+	}
+
+	thinkingEnabled := a.supportsThinking && a.ThinkingBudget > 0
+	maxTok := 16384
+	if thinkingEnabled {
+		maxTok = a.ThinkingBudget + 16384
+	}
+
 	reqBody := anthropicRequest{
 		Model:     a.Model,
-		MaxTokens: 16384,
-		System:    systemMsg,
-		Messages:  msgs,
+		MaxTokens: maxTok,
+		System:    cachedSystem,
+		Messages:  cachedMsgs,
 		Stream:    true,
 	}
 
-	jsonBody, err := json.Marshal(reqBody)
+	// Inline thinking struct for the streaming path (reuses wire type).
+	type thinkingPayload struct {
+		Type         string `json:"type"`
+		BudgetTokens int    `json:"budget_tokens"`
+	}
+	type streamReqWithThinking struct {
+		anthropicRequest
+		Thinking *thinkingPayload `json:"thinking,omitempty"`
+	}
+	streamReq := streamReqWithThinking{anthropicRequest: reqBody}
+	if thinkingEnabled {
+		streamReq.Thinking = &thinkingPayload{Type: "enabled", BudgetTokens: a.ThinkingBudget}
+	}
+
+	jsonBody, err := json.Marshal(streamReq)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -235,6 +331,16 @@ func (a *AnthropicProvider) StreamWithHistory(ctx context.Context, history *Conv
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	a.setHeaders(req)
+	if thinkingEnabled {
+		req.Header.Set("anthropic-beta", "thinking-2025-01-01")
+	}
+	// Add caching beta — coexists with thinking beta
+	existing := req.Header.Get("anthropic-beta")
+	if existing != "" {
+		req.Header.Set("anthropic-beta", existing+",prompt-caching-2024-07-31")
+	} else {
+		req.Header.Set("anthropic-beta", "prompt-caching-2024-07-31")
+	}
 
 	streamClient := NewRetryClient()
 	resp, err := streamClient.Do(req)
@@ -266,9 +372,27 @@ func (a *AnthropicProvider) StreamWithHistory(ctx context.Context, history *Conv
 			continue
 		}
 
-		if event.Type == "content_block_delta" && event.Delta != nil && event.Delta.Type == "text_delta" {
-			guard.ObserveContent(event.Delta.Text)
-			fmt.Fprint(out, event.Delta.Text)
+		if event.Type == "message_start" && event.Message != nil && event.Message.Usage != nil {
+			if cacheRead := event.Message.Usage.CacheReadInputTokens; cacheRead > 0 {
+				slog.Info("Anthropic cache hit", "read_tokens", cacheRead, "model", a.Model)
+			}
+			if cacheCreate := event.Message.Usage.CacheCreationInputTokens; cacheCreate > 0 {
+				slog.Info("Anthropic cache created", "creation_tokens", cacheCreate, "model", a.Model)
+			}
+		}
+		if event.Type == "content_block_delta" && event.Delta != nil {
+			switch event.Delta.Type {
+			case "text_delta":
+				guard.ObserveContent(event.Delta.Text)
+				fmt.Fprint(out, event.Delta.Text)
+			case "thinking_delta":
+				// Emit thinking tokens bracketed by sentinel bytes so the
+				// downstream streamCallbackWriter can route them to the TUI's
+				// thinking box without changing the io.Writer contract.
+				if event.Delta.Thinking != "" {
+					fmt.Fprintf(out, "%s%s%s", ThinkingStartSentinel, event.Delta.Thinking, ThinkingEndSentinel)
+				}
+			}
 		}
 		if event.Type == "error" && event.Error != nil {
 			return fmt.Errorf("stream error: %s", event.Error.Message)

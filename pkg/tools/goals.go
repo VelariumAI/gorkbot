@@ -11,6 +11,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/velariumai/gorkbot/pkg/security"
 )
 
 // goalLedgerKeyType is the context key type for the goal ledger.
@@ -102,6 +104,9 @@ func (t *CloseGoalTool) Execute(ctx context.Context, params map[string]interface
 	id, _ := params["id"].(string)
 	if id == "" {
 		return &ToolResult{Success: false, Error: "id is required"}, nil
+	}
+	if err := security.ValidateInput(id); err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("invalid id: %v", err)}, nil
 	}
 	accessor, _ := ctx.Value(GoalLedgerKey).(GoalLedgerAccessor)
 	if accessor == nil {

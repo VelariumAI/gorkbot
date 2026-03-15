@@ -40,8 +40,8 @@ type RuleSet struct {
 
 // RuleEngine evaluates tool calls against a RuleSet.
 type RuleEngine struct {
-	mu      sync.RWMutex
-	rules   RuleSet
+	mu        sync.RWMutex
+	rules     RuleSet
 	rulesPath string
 }
 
@@ -178,9 +178,10 @@ func (re *RuleEngine) Format() string {
 
 // matchRule returns true if the pattern matches the given tool call.
 // Pattern forms:
-//   "tool_name"             → tool name match only
-//   "tool_name(arg_glob)"   → tool name + argument glob
-//   "tool_name(domain:x)"   → tool name + domain match on url param
+//
+//	"tool_name"             → tool name match only
+//	"tool_name(arg_glob)"   → tool name + argument glob
+//	"tool_name(domain:x)"   → tool name + domain match on url param
 func matchRule(pattern, toolName string, params map[string]interface{}) bool {
 	// Split pattern into tool part and argument part
 	pTool := pattern

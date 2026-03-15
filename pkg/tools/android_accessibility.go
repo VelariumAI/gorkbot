@@ -48,21 +48,21 @@ func (t *AccessibilityQueryTool) Execute(ctx context.Context, args map[string]in
 	// Maybe it meant `termux-assist` or similar?
 	// Or maybe `adb shell input` + `screencap` is what was meant?
 	// But `accessibility_query` implies structured data.
-	
+
 	// I will implement a placeholder that tries to use `adb shell uiautomator dump` via `adb_shell` if available,
 	// or returns an error suggesting installation.
-	
+
 	// Actually, let's assume `adb` is available since `intent_broadcast` used `am`.
 	// `am` works on device without root/adb if in Termux? No, usually `am` requires shell permission or adb.
 	// Termux environment usually requires `adb` (via `android-tools`) and wireless debugging enabled.
-	
+
 	// So I will use `adb shell uiautomator dump /sdcard/window_dump.xml && cat /sdcard/window_dump.xml`
-	
+
 	cmd := exec.CommandContext(ctx, "adb", "shell", "uiautomator", "dump", "/sdcard/window_dump.xml")
 	if err := cmd.Run(); err != nil {
 		return &ToolResult{Success: false, Error: fmt.Sprintf("Failed to dump UI: %v (Is ADB connected?)", err)}, nil
 	}
-	
+
 	cmdRead := exec.CommandContext(ctx, "adb", "shell", "cat", "/sdcard/window_dump.xml")
 	out, err := cmdRead.CombinedOutput()
 	if err != nil {

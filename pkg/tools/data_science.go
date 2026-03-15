@@ -172,7 +172,7 @@ func (t *ArxivSearchTool) Execute(ctx context.Context, args map[string]interface
 		max = 5
 	}
 	url := fmt.Sprintf("http://export.arxiv.org/api/query?search_query=all:%s&max_results=%d", strings.ReplaceAll(query, " ", "+"), max)
-	
+
 	cmd := exec.CommandContext(ctx, "curl", "-s", url)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -216,7 +216,7 @@ func (t *WebArchiveTool) Parameters() json.RawMessage {
 func (t *WebArchiveTool) Execute(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	url, _ := args["url"].(string)
 	api := fmt.Sprintf("http://archive.org/wayback/available?url=%s", url)
-	
+
 	cmd := exec.CommandContext(ctx, "curl", "-s", api)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

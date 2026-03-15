@@ -1,0 +1,13 @@
+{
+  "name": "tool_registry_manager",
+  "description": "Manages dynamic tool registration, modification, and audit database initialization for Gorkbot's tool system",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

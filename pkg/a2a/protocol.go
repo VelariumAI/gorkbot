@@ -28,14 +28,14 @@ const (
 
 // Message represents a message between agents
 type Message struct {
-	ID          string                 `json:"id"`
-	Type        MessageType            `json:"type"`
-	From        string                 `json:"from"`        // "grok" or "gemini"
-	To          string                 `json:"to"`          // "grok" or "gemini"
-	Content     string                 `json:"content"`
-	Context     map[string]interface{} `json:"context,omitempty"`
-	ReplyTo     string                 `json:"reply_to,omitempty"` // ID of message being replied to
-	Timestamp   time.Time              `json:"timestamp"`
+	ID        string                 `json:"id"`
+	Type      MessageType            `json:"type"`
+	From      string                 `json:"from"` // "grok" or "gemini"
+	To        string                 `json:"to"`   // "grok" or "gemini"
+	Content   string                 `json:"content"`
+	Context   map[string]interface{} `json:"context,omitempty"`
+	ReplyTo   string                 `json:"reply_to,omitempty"` // ID of message being replied to
+	Timestamp time.Time              `json:"timestamp"`
 }
 
 // Channel manages A2A communication between two agents

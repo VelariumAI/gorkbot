@@ -21,13 +21,13 @@ import (
 
 // QualityScore holds the Stabilizer's evaluation of one AI response.
 type QualityScore struct {
-	FactualConfidence  float64 // 0–1
-	TaskAlignment      float64 // 0–1
-	ToolUtilisation    float64 // 0–1
-	SelfAwareness      float64 // 0–1
-	Overall            float64 // weighted mean
-	Action             StabiliserAction
-	Advice             string // injected into context when action != ActionNone
+	FactualConfidence float64 // 0–1
+	TaskAlignment     float64 // 0–1
+	ToolUtilisation   float64 // 0–1
+	SelfAwareness     float64 // 0–1
+	Overall           float64 // weighted mean
+	Action            StabiliserAction
+	Advice            string // injected into context when action != ActionNone
 }
 
 // StabiliserAction enumerates what the Stabilizer recommends.

@@ -17,12 +17,13 @@ import (
 
 // Provider constants identify the supported AI providers.
 const (
-	ProviderXAI       = "xai"
-	ProviderGoogle    = "google"
-	ProviderAnthropic = "anthropic"
-	ProviderOpenAI    = "openai"
+	ProviderXAI        = "xai"
+	ProviderGoogle     = "google"
+	ProviderAnthropic  = "anthropic"
+	ProviderOpenAI     = "openai"
 	ProviderMiniMax    = "minimax"
 	ProviderOpenRouter = "openrouter"
+	ProviderMoonshot   = "moonshot"
 )
 
 // allProviders is the canonical order of providers.
@@ -33,16 +34,18 @@ var allProviders = []string{
 	ProviderOpenAI,
 	ProviderMiniMax,
 	ProviderOpenRouter,
+	ProviderMoonshot,
 }
 
 // envVarNames maps provider ID → env var name.
 var envVarNames = map[string]string{
-	ProviderXAI:       "XAI_API_KEY",
-	ProviderGoogle:    "GEMINI_API_KEY",
-	ProviderAnthropic: "ANTHROPIC_API_KEY",
-	ProviderOpenAI:    "OPENAI_API_KEY",
+	ProviderXAI:        "XAI_API_KEY",
+	ProviderGoogle:     "GEMINI_API_KEY",
+	ProviderAnthropic:  "ANTHROPIC_API_KEY",
+	ProviderOpenAI:     "OPENAI_API_KEY",
 	ProviderMiniMax:    "MINIMAX_API_KEY",
 	ProviderOpenRouter: "OPENROUTER_API_KEY",
+	ProviderMoonshot:   "MOONSHOT_API_KEY",
 }
 
 // KeyStatus indicates the validation state of an API key.
@@ -89,6 +92,7 @@ type KeyStore struct {
 	mu      sync.RWMutex
 	keys    map[string]ProviderKey
 	path    string // ~/.config/gorkbot/api_keys.json
+	dir     string // parent config directory
 	updates []updateChan
 }
 
@@ -100,12 +104,16 @@ type keyStoreFile struct {
 func NewKeyStore(configDir string) *KeyStore {
 	ks := &KeyStore{
 		keys: make(map[string]ProviderKey),
+		dir:  configDir,
 		path: filepath.Join(configDir, "api_keys.json"),
 	}
 	ks.load()
 	ks.seedFromEnv()
 	return ks
 }
+
+// Dir returns the config directory this KeyStore was initialised with.
+func (ks *KeyStore) Dir() string { return ks.dir }
 
 // load reads persisted keys from disk (best-effort; ignores missing file).
 func (ks *KeyStore) load() {

@@ -5,7 +5,39 @@ package engine
 import (
 	"fmt"
 	"strings"
+
+	"github.com/velariumai/gorkbot/internal/llm"
+	"github.com/velariumai/gorkbot/internal/platform"
+	"github.com/velariumai/gorkbot/pkg/providers"
 )
+
+// GetAuditStats implements tools.IntrospectionReporter.
+// Delegates to the AuditDB attached to the tool registry.
+func (o *Orchestrator) GetAuditStats(kind, filter string) string {
+	if o.Registry == nil {
+		return "Tool registry not available."
+	}
+	adb := o.Registry.GetAuditDB()
+	if adb == nil {
+		return "Audit DB not initialized."
+	}
+	switch kind {
+	case "errors":
+		return adb.RecentErrors(20, filter)
+	case "rate":
+		total, failed, rate, err := adb.ErrorRate(24)
+		if err != nil {
+			return fmt.Sprintf("Error rate query failed: %v", err)
+		}
+		return fmt.Sprintf("## Tool Error Rate (last 24 h)\n\n"+
+			"- **Total calls**: %d\n"+
+			"- **Failures**: %d\n"+
+			"- **Failure rate**: %.1f%%\n",
+			total, failed, rate)
+	default: // "summary"
+		return adb.AuditSummary(25)
+	}
+}
 
 // GetRoutingStats implements tools.IntrospectionReporter.
 func (o *Orchestrator) GetRoutingStats() string {
@@ -29,6 +61,12 @@ func (o *Orchestrator) GetRoutingStats() string {
 	if last != nil {
 		sb.WriteString(fmt.Sprintf("\n**Last decision** (%s):\n", last.Timestamp.Format("15:04:05")))
 		sb.WriteString(fmt.Sprintf("  - Workflow: %s\n", last.Classification.String()))
+		confPct := last.Confidence * 100
+		if last.LowConfidence {
+			sb.WriteString(fmt.Sprintf("  - Confidence: %.0f%% ⚠️ (low — escalated to Analytical)\n", confPct))
+		} else {
+			sb.WriteString(fmt.Sprintf("  - Confidence: %.0f%%\n", confPct))
+		}
 		sb.WriteString(fmt.Sprintf("  - CostTier: %d\n", last.Budget.CostTier))
 		sb.WriteString(fmt.Sprintf("  - MaxToolCalls: %d\n", last.Budget.MaxToolCalls))
 		sb.WriteString(fmt.Sprintf("  - MaxTokens: %d\n", last.Budget.MaxTokens))
@@ -92,6 +130,86 @@ func (o *Orchestrator) GetMemoryState(query string) string {
 		sb.WriteString("(provide a query to surface relevant engrams)\n")
 	}
 
+	return sb.String()
+}
+
+// GetRuntimeStatus implements tools.IntrospectionReporter.
+// Returns verified build/embedder/provider facts that the AI cannot know from
+// training data. Called by the gorkbot_status tool which also prepends a live
+// `date` output so the AI is grounded in real-world time.
+func (o *Orchestrator) GetRuntimeStatus() string {
+	var sb strings.Builder
+	sb.WriteString("\n## Gorkbot Runtime Status\n\n")
+
+	// Build variant — set at compile time via build tags.
+	sb.WriteString(fmt.Sprintf("**Version**: v%s\n", platform.Version))
+	sb.WriteString(fmt.Sprintf("**Build**: %s\n", llm.BuildTag))
+
+	// Semantic embedder — only knowable at runtime.
+	if o.Intelligence != nil {
+		embedder := o.Intelligence.Router.EmbedderName()
+		sb.WriteString(fmt.Sprintf("**Semantic Embedder**: %s\n", embedder))
+		sb.WriteString(fmt.Sprintf("**MEL Heuristics**: %d stored\n", o.Intelligence.Store.Len()))
+	} else {
+		sb.WriteString("**Semantic Embedder**: intelligence layer not initialized\n")
+	}
+
+	// Active models — exact model IDs prevent the AI guessing model names.
+	if o.Primary != nil {
+		meta := o.Primary.GetMetadata()
+		sb.WriteString(fmt.Sprintf("**Primary Model**: %s (via %s)\n", meta.ID, o.Primary.Name()))
+	}
+	if o.Consultant != nil {
+		meta := o.Consultant.GetMetadata()
+		sb.WriteString(fmt.Sprintf("**Consultant Model**: %s (via %s)\n", meta.ID, o.Consultant.Name()))
+	}
+
+	// Session-disabled providers.
+	if pm := GetProviderManager(); pm != nil {
+		disabled := []string{}
+		for _, id := range providers.AllProviders() {
+			if pm.IsSessionDisabled(id) {
+				disabled = append(disabled, id)
+			}
+		}
+		if len(disabled) > 0 {
+			sb.WriteString(fmt.Sprintf("**Disabled Providers**: %s\n", strings.Join(disabled, ", ")))
+		}
+	}
+
+	// Context window.
+	if o.ContextMgr != nil {
+		used := o.ContextMgr.TokensUsed()
+		limit := o.ContextMgr.TokenLimit()
+		pct := 0.0
+		if limit > 0 {
+			pct = float64(used) / float64(limit) * 100
+		}
+		sb.WriteString(fmt.Sprintf("**Context**: %d / %d tokens (%.1f%%)\n", used, limit, pct))
+	}
+
+	// Background agents.
+	if o.BackgroundAgents != nil {
+		running := o.BackgroundAgents.Running()
+		sb.WriteString(fmt.Sprintf("**Running Agents**: %d\n", len(running)))
+	}
+
+	// Audit DB quick snapshot — all-time tool call count and 24h error rate.
+	if o.Registry != nil {
+		if adb := o.Registry.GetAuditDB(); adb != nil {
+			total, failed, rate, err := adb.ErrorRate(24)
+			if err == nil {
+				if total > 0 {
+					sb.WriteString(fmt.Sprintf("**Tool Calls (24h)**: %d total | %d failures (%.0f%% error rate)\n",
+						total, failed, rate))
+				} else {
+					sb.WriteString("**Tool Calls (24h)**: no executions recorded yet\n")
+				}
+			}
+		}
+	}
+
+	sb.WriteString("\n*Date/time verified by system clock above — do not rely on training data for time.*\n")
 	return sb.String()
 }
 

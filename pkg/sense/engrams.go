@@ -18,10 +18,10 @@ import (
 // Engram represents a learned preference or conditional memory about a tool
 // or behaviour pattern.
 type Engram struct {
-	ToolName   string    `json:"tool_name"`   // empty if behaviour-level
-	Preference string    `json:"preference"`  // human-readable preference text
-	Condition  string    `json:"condition"`   // when does this apply?
-	Confidence float64   `json:"confidence"`  // 0.0–1.0
+	ToolName   string    `json:"tool_name"`  // empty if behaviour-level
+	Preference string    `json:"preference"` // human-readable preference text
+	Condition  string    `json:"condition"`  // when does this apply?
+	Confidence float64   `json:"confidence"` // 0.0–1.0
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 

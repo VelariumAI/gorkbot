@@ -57,7 +57,7 @@ const (
 // AuditDB wraps a *sql.DB and provides the async, retry-safe audit API.
 // All exported methods are nil-receiver safe.
 type AuditDB struct {
-	db    *sql.DB
+	db      *sql.DB
 	pruneMu sync.Mutex // serialises concurrent prune calls
 }
 
@@ -295,6 +295,186 @@ func (a *AuditDB) TopTools(n int) ([]AuditToolStat, error) {
 	return stats, rows.Err()
 }
 
+// AuditSummary returns a markdown table of all tools ranked by execution count,
+// including success rate, average duration, and dominant error category.
+// Safe to call with a nil receiver.
+func (a *AuditDB) AuditSummary(limit int) string {
+	if a == nil || a.db == nil {
+		return "Audit DB not available."
+	}
+	if limit <= 0 {
+		limit = 25
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT tool_name,
+		       COUNT(*)              AS calls,
+		       SUM(success)          AS successes,
+		       AVG(execution_ms)     AS avg_ms,
+		       (SELECT error_category
+		          FROM tool_audit_log t2
+		         WHERE t2.tool_name = t1.tool_name AND t2.success = 0
+		         GROUP BY error_category
+		         ORDER BY COUNT(*) DESC
+		         LIMIT 1)            AS top_err
+		FROM   tool_audit_log t1
+		GROUP  BY tool_name
+		ORDER  BY calls DESC
+		LIMIT  ?`, limit)
+	if err != nil {
+		return fmt.Sprintf("audit summary error: %v", err)
+	}
+	defer rows.Close()
+
+	var sb strings.Builder
+	sb.WriteString("## Tool Audit Log (all-time)\n\n")
+	sb.WriteString("| Tool | Calls | Success% | Avg ms | Top Error |\n")
+	sb.WriteString("|------|-------|----------|--------|-----------|\n")
+
+	total, totalFail := 0, 0
+	for rows.Next() {
+		var name string
+		var calls, successes int
+		var avgMs float64
+		var topErr *string
+		if err := rows.Scan(&name, &calls, &successes, &avgMs, &topErr); err != nil {
+			continue
+		}
+		pct := 0.0
+		if calls > 0 {
+			pct = float64(successes) / float64(calls) * 100
+		}
+		errStr := "—"
+		if topErr != nil && *topErr != "" {
+			errStr = *topErr
+		}
+		total += calls
+		totalFail += calls - successes
+		sb.WriteString(fmt.Sprintf("| %s | %d | %.0f%% | %.0f | %s |\n",
+			name, calls, pct, avgMs, errStr))
+	}
+	if rows.Err() != nil {
+		return fmt.Sprintf("audit summary scan error: %v", rows.Err())
+	}
+	if total > 0 {
+		overallPct := float64(total-totalFail) / float64(total) * 100
+		sb.WriteString(fmt.Sprintf("\n**Total**: %d calls | **%.0f%% success** | %d failures\n",
+			total, overallPct, totalFail))
+	} else {
+		sb.WriteString("\n_No tool executions recorded yet._\n")
+	}
+	return sb.String()
+}
+
+// RecentErrors returns a markdown table of the most recent failed tool executions.
+// Pass toolFilter="" to include all tools.  Safe to call with a nil receiver.
+func (a *AuditDB) RecentErrors(limit int, toolFilter string) string {
+	if a == nil || a.db == nil {
+		return "Audit DB not available."
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var rows *sql.Rows
+	var err error
+	if toolFilter == "" {
+		rows, err = a.db.QueryContext(ctx, `
+			SELECT timestamp, tool_name, error_category, raw_error, execution_ms
+			FROM   tool_audit_log
+			WHERE  success = 0
+			ORDER  BY id DESC
+			LIMIT  ?`, limit)
+	} else {
+		rows, err = a.db.QueryContext(ctx, `
+			SELECT timestamp, tool_name, error_category, raw_error, execution_ms
+			FROM   tool_audit_log
+			WHERE  success = 0 AND tool_name = ?
+			ORDER  BY id DESC
+			LIMIT  ?`, toolFilter, limit)
+	}
+	if err != nil {
+		return fmt.Sprintf("recent errors query error: %v", err)
+	}
+	defer rows.Close()
+
+	var sb strings.Builder
+	header := "## Recent Tool Failures"
+	if toolFilter != "" {
+		header += " — " + toolFilter
+	}
+	sb.WriteString(header + "\n\n")
+	sb.WriteString("| Time | Tool | Category | Error | ms |\n")
+	sb.WriteString("|------|------|----------|-------|----||\n")
+
+	count := 0
+	for rows.Next() {
+		var ts, tool string
+		var category, rawErr *string
+		var ms int64
+		if err := rows.Scan(&ts, &tool, &category, &rawErr, &ms); err != nil {
+			continue
+		}
+		catStr, errStr := "—", "—"
+		if category != nil && *category != "" {
+			catStr = *category
+		}
+		if rawErr != nil && *rawErr != "" {
+			e := *rawErr
+			if len(e) > 60 {
+				e = e[:57] + "…"
+			}
+			errStr = e
+		}
+		// Trim timestamp to HH:MM:SS
+		if len(ts) >= 19 {
+			ts = ts[11:19]
+		}
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %d |\n",
+			ts, tool, catStr, errStr, ms))
+		count++
+	}
+	if rows.Err() != nil {
+		return fmt.Sprintf("recent errors scan error: %v", rows.Err())
+	}
+	if count == 0 {
+		sb.WriteString("\n_No failures recorded._\n")
+	}
+	return sb.String()
+}
+
+// ErrorRate returns the total call count, failure count, and failure rate for
+// the last `hours` hours across all tools.  Safe to call with a nil receiver.
+func (a *AuditDB) ErrorRate(hours int) (total, failed int, rate float64, err error) {
+	if a == nil || a.db == nil {
+		return 0, 0, 0, nil
+	}
+	if hours <= 0 {
+		hours = 24
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = a.db.QueryRowContext(ctx, `
+		SELECT COUNT(*),
+		       SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END)
+		FROM   tool_audit_log
+		WHERE  timestamp >= datetime('now', ? || ' hours')`,
+		fmt.Sprintf("-%d", hours),
+	).Scan(&total, &failed)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if total > 0 {
+		rate = float64(failed) / float64(total) * 100
+	}
+	return total, failed, rate, nil
+}
+
 // Close releases the underlying database connection.
 // Safe to call with a nil receiver.
 func (a *AuditDB) Close() error {
@@ -330,7 +510,12 @@ func classifyErrString(msg string) string {
 		return "rate_limit"
 	case strings.Contains(lower, "timeout") ||
 		strings.Contains(lower, "deadline exceeded") ||
-		strings.Contains(lower, "context deadline"):
+		strings.Contains(lower, "context deadline") ||
+		// HTTP/2 header-wait timeout — the server connected but never sent HEADERS.
+		// Seen on flaky WiFi / cellular with MiniMax and Anthropic secondaries.
+		strings.Contains(lower, "awaiting response headers") ||
+		strings.Contains(lower, "http2: timeout") ||
+		strings.Contains(lower, "i/o timeout"):
 		return "timeout"
 	case strings.Contains(lower, "tls") ||
 		strings.Contains(lower, "bad record mac") ||
@@ -347,8 +532,22 @@ func classifyErrString(msg string) string {
 		return "no_credits"
 	case strings.Contains(lower, "connection reset") ||
 		strings.Contains(lower, "broken pipe") ||
-		strings.Contains(lower, "eof"):
+		strings.Contains(lower, "eof") ||
+		strings.Contains(lower, "network is unreachable") ||
+		strings.Contains(lower, "no route to host"):
 		return "network_error"
+	// signal: killed — OOM killer on Android (e.g., download_file on low RAM).
+	case strings.Contains(lower, "signal: killed") ||
+		strings.Contains(lower, "signal: oom"):
+		return "resource_limit"
+	// Missing executable: start_background_process / bash on Termux.
+	case strings.Contains(lower, "executable file not found") ||
+		strings.Contains(lower, "exec: ") ||
+		strings.Contains(lower, "no such file or directory") && strings.Contains(lower, "exec"):
+		return "env_error"
+	// Missing required params — caught by validateRequiredParams in registry.
+	case strings.Contains(lower, "missing required parameter"):
+		return "param_error"
 	default:
 		return "tool_error"
 	}

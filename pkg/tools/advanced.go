@@ -794,7 +794,15 @@ func (t *PkgInstallTool) Execute(ctx context.Context, params map[string]interfac
 		}
 		cmd = fmt.Sprintf("pkg search %s", shellescape(packages))
 	case "list":
-		cmd = "pkg list-installed"
+		if packages != "" {
+			// Targeted check: show status for specific packages only.
+			// dpkg -s emits ~10 lines per package, not the full database.
+			cmd = fmt.Sprintf("dpkg -s %s 2>/dev/null || apt-cache show %s 2>/dev/null | head -30", shellescape(packages), shellescape(packages))
+		} else {
+			// Full list: truncate to 60 entries + show total count.
+			// pkg list-installed can emit 400+ lines which floods AI context.
+			cmd = `pkg list-installed 2>/dev/null | head -60; echo ""; pkg list-installed 2>/dev/null | wc -l | xargs -I{} echo "({} packages installed total — use packages param to query specific ones)"`
+		}
 	default:
 		return &ToolResult{Success: false, Error: "invalid action: " + action}, nil
 	}

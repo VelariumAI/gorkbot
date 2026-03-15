@@ -14,10 +14,10 @@ import (
 
 // Conflict represents a contradiction between two agent results.
 type Conflict struct {
-	Claim    string // assertion present in one result
-	Counter  string // contradicting statement from another result
-	SourceA  string // source label of first result
-	SourceB  string // source label of second result
+	Claim   string // assertion present in one result
+	Counter string // contradicting statement from another result
+	SourceA string // source label of first result
+	SourceB string // source label of second result
 }
 
 // SynthesisResult is the output of the Synthesizer.

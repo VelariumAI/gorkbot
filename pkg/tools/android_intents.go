@@ -16,9 +16,9 @@ type IntentBroadcastTool struct {
 func NewIntentBroadcastTool() *IntentBroadcastTool {
 	return &IntentBroadcastTool{
 		BaseTool: BaseTool{
-			name:        "intent_broadcast",
-			description: "Send a raw Android Intent using 'am broadcast' or 'am start'. Use to trigger deep links, specific activities, or system broadcasts.",
-			category:          CategorySystem,
+			name:               "intent_broadcast",
+			description:        "Send a raw Android Intent using 'am broadcast' or 'am start'. Use to trigger deep links, specific activities, or system broadcasts.",
+			category:           CategorySystem,
 			requiresPermission: true,
 			defaultPermission:  PermissionOnce,
 		},

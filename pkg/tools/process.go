@@ -20,11 +20,11 @@ type StartManagedProcessTool struct {
 func NewStartManagedProcessTool(pm *process.Manager) *StartManagedProcessTool {
 	return &StartManagedProcessTool{
 		BaseTool: BaseTool{
-			name:              "start_background_process",
-			description:       "Start a long-running background process or server managed by Gorkbot. Returns a Process ID.",
-			category:          CategorySystem,
+			name:               "start_background_process",
+			description:        "Start a long-running background process or server managed by Gorkbot. Returns a Process ID.",
+			category:           CategorySystem,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 		manager: pm,
 	}
@@ -101,9 +101,9 @@ type ListManagedProcessesTool struct {
 func NewListManagedProcessesTool(pm *process.Manager) *ListManagedProcessesTool {
 	return &ListManagedProcessesTool{
 		BaseTool: BaseTool{
-			name:              "list_background_processes",
-			description:       "List all active background processes managed by Gorkbot.",
-			category:          CategorySystem,
+			name:               "list_background_processes",
+			description:        "List all active background processes managed by Gorkbot.",
+			category:           CategorySystem,
 			requiresPermission: false,
 		},
 		manager: pm,
@@ -116,11 +116,11 @@ func (t *ListManagedProcessesTool) Parameters() json.RawMessage {
 
 func (t *ListManagedProcessesTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
 	procs := t.manager.ListProcesses()
-	
+
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Active Processes (%d):\n", len(procs)))
 	for _, p := range procs {
-		sb.WriteString(fmt.Sprintf("- [%s] %s (State: %s, Started: %s)\n", 
+		sb.WriteString(fmt.Sprintf("- [%s] %s (State: %s, Started: %s)\n",
 			p.ID, p.Command, p.State, p.StartTime.Format("15:04:05")))
 	}
 
@@ -139,11 +139,11 @@ type StopManagedProcessTool struct {
 func NewStopManagedProcessTool(pm *process.Manager) *StopManagedProcessTool {
 	return &StopManagedProcessTool{
 		BaseTool: BaseTool{
-			name:              "stop_background_process",
-			description:       "Stop a running background process by ID.",
-			category:          CategorySystem,
+			name:               "stop_background_process",
+			description:        "Stop a running background process by ID.",
+			category:           CategorySystem,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 		manager: pm,
 	}
@@ -189,9 +189,9 @@ type ReadManagedProcessOutputTool struct {
 func NewReadManagedProcessOutputTool(pm *process.Manager) *ReadManagedProcessOutputTool {
 	return &ReadManagedProcessOutputTool{
 		BaseTool: BaseTool{
-			name:              "read_background_process_output",
-			description:       "Read the stdout/stderr output of a running or completed managed process.",
-			category:          CategorySystem,
+			name:               "read_background_process_output",
+			description:        "Read the stdout/stderr output of a running or completed managed process.",
+			category:           CategorySystem,
 			requiresPermission: false,
 		},
 		manager: pm,
@@ -230,7 +230,7 @@ func (t *ReadManagedProcessOutputTool) Execute(ctx context.Context, params map[s
 
 	// Safely access output
 	output := proc.GetOutput()
-	
+
 	// Handle lines limit if requested
 	if l, ok := params["lines"].(float64); ok && l > 0 {
 		lines := strings.Split(output, "\n")
@@ -240,7 +240,7 @@ func (t *ReadManagedProcessOutputTool) Execute(ctx context.Context, params map[s
 			output = strings.Join(lines, "\n")
 		}
 	}
-	
+
 	return &ToolResult{
 		Success: true,
 		Output:  output,

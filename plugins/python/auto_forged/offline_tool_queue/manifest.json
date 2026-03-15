@@ -1,0 +1,13 @@
+{
+  "name": "offline_tool_queue",
+  "description": "Manages persistent queuing of tools (bash, query_memory_state, etc.) for offline PWA execution. Stores entries with UUID, timestamp, and params in a local JSON file for later synchronization.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

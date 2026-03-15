@@ -12,12 +12,13 @@ import (
 )
 
 const (
-	xaiModelsURL       = "https://api.x.ai/v1/models"
-	geminiModelsURL    = "https://generativelanguage.googleapis.com/v1beta/models"
-	anthropicModelsURL = "https://api.anthropic.com/v1/models"
-	openaiModelsURL    = "https://api.openai.com/v1/models"
+	xaiModelsURL        = "https://api.x.ai/v1/models"
+	geminiModelsURL     = "https://generativelanguage.googleapis.com/v1beta/models"
+	anthropicModelsURL  = "https://api.anthropic.com/v1/models"
+	openaiModelsURL     = "https://api.openai.com/v1/models"
 	minimaxModelsURL    = "https://api.minimax.io/v1/models"
 	openrouterModelsURL = "https://openrouter.ai/api/v1/models"
+	moonshotModelsURL   = "https://api.moonshot.ai/v1/models"
 
 	pollInterval = 30 * time.Minute
 	httpTimeout  = 15 * time.Second
@@ -33,12 +34,13 @@ type KeyGetter interface {
 // Manager polls all 5 AI providers for live model lists every 30 minutes.
 type Manager struct {
 	// legacy direct keys (set when constructed without KeyGetter)
-	xaiKey     string
-	geminiKey  string
-	anthropicKey string
-	openaiKey  string
+	xaiKey        string
+	geminiKey     string
+	anthropicKey  string
+	openaiKey     string
 	minimaxKey    string
 	openrouterKey string
+	moonshotKey   string
 
 	// optional live key source (preferred; overrides direct keys if non-nil)
 	keyGetter KeyGetter
@@ -205,6 +207,8 @@ func (dm *Manager) getKey(provider string) string {
 		return dm.minimaxKey
 	case ProviderOpenRouter:
 		return dm.openrouterKey
+	case ProviderMoonshot:
+		return dm.moonshotKey
 	}
 	return ""
 }
@@ -296,6 +300,18 @@ func (dm *Manager) poll(ctx context.Context) {
 				if m.ContextLength >= 4096 {
 					discovered = append(discovered, classifyModel(m.ID, m.ID, ProviderOpenRouter, now))
 				}
+			}
+		}
+	}
+
+	// Moonshot
+	if key := dm.getKey(ProviderMoonshot); key != "" {
+		// Moonshot uses OpenAI compatible models endpoint
+		if models, err := fetchOpenAIModels(ctx, client, key, moonshotModelsURL); err != nil {
+			dm.logger.Warn("discovery: Moonshot poll failed", "error", err)
+		} else {
+			for _, m := range models {
+				discovered = append(discovered, classifyModel(m.ID, m.ID, ProviderMoonshot, now))
 			}
 		}
 	}

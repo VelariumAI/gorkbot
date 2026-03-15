@@ -91,26 +91,16 @@ func (t *EngramRecorderTool) Execute(ctx context.Context, params map[string]inte
 		return &ToolResult{Success: false, Error: "condition is required"}, nil
 	}
 
-	// Retrieve the engram store from context (injected by engine or main).
-	type engramKey struct{}
-	store := ctx.Value(engramKey{})
-
 	summary := fmt.Sprintf("Engram recorded:\n  Preference: %s\n  Condition: %s", preference, condition)
 	if toolName != "" {
 		summary += fmt.Sprintf("\n  Tool: %s", toolName)
 	}
 	summary += fmt.Sprintf("\n  Confidence: %.0f%%", confidence*100)
 
-	if store == nil {
-		// No store in context — note the limitation but report success so the
-		// agent doesn't retry endlessly.  The preference is at least in the log.
-		summary += "\n\n(Note: Engram store not available in this context; preference recorded in session log only.)"
-	}
-
-	// The actual persistence is handled by the Orchestrator's EngramStore which
-	// wraps AgeMem.  The tool's responsibility is to surface the intent; the
-	// orchestrator post-processes tool results and calls Engrams.Record() when
-	// the tool name is "record_engram".  See orchestrator.go:ExecuteTool().
+	// Persistence is handled by the Orchestrator post-processing hook that fires
+	// after this tool returns (orchestrator.go ExecuteTool, "record_engram" branch).
+	// This tool's job is to validate parameters and surface the intent; no direct
+	// store access is needed here.
 
 	return &ToolResult{
 		Success: true,

@@ -32,14 +32,14 @@ const (
 
 // MemoryEntry is a single piece of stored knowledge.
 type MemoryEntry struct {
-	Key       string                 `json:"key"`
-	Content   string                 `json:"content"`
-	Priority  float64                `json:"priority"`
-	Tier      MemoryTier             `json:"tier"`
-	Metadata  map[string]interface{} `json:"metadata,omitempty"`
-	CreatedAt time.Time              `json:"created_at"`
-	AccessedAt time.Time             `json:"accessed_at"`
-	AccessCount int                  `json:"access_count"`
+	Key         string                 `json:"key"`
+	Content     string                 `json:"content"`
+	Priority    float64                `json:"priority"`
+	Tier        MemoryTier             `json:"tier"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	CreatedAt   time.Time              `json:"created_at"`
+	AccessedAt  time.Time              `json:"accessed_at"`
+	AccessCount int                    `json:"access_count"`
 }
 
 func (e *MemoryEntry) score() float64 {
@@ -499,8 +499,8 @@ func (am *AgeMem) consolidate() {
 func (am *AgeMem) UsageStats() map[string]interface{} {
 	cur, max := am.stm.Usage()
 	return map[string]interface{}{
-		"stm_tokens":  cur,
-		"stm_max":     max,
-		"stm_pct":     float64(cur) / float64(max) * 100,
+		"stm_tokens": cur,
+		"stm_max":    max,
+		"stm_pct":    float64(cur) / float64(max) * 100,
 	}
 }

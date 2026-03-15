@@ -16,8 +16,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/velariumai/gorkbot/internal/arc"
 	"github.com/velariumai/gorkbot/internal/engine"
+	"github.com/velariumai/gorkbot/pkg/adaptive"
 )
 
 // renderSidePanel renders the right-side info panel.
@@ -108,8 +108,8 @@ func (m *Model) renderSidePanel() string {
 
 	// ── INTENT ───────────────────────────────────────────────────────────────
 	if m.lastIntentCategory != "" {
-		label := arc.CategoryLabel(arc.IntentCategory(m.lastIntentCategory))
-		emoji := arc.CategoryEmoji(arc.IntentCategory(m.lastIntentCategory))
+		label := adaptive.CategoryLabel(adaptive.IntentCategory(m.lastIntentCategory))
+		emoji := adaptive.CategoryEmoji(adaptive.IntentCategory(m.lastIntentCategory))
 		badge := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(TextGray)).
 			Background(lipgloss.Color(BgDarkAlt)).
@@ -117,6 +117,14 @@ func (m *Model) renderSidePanel() string {
 			Width(innerW).
 			Render(emoji + " " + label)
 		sections = append(sections, titleStyle.Render("INTENT")+"\n"+badge)
+	}
+
+	// ── HOOKS ────────────────────────────────────────────────────────────────
+	if len(m.activeHooks) > 0 {
+		hookSummary := RenderHookSummary(m.activeHooks, innerW, m.hookSpinFrame, 5, m.styles.Hook)
+		if hookSummary != "" {
+			sections = append(sections, titleStyle.Render("ACTIONS")+"\n"+hookSummary)
+		}
 	}
 
 	// ── RALPH ────────────────────────────────────────────────────────────────

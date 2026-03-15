@@ -1,0 +1,13 @@
+{
+  "name": "apk_modifier",
+  "description": "Handles complete APK modification workflow: decompile, edit, rebuild, sign, align, and install APKs using apktool, apksigner, and pm",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

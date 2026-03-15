@@ -19,11 +19,11 @@ type WebFetchTool struct {
 func NewWebFetchTool() *WebFetchTool {
 	return &WebFetchTool{
 		BaseTool: BaseTool{
-			name:        "web_fetch",
-			description: "Fetch and parse web pages - returns clean text content (not raw HTML). Use this when you need to extract readable text from a URL.",
-			category:    CategoryWeb,
+			name:               "web_fetch",
+			description:        "Fetch and parse web pages - returns clean text content (not raw HTML). Use this when you need to extract readable text from a URL.",
+			category:           CategoryWeb,
 			requiresPermission: true,
-			defaultPermission: PermissionSession,
+			defaultPermission:  PermissionSession,
 		},
 	}
 }
@@ -239,11 +239,11 @@ type HttpRequestTool struct {
 func NewHttpRequestTool() *HttpRequestTool {
 	return &HttpRequestTool{
 		BaseTool: BaseTool{
-			name:        "http_request",
-			description: "Make advanced HTTP requests with custom methods, headers, body, and authentication. Use for API calls, testing endpoints, or when you need fine-grained control over HTTP requests.",
-			category:    CategoryWeb,
+			name:               "http_request",
+			description:        "Make advanced HTTP requests with custom methods, headers, body, and authentication. Use for API calls, testing endpoints, or when you need fine-grained control over HTTP requests.",
+			category:           CategoryWeb,
 			requiresPermission: true,
-			defaultPermission: PermissionSession,
+			defaultPermission:  PermissionSession,
 		},
 	}
 }
@@ -352,11 +352,11 @@ type CheckPortTool struct {
 func NewCheckPortTool() *CheckPortTool {
 	return &CheckPortTool{
 		BaseTool: BaseTool{
-			name:        "check_port",
-			description: "Check if a TCP port is open and listening on localhost or a remote host. Use for debugging network services or checking if a server is running.",
-			category:    CategoryWeb,
+			name:               "check_port",
+			description:        "Check if a TCP port is open and listening on localhost or a remote host. Use for debugging network services or checking if a server is running.",
+			category:           CategoryWeb,
 			requiresPermission: false,
-			defaultPermission: PermissionAlways,
+			defaultPermission:  PermissionAlways,
 		},
 	}
 }
@@ -418,11 +418,11 @@ type DownloadFileTool struct {
 func NewDownloadFileTool() *DownloadFileTool {
 	return &DownloadFileTool{
 		BaseTool: BaseTool{
-			name:        "download_file",
-			description: "Download a file from a URL to the local filesystem. Use when you need to save a file from the web to disk.",
-			category:    CategoryWeb,
+			name:               "download_file",
+			description:        "Download a file from a URL to the local filesystem. Use when you need to save a file from the web to disk.",
+			category:           CategoryWeb,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }

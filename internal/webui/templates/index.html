@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- Font Awesome for beautiful icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Marked.js for gorgeous markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.3/purify.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <i class="fa-solid fa-robot"></i>
+                <span>Gorkbot</span>
+            </div>
+            
+            <nav class="nav-menu">
+                <a href="#" class="nav-item active" id="navChat"><i class="fa-solid fa-comments"></i> Chat</a>
+                <a href="#" class="nav-item" id="navAgents"><i class="fa-solid fa-layer-group"></i> Subagents</a>
+                <a href="#" class="nav-item" id="navTools"><i class="fa-solid fa-toolbox"></i> Tools</a>
+                <a href="#" class="nav-item" id="navMemory"><i class="fa-solid fa-brain"></i> Memory</a>
+                <a href="#" class="nav-item" id="navAnalytics"><i class="fa-solid fa-chart-line"></i> Analytics</a>
+            </nav>
+
+            <div class="system-status" id="systemStatus">
+                <div class="status-item">
+                    <span class="label">Provider</span>
+                    <span class="value" id="statusProvider">Initializing...</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Tokens In</span>
+                    <span class="value" id="statusTokensIn">0</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Tokens Out</span>
+                    <span class="value" id="statusTokensOut">0</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="main-content">
+            <header class="topbar">
+                <div class="model-selector">
+                    <span class="badge active" id="primaryBadge">Primary AI</span>
+                    <span class="badge" id="secondaryBadge">Secondary: Auto</span>
+                </div>
+                <div class="topbar-actions">
+                    <button class="btn-icon" id="settingsBtn"><i class="fa-solid fa-gear"></i></button>
+                </div>
+            </header>
+
+            <div class="chat-container" id="chatContainer">
+                <div class="message system">
+                    <div class="avatar"><i class="fa-solid fa-microchip"></i></div>
+                    <div class="content">
+                        <h3>Gorkbot Orchestrator Online</h3>
+                        <p>I am fully operational and connected to the Adaptive Engine. How can I assist you today?</p>
+                    </div>
+                </div>
+                <!-- Dynamic messages will be appended here -->
+            </div>
+
+            <div class="input-area">
+                <form id="chatForm" class="chat-form">
+                    <button type="button" id="micBtn" class="btn-icon" aria-label="Use voice input" style="margin-right: 0.5rem; color: var(--text-secondary); background: none; border: none; font-size: 1.2rem; cursor: pointer;">
+                        <i class="fa-solid fa-microphone"></i>
+                    </button>
+                    <textarea id="promptInput" placeholder="Type a message or command (e.g. /sys)..." rows="1" autofocus></textarea>
+                    <button type="submit" id="sendBtn" class="btn-primary">
+                        <i class="fa-solid fa-paper-plane"></i>
+                    </button>
+                </form>
+            </div>
+        </main>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="modal">
+        <div class="modal-content">
+            <span class="close-btn" id="closeSettings">&times;</span>
+            <h2>Model Configuration</h2>
+            <div class="form-group">
+                <label for="primaryModelSelect">Primary Model</label>
+                <select id="primaryModelSelect" class="form-control"></select>
+            </div>
+            <div class="form-group">
+                <label for="secondaryModelSelect">Secondary Model (Consultant)</label>
+                <select id="secondaryModelSelect" class="form-control">
+                    <option value="auto">Auto (Adaptive Engine)</option>
+                </select>
+            </div>
+            <button id="saveSettingsBtn" class="btn-primary" style="width: 100%; margin-top: 1rem;">Save Changes</button>
+        </div>
+    </div>
+
+    <!-- Tools Modal -->
+    <div id="toolsModal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <span class="close-btn" id="closeTools">&times;</span>
+            <h2>Active Tool Registry</h2>
+            <div id="toolsList" style="margin-top: 1rem; max-height: 400px; overflow-y: auto;"></div>
+        </div>
+    </div>
+
+    <!-- Agents Modal -->
+    <div id="agentsModal" class="modal">
+        <div class="modal-content">
+            <span class="close-btn" id="closeAgents">&times;</span>
+            <h2>Subagent Swarm</h2>
+            <div id="agentsList" style="margin-top: 1rem;"></div>
+        </div>
+    </div>
+
+    <!-- Memory Modal -->
+    <div id="memoryModal" class="modal">
+        <div class="modal-content">
+            <span class="close-btn" id="closeMemory">&times;</span>
+            <h2>Memory & State</h2>
+            <div id="memoryStats" style="margin-top: 1rem;"></div>
+        </div>
+    </div>
+
+    <script type="module" src="/static/js/app.js"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').then(reg => {
+            console.log('SW registered: ', reg);
+          }).catch(err => {
+            console.warn('SW registration failed: ', err);
+          });
+        });
+      }
+    </script>
+</body>
+</html>

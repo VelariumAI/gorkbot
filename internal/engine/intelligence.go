@@ -4,19 +4,18 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/velariumai/gorkbot/internal/arc"
-	"github.com/velariumai/gorkbot/internal/mel"
 	"github.com/velariumai/gorkbot/internal/platform"
+	"github.com/velariumai/gorkbot/pkg/adaptive"
 )
 
 // IntelligenceLayer bundles the ARC Router and MEL Meta-Experience Learning
 // system. It provides routing decisions and heuristic injection without
 // modifying core orchestrator logic beyond three call sites.
 type IntelligenceLayer struct {
-	Router   *arc.ARCRouter
-	Store    *mel.VectorStore
-	Analyzer *mel.BifurcationAnalyzer
-	Reframer *arc.ReframedEvaluator
+	Router   *adaptive.ARCRouter
+	Store    *adaptive.VectorStore
+	Analyzer *adaptive.BifurcationAnalyzer
+	Reframer *adaptive.ReframedEvaluator
 }
 
 // NewIntelligenceLayer initializes the full intelligence stack.
@@ -24,21 +23,21 @@ type IntelligenceLayer struct {
 // persisted at configDir/vector_store.json.
 func NewIntelligenceLayer(hal platform.HALProfile, configDir string) (*IntelligenceLayer, error) {
 	storePath := fmt.Sprintf("%s/vector_store.json", configDir)
-	store, err := mel.NewVectorStore(storePath)
+	store, err := adaptive.NewVectorStore(storePath)
 	if err != nil {
 		return nil, fmt.Errorf("intelligence layer: vector store: %w", err)
 	}
 
 	return &IntelligenceLayer{
-		Router:   arc.NewARCRouter(hal),
+		Router:   adaptive.NewARCRouter(hal),
 		Store:    store,
-		Analyzer: mel.NewBifurcationAnalyzer(store),
-		Reframer: &arc.ReframedEvaluator{},
+		Analyzer: adaptive.NewBifurcationAnalyzer(store),
+		Reframer: &adaptive.ReframedEvaluator{},
 	}, nil
 }
 
 // Route classifies a prompt and returns its resource budget.
-func (il *IntelligenceLayer) Route(prompt string) arc.RouteDecision {
+func (il *IntelligenceLayer) Route(prompt string) adaptive.RouteDecision {
 	return il.Router.Route(prompt)
 }
 

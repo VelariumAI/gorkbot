@@ -25,6 +25,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/velariumai/gorkbot/pkg/security"
 )
 
 // hashlineTag produces a 4-char uppercase hex tag for a line's raw content.
@@ -81,9 +83,14 @@ func (t *ReadFileHashedTool) Parameters() json.RawMessage {
 }
 
 func (t *ReadFileHashedTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
-	path, ok := params["path"].(string)
-	if !ok || strings.TrimSpace(path) == "" {
+	rawPath, ok := params["path"].(string)
+	if !ok || strings.TrimSpace(rawPath) == "" {
 		return &ToolResult{Success: false, Output: "path is required", OutputFormat: FormatError}, nil
+	}
+
+	path, err := security.ValidatePath(rawPath)
+	if err != nil {
+		return &ToolResult{Success: false, Output: fmt.Sprintf("security validation failed: %v", err), OutputFormat: FormatError}, nil
 	}
 
 	raw, err := os.ReadFile(path)
@@ -117,8 +124,8 @@ func (t *ReadFileHashedTool) Execute(ctx context.Context, params map[string]inte
 	}
 	if startLine > endLine {
 		return &ToolResult{
-			Success: false,
-			Output:  fmt.Sprintf("start_line (%d) > end_line (%d)", startLine, endLine),
+			Success:      false,
+			Output:       fmt.Sprintf("start_line (%d) > end_line (%d)", startLine, endLine),
 			OutputFormat: FormatError,
 		}, nil
 	}
@@ -136,8 +143,8 @@ func (t *ReadFileHashedTool) Execute(ctx context.Context, params map[string]inte
 	}
 
 	return &ToolResult{
-		Success: true,
-		Output:  sb.String(),
+		Success:      true,
+		Output:       sb.String(),
 		OutputFormat: FormatText,
 	}, nil
 }
@@ -207,9 +214,14 @@ func (t *EditFileHashedTool) Parameters() json.RawMessage {
 }
 
 func (t *EditFileHashedTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
-	path, ok := params["path"].(string)
-	if !ok || strings.TrimSpace(path) == "" {
+	rawPath, ok := params["path"].(string)
+	if !ok || strings.TrimSpace(rawPath) == "" {
 		return &ToolResult{Success: false, Output: "path is required", OutputFormat: FormatError}, nil
+	}
+
+	path, err := security.ValidatePath(rawPath)
+	if err != nil {
+		return &ToolResult{Success: false, Output: fmt.Sprintf("security validation failed: %v", err), OutputFormat: FormatError}, nil
 	}
 
 	editsRaw, ok := params["edits"].([]interface{})
@@ -223,8 +235,8 @@ func (t *EditFileHashedTool) Execute(ctx context.Context, params map[string]inte
 		eMap, ok := e.(map[string]interface{})
 		if !ok {
 			return &ToolResult{
-				Success: false,
-				Output:  fmt.Sprintf("edits[%d] is not an object", idx),
+				Success:      false,
+				Output:       fmt.Sprintf("edits[%d] is not an object", idx),
 				OutputFormat: FormatError,
 			}, nil
 		}
@@ -237,8 +249,8 @@ func (t *EditFileHashedTool) Execute(ctx context.Context, params map[string]inte
 		}
 		if spec.OldHash == "" {
 			return &ToolResult{
-				Success: false,
-				Output:  fmt.Sprintf("edits[%d].old_hash is required", idx),
+				Success:      false,
+				Output:       fmt.Sprintf("edits[%d].old_hash is required", idx),
 				OutputFormat: FormatError,
 			}, nil
 		}
@@ -391,8 +403,8 @@ func (t *EditFileHashedTool) Execute(ctx context.Context, params map[string]inte
 
 	if err := os.WriteFile(path, []byte(output), 0644); err != nil {
 		return &ToolResult{
-			Success: false,
-			Output:  fmt.Sprintf("write error: %v", err),
+			Success:      false,
+			Output:       fmt.Sprintf("write error: %v", err),
 			OutputFormat: FormatError,
 		}, nil
 	}
@@ -408,8 +420,8 @@ func (t *EditFileHashedTool) Execute(ctx context.Context, params map[string]inte
 	}
 
 	return &ToolResult{
-		Success: true,
-		Output:  sb.String(),
+		Success:      true,
+		Output:       sb.String(),
 		OutputFormat: FormatText,
 	}, nil
 }

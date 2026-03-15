@@ -45,15 +45,15 @@ func hardenedDialer() *net.Dialer {
 func NewHardenedTransport() *http.Transport {
 	d := hardenedDialer()
 	return &http.Transport{
-		DialContext:             d.DialContext,
-		TLSHandshakeTimeout:     15 * time.Second,
-		ResponseHeaderTimeout:   30 * time.Second,
-		ExpectContinueTimeout:    1 * time.Second,
-		IdleConnTimeout:         90 * time.Second,
-		MaxIdleConns:            100,
-		MaxIdleConnsPerHost:      10,
-		DisableKeepAlives:       false,
-		ForceAttemptHTTP2:       true,
+		DialContext:           d.DialContext,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+		DisableKeepAlives:     false,
+		ForceAttemptHTTP2:     true,
 		TLSClientConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		},

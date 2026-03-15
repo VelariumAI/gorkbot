@@ -15,7 +15,7 @@ type ToolCallEntry struct {
 
 // ConversationMessage represents a single message in the conversation
 type ConversationMessage struct {
-	Role      string    // "system", "user", "assistant", "tool"
+	Role      string // "system", "user", "assistant", "tool"
 	Content   string
 	Timestamp time.Time
 	// Native function calling (populated only for the native-calling path).
@@ -147,6 +147,14 @@ func (ch *ConversationHistory) Clear() {
 	ch.messages = make([]ConversationMessage, 0)
 }
 
+// SetMessages completely replaces the internal message list.
+func (ch *ConversationHistory) SetMessages(msgs []ConversationMessage) {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	ch.messages = make([]ConversationMessage, len(msgs))
+	copy(ch.messages, msgs)
+}
+
 // Count returns the number of messages
 func (ch *ConversationHistory) Count() int {
 	ch.mu.RLock()
@@ -236,4 +244,102 @@ func (ch *ConversationHistory) TruncateToTokenLimit(maxTokens int) {
 
 	// Rebuild messages: system messages + kept conversation
 	ch.messages = append(systemMessages, keptMessages...)
+}
+
+// RepairOrphanedPairs detects and repairs broken tool-call/result pairs that
+// would cause LLM API 400 errors. Two invariants must hold:
+//  1. Every role:"tool" message must have a corresponding assistant message
+//     with a ToolCallEntry whose ID == message.ToolCallID.
+//  2. Every assistant message with ToolCalls must have a corresponding
+//     role:"tool" result for each call.
+//
+// Repair strategy:
+//   - Orphaned tool results (no matching assistant call): removed.
+//   - Orphaned assistant tool-call entries (result was dropped): stubbed with
+//     a synthetic tool result: "[Tool result unavailable — pruned during context compression]"
+//
+// Returns the number of messages repaired (removed or stubbed).
+func (ch *ConversationHistory) RepairOrphanedPairs() int {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	repaired := 0
+
+	// Step 1: Build a map of all tool_call IDs that appear in assistant messages.
+	// key: call ID, value: index of the assistant message in ch.messages
+	assistantCallIDs := make(map[string]int) // call_id -> message index
+	for i, msg := range ch.messages {
+		if msg.Role == "assistant" {
+			for _, tc := range msg.ToolCalls {
+				if tc.ID != "" {
+					assistantCallIDs[tc.ID] = i
+				}
+			}
+		}
+	}
+
+	// Step 2: Build a map of all tool result IDs from role:"tool" messages.
+	resultIDs := make(map[string]bool)
+	for _, msg := range ch.messages {
+		if msg.Role == "tool" && msg.ToolCallID != "" {
+			resultIDs[msg.ToolCallID] = true
+		}
+	}
+
+	// Step 3: Remove role:"tool" messages whose ToolCallID doesn't exist in
+	// the assistant call map.
+	filtered := make([]ConversationMessage, 0, len(ch.messages))
+	for _, msg := range ch.messages {
+		if msg.Role == "tool" && msg.ToolCallID != "" {
+			if _, ok := assistantCallIDs[msg.ToolCallID]; !ok {
+				// Orphaned tool result — drop it.
+				repaired++
+				continue
+			}
+		}
+		filtered = append(filtered, msg)
+	}
+	ch.messages = filtered
+
+	// Step 4: For each assistant ToolCallEntry whose ID is NOT in the result
+	// map, insert a synthetic role:"tool" message right after that assistant
+	// message.
+	//
+	// We iterate from the end so inserting doesn't shift the indices of
+	// unprocessed earlier messages.
+	for i := len(ch.messages) - 1; i >= 0; i-- {
+		msg := ch.messages[i]
+		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
+			continue
+		}
+		// Collect all call IDs that are missing a result, preserving order.
+		var missing []ToolCallEntry
+		for _, tc := range msg.ToolCalls {
+			if tc.ID != "" && !resultIDs[tc.ID] {
+				missing = append(missing, tc)
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		// Build synthetic result messages (one per missing call).
+		synthetics := make([]ConversationMessage, len(missing))
+		for j, tc := range missing {
+			synthetics[j] = ConversationMessage{
+				Role:       "tool",
+				Content:    "[Tool result unavailable — pruned during context compression]",
+				ToolCallID: tc.ID,
+				ToolName:   tc.ToolName,
+				Timestamp:  msg.Timestamp,
+			}
+			repaired++
+		}
+		// Insert synthetics right after position i.
+		tail := make([]ConversationMessage, len(ch.messages[i+1:]))
+		copy(tail, ch.messages[i+1:])
+		ch.messages = append(ch.messages[:i+1], synthetics...)
+		ch.messages = append(ch.messages, tail...)
+	}
+
+	return repaired
 }

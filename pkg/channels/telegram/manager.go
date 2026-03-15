@@ -108,3 +108,24 @@ func (m *Manager) SendMessage(chatID int64, text string) error {
 	}
 	return bot.SendMessage(chatID, text)
 }
+
+// SetStreamHandler wires a streaming handler onto the running bot.
+// Safe to call before or after Start; no-op when the bot is nil.
+func (m *Manager) SetStreamHandler(sh StreamHandler) {
+	m.mu.Lock()
+	bot := m.bot
+	m.mu.Unlock()
+	if bot != nil {
+		bot.SetStreamHandler(sh)
+	}
+}
+
+// SetBridgeRegistry wires the cross-channel identity registry onto the bot.
+func (m *Manager) SetBridgeRegistry(r BridgeRegistry) {
+	m.mu.Lock()
+	bot := m.bot
+	m.mu.Unlock()
+	if bot != nil {
+		bot.SetBridgeRegistry(r)
+	}
+}

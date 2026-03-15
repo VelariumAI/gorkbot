@@ -1,35 +1,108 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# OAuth tokens
+*_token.json
+gemini_token.json
+
 # Build artifacts
-bin/
+/grokster
+/gorkbot
+/gorkweb
+/gorkbot_test
+/bin/gorkbot
+/bin/gorkbot-llm
+/bin/gorkweb
+/cmd/gorkbot/gorkbot
+/debug-mcp
+/test-mcp-json
 *.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
 *.out
 
-# Environment / secrets
-.env
-.env.*
-!.env.example
-
-# Logs
-*.log
-*.json.log
-
-# Go
+# Dependency directories
 vendor/
+node_modules/
 
-# OS
+# Go workspace file
+go.work
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
 .DS_Store
 Thumbs.db
 
-# Runtime / cache
-pkg/tools/custom/*.go
-~/.config/gorkbot/
+# Log files
+*.log
+logs/
 
-# Claude Code internals
-.claude/
-
-# Worktrees
+# Agent worktrees — local dev only
 .agent-worktrees/
 
-# Dist
-dist/
-*.tar.gz
-*.zip
+# Strace / debug capture files
+/1
+stracecheck.txt
+*.strace
+
+# Build artifacts (binaries in project root)
+/gorkbot
+/gorkweb
+/gorkbot_test
+/bin/gorkbot-llm
+/bin/gorkweb
+
+# Generated/temporary Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+fix_gorkweb.py
+patch_gorkweb.py
+patch_mcp_json.py
+patch_registry.py
+refactor_adaptive.py
+trim_mcp.py
+generate_report.py
+generate_thorough_reports.py
+mcp_debug.go
+test_mcp_json.go
+
+# Test & debug artifacts
+GORKBOT_SYSTEM_REPORT.txt
+describe_test_photo.jpg
+front_camera.jpg
+gorkbot_test
+mcp_debug.go
+test_mcp_json.go
+
+# Sensitive files — never commit
+*audit*.txt
+*audit*.md
+*audit*.json
+*_report.txt
+*credentials*.json
+*credentials*.yaml
+*.pem
+*.key
+*.token
+.env.backup
+.env.bak
+*secret*.json
+for_claude.txt
+for_claude.md
+glm-work_handoff.txt

@@ -1,0 +1,13 @@
+{
+  "name": "bash_exec",
+  "description": "Executes bash commands and returns the output along with system information (uptime, load averages)",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

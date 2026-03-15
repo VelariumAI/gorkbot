@@ -1,0 +1,13 @@
+{
+  "name": "audit_report_summarizer",
+  "description": "Extracts and summarizes key metrics, findings, and recommendations from Gorkbot self-audit markdown reports",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

@@ -133,16 +133,33 @@ func (m *Manager) Status() string {
 	sb.WriteString(fmt.Sprintf("**%d MCP server(s) connected:**\n\n", len(m.clients)))
 	for _, c := range m.clients {
 		tls := c.CachedTools()
-		sb.WriteString(fmt.Sprintf("• **%s** — %d tool(s)\n", c.ServerName(), len(tls)))
+		srvDesc := c.ServerDescription()
+		if srvDesc != "" {
+			sb.WriteString(fmt.Sprintf("• **%s** — %d tool(s)\n  *%s*\n", c.ServerName(), len(tls), srvDesc))
+		} else {
+			sb.WriteString(fmt.Sprintf("• **%s** — %d tool(s)\n", c.ServerName(), len(tls)))
+		}
 		for _, t := range tls {
 			desc := t.Description
-			if len(desc) > 60 {
-				desc = desc[:57] + "..."
+			if len(desc) > 70 {
+				desc = desc[:67] + "..."
 			}
 			sb.WriteString(fmt.Sprintf("  - `mcp_%s_%s`: %s\n", c.ServerName(), t.Name, desc))
 		}
 	}
 	return sb.String()
+}
+
+// Reload stops all current servers, re-reads mcp.json, starts new servers, and
+// re-registers their tools in the provided registry. Returns count of connected servers.
+func (m *Manager) Reload(ctx context.Context, reg *tools.Registry) (int, error) {
+	m.StopAll()
+	n, err := m.LoadAndStart(ctx)
+	if err != nil {
+		return 0, err
+	}
+	m.RegisterTools(reg)
+	return n, nil
 }
 
 // ConfigPath returns the path to the MCP config file.
@@ -166,12 +183,12 @@ func newMCPTool(client *Client, def ToolDefinition) *mcpTool {
 	return &mcpTool{client: client, def: def, toolName: name, description: desc}
 }
 
-func (t *mcpTool) Name() string                     { return t.toolName }
-func (t *mcpTool) Description() string               { return t.description }
-func (t *mcpTool) Category() tools.ToolCategory      { return tools.CategoryCustom }
-func (t *mcpTool) RequiresPermission() bool          { return true }
+func (t *mcpTool) Name() string                             { return t.toolName }
+func (t *mcpTool) Description() string                      { return t.description }
+func (t *mcpTool) Category() tools.ToolCategory             { return tools.CategoryCustom }
+func (t *mcpTool) RequiresPermission() bool                 { return true }
 func (t *mcpTool) DefaultPermission() tools.PermissionLevel { return tools.PermissionOnce }
-func (t *mcpTool) OutputFormat() tools.OutputFormat { return tools.FormatText }
+func (t *mcpTool) OutputFormat() tools.OutputFormat         { return tools.FormatText }
 
 // Parameters returns the MCP tool's input schema as a raw JSON message.
 // MCP servers already provide a JSON Schema object, so we forward it directly.

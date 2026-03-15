@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/velariumai/gorkbot/pkg/security"
 )
 
 // ListDirectoryTool lists directory contents
@@ -15,11 +17,11 @@ type ListDirectoryTool struct {
 func NewListDirectoryTool() *ListDirectoryTool {
 	return &ListDirectoryTool{
 		BaseTool: BaseTool{
-			name:              "list_directory",
-			description:       "List contents of a directory with details (size, permissions, modification time)",
-			category:          CategoryFile,
+			name:               "list_directory",
+			description:        "List contents of a directory with details (size, permissions, modification time)",
+			category:           CategoryFile,
 			requiresPermission: true,
-			defaultPermission: PermissionSession,
+			defaultPermission:  PermissionSession,
 		},
 	}
 }
@@ -47,9 +49,13 @@ func (t *ListDirectoryTool) Parameters() json.RawMessage {
 }
 
 func (t *ListDirectoryTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
-	path := "."
+	rawPath := "."
 	if p, ok := params["path"].(string); ok {
-		path = p
+		rawPath = p
+	}
+	path, err := security.ValidatePath(rawPath)
+	if err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("security validation failed: %v", err)}, err
 	}
 
 	recursive := false
@@ -84,11 +90,11 @@ type SearchFilesTool struct {
 func NewSearchFilesTool() *SearchFilesTool {
 	return &SearchFilesTool{
 		BaseTool: BaseTool{
-			name:              "search_files",
-			description:       "Search for files by name pattern using find command",
-			category:          CategoryFile,
+			name:               "search_files",
+			description:        "Search for files by name pattern using find command",
+			category:           CategoryFile,
 			requiresPermission: true,
-			defaultPermission: PermissionSession,
+			defaultPermission:  PermissionSession,
 		},
 	}
 }
@@ -122,9 +128,13 @@ func (t *SearchFilesTool) Execute(ctx context.Context, params map[string]interfa
 		return &ToolResult{Success: false, Error: "pattern is required"}, fmt.Errorf("pattern required")
 	}
 
-	path := "."
+	rawPath := "."
 	if p, ok := params["path"].(string); ok {
-		path = p
+		rawPath = p
+	}
+	path, err := security.ValidatePath(rawPath)
+	if err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("security validation failed: %v", err)}, err
 	}
 
 	fileType := "f"
@@ -149,11 +159,11 @@ type GrepContentTool struct {
 func NewGrepContentTool() *GrepContentTool {
 	return &GrepContentTool{
 		BaseTool: BaseTool{
-			name:              "grep_content",
-			description:       "Search for text patterns in files using grep",
-			category:          CategoryFile,
+			name:               "grep_content",
+			description:        "Search for text patterns in files using grep",
+			category:           CategoryFile,
 			requiresPermission: true,
-			defaultPermission: PermissionSession,
+			defaultPermission:  PermissionSession,
 		},
 	}
 }
@@ -195,9 +205,13 @@ func (t *GrepContentTool) Execute(ctx context.Context, params map[string]interfa
 		return &ToolResult{Success: false, Error: "pattern is required"}, fmt.Errorf("pattern required")
 	}
 
-	path, ok := params["path"].(string)
+	rawPath, ok := params["path"].(string)
 	if !ok {
 		return &ToolResult{Success: false, Error: "path is required"}, fmt.Errorf("path required")
+	}
+	path, err := security.ValidatePath(rawPath)
+	if err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("security validation failed: %v", err)}, err
 	}
 
 	flags := ""
@@ -237,11 +251,11 @@ type FileInfoTool struct {
 func NewFileInfoTool() *FileInfoTool {
 	return &FileInfoTool{
 		BaseTool: BaseTool{
-			name:              "file_info",
-			description:       "Get detailed information about a file (size, permissions, timestamps, type)",
-			category:          CategoryFile,
+			name:               "file_info",
+			description:        "Get detailed information about a file (size, permissions, timestamps, type)",
+			category:           CategoryFile,
 			requiresPermission: false, // Safe read-only operation
-			defaultPermission: PermissionAlways,
+			defaultPermission:  PermissionAlways,
 		},
 	}
 }
@@ -262,9 +276,13 @@ func (t *FileInfoTool) Parameters() json.RawMessage {
 }
 
 func (t *FileInfoTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
-	path, ok := params["path"].(string)
+	rawPath, ok := params["path"].(string)
 	if !ok {
 		return &ToolResult{Success: false, Error: "path is required"}, fmt.Errorf("path required")
+	}
+	path, err := security.ValidatePath(rawPath)
+	if err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("security validation failed: %v", err)}, err
 	}
 
 	command := fmt.Sprintf("stat -c 'Size: %%s bytes\nPermissions: %%A (%%a)\nOwner: %%U (%%u)\nGroup: %%G (%%g)\nModified: %%y\nAccessed: %%x\nCreated: %%w\nType: %%F' %s 2>/dev/null || stat -f 'Size: %%z bytes\nPermissions: %%Sp (%%p)\nOwner: %%Su (%%u)\nGroup: %%Sg (%%g)\nModified: %%Sm\nAccessed: %%Sa\nType: %%HT' %s",
@@ -284,11 +302,11 @@ type DeleteFileTool struct {
 func NewDeleteFileTool() *DeleteFileTool {
 	return &DeleteFileTool{
 		BaseTool: BaseTool{
-			name:              "delete_file",
-			description:       "Delete a file or directory (use with caution!)",
-			category:          CategoryFile,
+			name:               "delete_file",
+			description:        "Delete a file or directory (use with caution!)",
+			category:           CategoryFile,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce, // Always ask!
+			defaultPermission:  PermissionOnce, // Always ask!
 		},
 	}
 }
@@ -313,9 +331,13 @@ func (t *DeleteFileTool) Parameters() json.RawMessage {
 }
 
 func (t *DeleteFileTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
-	path, ok := params["path"].(string)
+	rawPath, ok := params["path"].(string)
 	if !ok {
 		return &ToolResult{Success: false, Error: "path is required"}, fmt.Errorf("path required")
+	}
+	path, err := security.ValidatePath(rawPath)
+	if err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("security validation failed: %v", err)}, err
 	}
 
 	recursive := false
@@ -346,11 +368,11 @@ type EditFileTool struct {
 func NewEditFileTool() *EditFileTool {
 	return &EditFileTool{
 		BaseTool: BaseTool{
-			name:              "edit_file",
-			description:       "Make precise edits to existing files by replacing old_string with new_string",
-			category:          CategoryFile,
+			name:               "edit_file",
+			description:        "Make precise edits to existing files by replacing old_string with new_string",
+			category:           CategoryFile,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -383,9 +405,13 @@ func (t *EditFileTool) Parameters() json.RawMessage {
 }
 
 func (t *EditFileTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
-	path, ok := params["path"].(string)
+	rawPath, ok := params["path"].(string)
 	if !ok {
 		return &ToolResult{Success: false, Error: "path is required"}, fmt.Errorf("path required")
+	}
+	path, err := security.ValidatePath(rawPath)
+	if err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("security validation failed: %v", err)}, err
 	}
 
 	oldStr, ok := params["old_string"].(string)
@@ -461,11 +487,11 @@ type MultiEditFileTool struct {
 func NewMultiEditFileTool() *MultiEditFileTool {
 	return &MultiEditFileTool{
 		BaseTool: BaseTool{
-			name:              "multi_edit_file",
-			description:       "Make multiple precise edits to a file in a single operation",
-			category:          CategoryFile,
+			name:               "multi_edit_file",
+			description:        "Make multiple precise edits to a file in a single operation",
+			category:           CategoryFile,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -504,9 +530,13 @@ func (t *MultiEditFileTool) Parameters() json.RawMessage {
 }
 
 func (t *MultiEditFileTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
-	path, ok := params["path"].(string)
+	rawPath, ok := params["path"].(string)
 	if !ok {
 		return &ToolResult{Success: false, Error: "path is required"}, fmt.Errorf("path required")
+	}
+	path, err := security.ValidatePath(rawPath)
+	if err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("security validation failed: %v", err)}, err
 	}
 
 	editsRaw, ok := params["edits"].([]interface{})

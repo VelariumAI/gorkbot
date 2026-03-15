@@ -8,7 +8,7 @@ import (
 // CustomGlamourStyle returns a custom glamour style with light red code blocks
 func CustomGlamourStyle() ansi.StyleConfig {
 	style := ansi.StyleConfig{}
-	
+
 	// Document
 	style.Document.BlockPrefix = "\n"
 	style.Document.BlockSuffix = "\n"
@@ -18,17 +18,17 @@ func CustomGlamourStyle() ansi.StyleConfig {
 	style.CodeBlock.Margin = uintPtr(0)
 	style.CodeBlock.StylePrimitive.BackgroundColor = stringPtr("#1E0A0A") // Very dark blood red background
 	style.CodeBlock.StylePrimitive.Color = stringPtr("#E6E6E6")           // Light gray text
-	
+
 	// Inline Code - Ensure no orange background here
-	style.Code.StylePrimitive.BackgroundColor = stringPtr("#2D1212")      // Slightly lighter blood red
-	style.Code.StylePrimitive.Color = stringPtr("#FF8080")                // Pale red text
+	style.Code.StylePrimitive.BackgroundColor = stringPtr("#2D1212") // Slightly lighter blood red
+	style.Code.StylePrimitive.Color = stringPtr("#FF8080")           // Pale red text
 	// style.Code.StylePrimitive.Padding removed as it's not supported
 
 	// Headers
 	style.H1.Color = stringPtr("#FF5555") // Dracula Red
 	style.H1.Bold = boolPtr(true)
 	style.H1.BlockSuffix = "\n"
-	
+
 	style.H2.Color = stringPtr("#BD93F9") // Dracula Purple
 	style.H2.Bold = boolPtr(true)
 	style.H2.BlockSuffix = "\n"
@@ -44,22 +44,22 @@ func CustomGlamourStyle() ansi.StyleConfig {
 }
 
 func stringPtr(s string) *string { return &s }
-func boolPtr(b bool) *bool { return &b }
-func uintPtr(u uint) *uint { return &u }
+func boolPtr(b bool) *bool       { return &b }
+func uintPtr(u uint) *uint       { return &u }
 
 // Color palette
 const (
 	// Primary colors
-	GrokBlue      = "#00D9FF"
-	GeminiPurple  = "#9945FF"
-	GeminiPink    = "#FF0080"
+	GrokBlue     = "#00D9FF"
+	GeminiPurple = "#9945FF"
+	GeminiPink   = "#FF0080"
 
 	// UI colors
-	BorderGray    = "#3C3C3C"
-	TextWhite     = "#FFFFFF"
-	TextGray      = "#888888"
-	BgDark        = "#0A0A0A"
-	BgDarkAlt     = "#1A1A1A"
+	BorderGray = "#3C3C3C"
+	TextWhite  = "#FFFFFF"
+	TextGray   = "#888888"
+	BgDark     = "#0A0A0A"
+	BgDarkAlt  = "#1A1A1A"
 
 	// Status colors
 	SuccessGreen  = "#50FA7B" // Dracula Green
@@ -67,21 +67,56 @@ const (
 	WarningYellow = "#F1FA8C" // Dracula Yellow
 
 	// Dracula Theme Colors (Official)
-	DraculaBg       = "#282A36"
-	DraculaFg       = "#F8F8F2"
+	DraculaBg        = "#282A36"
+	DraculaFg        = "#F8F8F2"
 	DraculaSelection = "#44475A"
-	DraculaComment  = "#6272A4"
-	DraculaRed      = "#FF5555"
-	DraculaOrange   = "#FFB86C" // Kept for reference but avoiding for blocks
-	DraculaYellow   = "#F1FA8C"
-	DraculaGreen    = "#50FA7B"
-	DraculaPurple   = "#BD93F9"
-	DraculaCyan     = "#8BE9FD"
-	DraculaPink     = "#FF79C6"
+	DraculaComment   = "#6272A4"
+	DraculaRed       = "#FF5555"
+	DraculaOrange    = "#FFB86C" // Kept for reference but avoiding for blocks
+	DraculaYellow    = "#F1FA8C"
+	DraculaGreen     = "#50FA7B"
+	DraculaPurple    = "#BD93F9"
+	DraculaCyan      = "#8BE9FD"
+	DraculaPink      = "#FF79C6"
+)
+
+// ── Arcane Blood Theme Colors ─────────────────────────────────────────────
+// A dark crimson / ember palette designed for the mystical Arcane Forge look.
+const (
+	ArcaneBackground = "#0D0000" // near-black blood background
+	ArcaneAlt        = "#1A0000" // slightly lighter alt background
+	ArcanePrimary    = "#CC0000" // vivid blood red — primary accent
+	ArcaneEmber      = "#FF3300" // bright ember / active glow
+	ArcaneDim        = "#440000" // muted shadow for particle effects
+	ArcaneGold       = "#B8860B" // sigil gold for borders and headings
+	ArcaneGoldBright = "#FFD700" // bright gold for active elements
+	ArcaneText       = "#FFD0D0" // warm off-white foreground
+	ArcaneSubtext    = "#884444" // dimmed text / comments
+	ArcaneSelection  = "#3A0A0A" // selection background
+	ArcaneBorder     = "#5C1010" // border color
+	ArcaneSuccess    = "#50FA7B" // keep Dracula green for success
+	ArcaneError      = "#FF5555" // Dracula red for errors
+	ArcaneWarn       = "#FFB86C" // amber for warnings
 )
 
 // Styles holds all Lip Gloss styles for the TUI
+type HookStyles struct {
+	Bullet   lipgloss.Style
+	Task     lipgloss.Style
+	Meta     lipgloss.Style
+	Hook     lipgloss.Style
+	Pulse    lipgloss.Style
+	FoldIcon string
+	Particle lipgloss.Style
+}
+
 type Styles struct {
+	// Hook styles
+	Hook HookStyles
+
+	// HITL approval overlay border style (theme-aware)
+	HITL lipgloss.Style
+
 	// Consultant box - distinctive styling for Gemini responses
 	ConsultantBox lipgloss.Style
 
@@ -133,6 +168,21 @@ type Styles struct {
 // NewStyles creates a new Styles instance with default dark theme
 func NewStyles() *Styles {
 	s := &Styles{}
+
+	// Hook defaults (Dracula-ish)
+	s.Hook.Bullet = lipgloss.NewStyle().Foreground(lipgloss.Color(GrokBlue)).Bold(true)
+	s.Hook.Task = lipgloss.NewStyle().Foreground(lipgloss.Color(DraculaFg)).Bold(true)
+	s.Hook.Meta = lipgloss.NewStyle().Foreground(lipgloss.Color(DraculaComment)).Italic(true)
+	s.Hook.Hook = lipgloss.NewStyle().Foreground(lipgloss.Color(BorderGray))
+	s.Hook.Pulse = lipgloss.NewStyle().Foreground(lipgloss.Color(GrokBlue)).Blink(true)
+	s.Hook.FoldIcon = "▶"
+	s.Hook.Particle = lipgloss.NewStyle().Foreground(lipgloss.Color(DraculaComment))
+
+	// HITL approval overlay (default: amber border)
+	s.HITL = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#FF8800")).
+		Padding(1, 2)
 
 	// Consultant Box - Purple/Pink gradient border for Gemini advice
 	s.ConsultantBox = lipgloss.NewStyle().
@@ -302,10 +352,10 @@ func (s *Styles) UpdateForDraculaTheme() {
 
 	s.InputArea = s.InputArea.
 		BorderForeground(lipgloss.Color(DraculaComment))
-		
+
 	s.CommandOutput = s.CommandOutput.
 		Foreground(lipgloss.Color(DraculaGreen))
-		
+
 	s.ToolBox = s.ToolBox.
 		BorderForeground(lipgloss.Color(DraculaRed)) // Changed from Orange to Red for horror theme
 
@@ -321,3 +371,118 @@ func (s *Styles) UpdateForDraculaTheme() {
 		Foreground(lipgloss.Color(DraculaFg))
 }
 
+// NewArcaneBloodStyles creates a brand-new Styles instance with the full
+// Arcane Blood palette applied.  It does NOT mutate an existing Styles; the
+// caller must replace m.styles with the returned pointer so that lipgloss
+// immutability is respected.
+func NewArcaneBloodStyles() *Styles {
+	s := &Styles{}
+
+	s.Hook.Bullet = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true) // bright blood ●
+	s.Hook.Task = lipgloss.NewStyle().Foreground(lipgloss.Color("160")).Bold(true)   // medium red
+	s.Hook.Meta = lipgloss.NewStyle().Foreground(lipgloss.Color("88")).Italic(true)  // dark red
+	s.Hook.Hook = lipgloss.NewStyle().Foreground(lipgloss.Color("52"))               // deepest red ⎿
+	s.Hook.Pulse = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Blink(true)
+	s.Hook.FoldIcon = "🩸"
+	s.Hook.Particle = lipgloss.NewStyle().Foreground(lipgloss.Color("160"))
+
+	s.HITL = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(ArcaneGold)).
+		Padding(1, 2)
+
+	s.ConsultantBox = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(ArcaneGold)).
+		Padding(1, 2).
+		MarginTop(1).
+		MarginBottom(1)
+
+	s.UserMessage = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ArcaneEmber)).
+		Bold(true).
+		MarginBottom(1)
+
+	s.AIMessage = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ArcaneText)).
+		MarginBottom(1)
+
+	s.StatusBar = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ArcaneSubtext)).
+		Background(lipgloss.Color(ArcaneSelection)).
+		Padding(0, 1)
+
+	s.StatusBarKey = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ArcaneSubtext)).
+		Bold(true)
+
+	s.StatusBarValue = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ArcaneEmber))
+
+	s.Spinner = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ArcaneEmber))
+
+	s.Phrase = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ArcaneSubtext)).
+		Italic(true).
+		MarginLeft(1)
+
+	s.Error = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ArcaneError)).
+		Bold(true).
+		Padding(0, 1)
+
+	s.Help = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ArcaneSubtext)).
+		Italic(true).
+		Padding(1, 0)
+
+	s.App = lipgloss.NewStyle().
+		Background(lipgloss.Color(ArcaneBackground)).
+		Padding(1, 2)
+
+	s.Viewport = lipgloss.NewStyle()
+
+	s.InputArea = lipgloss.NewStyle()
+
+	s.CommandOutput = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ArcaneSuccess)).
+		Padding(0, 1)
+
+	s.ToolBox = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(ArcanePrimary)).
+		Padding(1, 2).
+		MarginTop(1).
+		MarginBottom(1)
+
+	s.Tab = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ArcaneSubtext)).
+		Padding(0, 1)
+
+	s.ActiveTab = s.Tab.Copy().
+		Foreground(lipgloss.Color(ArcaneGoldBright)).
+		Bold(true).
+		Border(lipgloss.NormalBorder(), false, false, true, false).
+		BorderForeground(lipgloss.Color(ArcaneEmber))
+
+	s.TabGap = lipgloss.NewStyle().
+		Width(1).
+		Foreground(lipgloss.Color(ArcaneBorder)).
+		SetString("|")
+
+	s.Toast = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(ArcanePrimary)).
+		Padding(0, 1).
+		Foreground(lipgloss.Color(ArcaneText))
+
+	return s
+}
+
+// UpdateForArcaneBloodTheme replaces every field in the receiver with the
+// Arcane Blood palette.  Must be called when m.theme == "arcane-blood".
+func (s *Styles) UpdateForArcaneBloodTheme() {
+	fresh := NewArcaneBloodStyles()
+	*s = *fresh
+}

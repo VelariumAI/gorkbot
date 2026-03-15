@@ -1,0 +1,13 @@
+{
+  "name": "gorkbot_bash_tester",
+  "description": "Safely executes a list of bash commands for Gorkbot tool diagnostics and testing, creates a configurable test log directory (default /tmp/gorkbot_test), runs commands with timeout and capture, logs individual results, computes overall success rate mimicking query_system_state patterns (e.g., bash 72% success), and reports in JSON.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

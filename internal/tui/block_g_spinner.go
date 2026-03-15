@@ -17,32 +17,32 @@ func BlockGSpinner() spinner.Spinner {
 		Frames: []string{
 			// 1. Empty
 			"    \n    \n    ",
-			
+
 			// Top Bar (Left to Right)
 			"█   \n    \n    ",
 			"██  \n    \n    ",
 			"███ \n    \n    ",
 			"████\n    \n    ",
-			
+
 			// Left Wall (Down)
 			"████\n█   \n    ",
 			"████\n█   \n█   ",
-			
+
 			// Bottom Bar (Left to Right, skipping middle)
 			// Target bottom: █ ██
-			
+
 			"████\n█   \n█  █", // Add pos 2 (skipping 1)
 			"████\n█   \n█ ██", // Add pos 3
-			
+
 			// Hook (Up)
 			// Target mid: █  █
 			"████\n█  █\n█ ██", // Complete G
-			
+
 			// Hold
 			"████\n█  █\n█ ██",
 			"████\n█  █\n█ ██",
 			"████\n█  █\n█ ██",
-			
+
 			// Blink/Pulse Effect
 			"    \n    \n    ", // Flash off
 			"████\n█  █\n█ ██", // Flash on

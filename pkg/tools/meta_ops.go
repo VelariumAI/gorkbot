@@ -136,7 +136,7 @@ func NewSystemMonitorTool() *SystemMonitorTool {
 
 func (t *SystemMonitorTool) Parameters() json.RawMessage {
 	schema := map[string]interface{}{
-		"type": "object",
+		"type":       "object",
 		"properties": map[string]interface{}{},
 	}
 	data, _ := json.Marshal(schema)

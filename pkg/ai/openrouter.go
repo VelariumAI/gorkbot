@@ -96,9 +96,9 @@ func (o *OpenRouterProvider) Ping(ctx context.Context) error {
 
 // openRouterModelEntry represents one model in the OpenRouter /v1/models response.
 type openRouterModelEntry struct {
-	ID            string                    `json:"id"`
-	ContextLength int                       `json:"context_length"`
-	Pricing       openRouterModelPricing    `json:"pricing"`
+	ID            string                 `json:"id"`
+	ContextLength int                    `json:"context_length"`
+	Pricing       openRouterModelPricing `json:"pricing"`
 }
 
 type openRouterModelPricing struct {

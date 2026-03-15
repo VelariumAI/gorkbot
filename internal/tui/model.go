@@ -2,29 +2,33 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/velariumai/gorkbot/internal/arc"
 	"github.com/velariumai/gorkbot/internal/engine"
-	        "github.com/velariumai/gorkbot/internal/platform"
-	        "github.com/velariumai/gorkbot/pkg/ai"
-	                        "github.com/velariumai/gorkbot/pkg/commands"
-	                "github.com/velariumai/gorkbot/pkg/process"
+	"github.com/velariumai/gorkbot/internal/platform"
+	"github.com/velariumai/gorkbot/pkg/adaptive"
+	"github.com/velariumai/gorkbot/pkg/ai"
+	"github.com/velariumai/gorkbot/pkg/commands"
+	"github.com/velariumai/gorkbot/pkg/process"
 	"github.com/velariumai/gorkbot/pkg/registry"
 	"github.com/velariumai/gorkbot/pkg/tools"
 	tui_style "github.com/velariumai/gorkbot/pkg/tui"
@@ -39,13 +43,14 @@ const (
 type sessionState int
 
 const (
-	chatView sessionState = iota
-	modelListView           // kept for backward compat
+	chatView      sessionState = iota
+	modelListView              // kept for backward compat
 	toolsTableView
 	discoveryView
-	analyticsView    // session analytics dashboard (Ctrl+A)
-	diagnosticsView  // system diagnostics (Ctrl+\)
+	analyticsView     // session analytics dashboard (Ctrl+A)
+	diagnosticsView   // system diagnostics (Ctrl+\)
 	stateHITLApproval // SENSE HITL plan-and-execute approval overlay
+	dagView           // DAG task-graph executor view
 )
 
 // hitlPendingItem holds a queued HITL request alongside the response channel
@@ -61,20 +66,20 @@ const modelSelectView = modelListView
 // Model represents the TUI application state
 type Model struct {
 	// Bubble Tea components
-	viewport viewport.Model
-	textarea textarea.Model
-	spinner  spinner.Model
+	viewport          viewport.Model
+	textarea          textarea.Model
+	spinner           spinner.Model
 	consultantSpinner spinner.Model
-	help     help.Model
-	keymap   KeyMap
-	
+	help              help.Model
+	keymap            KeyMap
+
 	// Model Selection List
 	modelList       list.Model
 	availableModels []commands.ModelInfo
 	state           sessionState
 
 	// Tools Table
-	toolsTable      TableModel
+	toolsTable TableModel
 
 	// Command registry
 	commands *commands.Registry
@@ -87,19 +92,19 @@ type Model struct {
 
 	// Active Overlay
 	activeOverlay Overlay
-	
+
 	// Status Bar
 	statusBar StatusBar
 
 	// State
-	ready            bool
-	width            int
-	height           int
-	generating       bool
-	isConsultant     bool
-	mouseEnabled     bool
-	currentPhrase    string
-	err              error
+	ready         bool
+	width         int
+	height        int
+	generating    bool
+	isConsultant  bool
+	mouseEnabled  bool
+	currentPhrase string
+	err           error
 
 	// Permission prompts
 	awaitingPermission bool
@@ -112,43 +117,48 @@ type Model struct {
 	interventionChan   chan engine.InterventionResponse
 
 	// SENSE HITL approval state
-	awaitingHITL  bool
-	hitlRequest   *engine.HITLRequest
-	hitlChan      chan engine.HITLDecision
-	hitlQueue     []hitlPendingItem // FIFO queue of pending HITL requests
+	awaitingHITL bool
+	hitlRequest  *engine.HITLRequest
+	hitlChan     chan engine.HITLDecision
+	hitlQueue    []hitlPendingItem // FIFO queue of pending HITL requests
 
 	// Content
-	messages         []Message
-	currentResponse  strings.Builder
-	currentModel     string
-	theme            string
+	messages        []Message
+	currentResponse strings.Builder
+	currentModel    string
+	theme           string
 
 	// Scroll state - track if user is viewing older messages
-	userScrolledUp   bool  // true when user has scrolled up to read older content
+	userScrolledUp bool // true when user has scrolled up to read older content
 
 	// Live tool execution panel — names of tools currently running.
 	activeTools []string
 
 	// Discovery: live cloud model sidebar + agent tree.
-	discoveredModels []discoveryModel // latest snapshot from discovery manager
+	discoveredModels []discoveryModel      // latest snapshot from discovery manager
 	discoverySub     chan []discoveryModel // receives updates from discovery bridge goroutine
 
 	// Markdown renderer
-	glamour          *glamour.TermRenderer
+	glamour *glamour.TermRenderer
 
 	// Styles
-	styles           *Styles
+	styles *Styles
 
 	// Quit flag
-	quitting         bool
+	quitting bool
 
 	// Program reference for sending messages
-	program          *tea.Program
+	program *tea.Program
+
+	// Dynamic Auth Wizard state
+	awaitingAuth bool
+	authRequest  *AuthRequestMsg
+	authInput    textinput.Model
 
 	// Provider registry — used by /model to instantiate providers via WithModel.
 	providerRegistry *registry.ModelRegistry
 
-	currentColorIdx  int
+	currentColorIdx int
 
 	// Performance: track renderer word-wrap width so we only recreate glamour
 	// when the terminal width actually changes, not on every WindowSizeMsg.
@@ -187,7 +197,9 @@ type Model struct {
 	splashDone bool
 
 	// ── Toast notifications ───────────────────────────────────────────────
-	toasts []activeToast
+	// Queue is kept sorted: highest Priority first, then newest CreatedAt.
+	// At most 5 items are stored; at most 3 are rendered at once.
+	toasts []toastItem
 
 	// ── Side panel ────────────────────────────────────────────────────────
 	sidePanelOpen  bool
@@ -198,13 +210,33 @@ type Model struct {
 
 	// ── Planning box: hides internal monologue during generation ──────────
 	// planningActive is true while the AI is generating (hidden in box).
-	// planningBuf accumulates tokens for the current segment (display only).
-	// planningIntent is the latest short intent sentence extracted from planningBuf.
-	// planningShowDots cycles between "Planning..." and planningIntent.
+	// planningBuf is kept for the PlanningCommit path (content capture).
+	// planningShowDots / planningIntent are no longer used for display
+	// (superseded by the activity panel below).
 	planningActive   bool
 	planningBuf      strings.Builder
-	planningIntent   string
-	planningShowDots bool
+	planningIntent   string // unused; kept for zero-cost backward compat
+	planningShowDots bool   // unused; kept for zero-cost backward compat
+
+	// ── Extended thinking panel ────────────────────────────────────────────
+	// thinkingBuf accumulates streamed thinking tokens from Anthropic's
+	// extended thinking feature.  It is cleared at the start of each new
+	// callOrchestrator round-trip and rendered as a collapsible box while
+	// m.generating is true (and for a moment after, until StreamCompleteMsg).
+	thinkingBuf    strings.Builder
+	thinkingActive bool // true while the AI is mid-thinking block
+
+	// ── Activity panel: live view of what the AI is actually doing ────────
+	// genPhase tracks the current generation phase (thinking/tool/synthesizing).
+	// thinkingTokens counts planning tokens received so far.
+	// activityLog holds the last 4 completed tool actions with elapsed times.
+	// currentActivity is the tool currently running (nil = none).
+	genPhase        genPhase
+	thinkingTokens  int
+	activityLog     []activityEntry
+	currentActivity *activityEntry
+
+	liveTokenCount int // estimated live tokens in current response
 
 	// ── Tool timing: ToolName → start time (for elapsed display) ──────────
 	toolStartTimes map[string]time.Time
@@ -214,24 +246,172 @@ type Model struct {
 	apiKeyPrompt apiKeyPromptState
 
 	// ── Cloud Brains interactive cursor (discoveryView) ───────────────────
-	discCursor        int    // index into discoveredModels list
-	discTestActive    bool   // test-prompt input is open
-	discTestInput     string // accumulated test prompt text
-	discTestResult    string // result of test prompt
+	discCursor     int    // index into discoveredModels list
+	discTestActive bool   // test-prompt input is open
+	discTestInput  string // accumulated test prompt text
+	discTestResult string // result of test prompt
 
 	// ── Conversation bookmarks ────────────────────────────────────────────
-	bookmarks            []Bookmark   // in-memory bookmark list
-	bookmarkOverlay      bool         // bookmark manager is open
-	bookmarkInput        string       // new bookmark name input
-	bookmarkInputActive  bool         // creating new bookmark
+	bookmarks           []Bookmark // in-memory bookmark list
+	bookmarkOverlay     bool       // bookmark manager is open
+	bookmarkInput       string     // new bookmark name input
+	bookmarkInputActive bool       // creating new bookmark
+
+	// ── Omni-search (Ctrl+K) ──────────────────────────────────────────────
+	// searchMode is true while the search bar is active.
+	// searchQuery is the current search string typed by the user.
+	// searchMatches holds the message indices of conversations that contain the query.
+	// searchMatchIdx is which match is currently highlighted / scrolled to.
+	searchMode     bool
+	searchQuery    string
+	searchMatches  []int
+	searchMatchIdx int
+
+	// ── DAG Orchestrator (dagView) ────────────────────────────────────────
+	// dagVM is the active DAG task-graph view model. Nil when no graph is running.
+	dagVM *DAGViewModel
+
+	// ── Integration settings callbacks (tabIntegrations in SettingsOverlay) ──
+	// integrationGetter returns current effective values (env var or stored config).
+	// integrationSetter persists a key/value pair and applies it live.
+	integrationGetter func() map[string]string
+	integrationSetter func(key, value string) error
+
+	// ── Hook output system (Claude Code-style) ────────────────────────────
+	// activeHooks holds top-level hook entries live during generation.
+	// Hooks are appended/updated by HookStartMsg/HookUpdateMsg/HookDoneMsg.
+	// hookSpinFrame advances on every HookTickMsg (150 ms).
+	activeHooks    []HookEntry
+	hookSpinFrame  int
+	hookTickActive bool      // true while hookTick() loop is running
+	lastTokenTime  time.Time // debouncer for token rendering
+
+	// ── @ file path autocomplete ─────────────────────────────────────────
+	atCompleteActive bool
+	atCompleteQuery  string
+	atCompleteItems  []string
+	atCompleteIdx    int
+	atCompleteAt     int    // textarea cursor offset of the triggering @
+	atCompleteCWD    string // cached CWD; set once in NewModel, avoids os.Getwd() per keystroke
+
+	// ── Input history search (Ctrl+R) ────────────────────────────────────
+	inputHistory      []string
+	inputHistoryLower []string // pre-lowercased copy for O(1) search per item
+	histSearchMode    bool
+	histSearchQuery   string
+	histSearchMatches []int // indices into inputHistory
+	histSearchIdx     int
+
+	// ── Double-Esc rewind menu ────────────────────────────────────────────
+	lastEscTime    time.Time
+	rewindMenuOpen bool
+	rewindItems    []rewindItem // []session.CheckpointSummary (alias in completions.go)
+	rewindCursor   int
+
+	// ── Compact tab bar ──────────────────────────────────────────────────
+	compactTabs bool
 }
 
-// activeToast holds one pending toast notification.
-type activeToast struct {
+// ── Activity panel types ───────────────────────────────────────────────────
+
+// genPhase represents the current AI generation phase shown in the activity panel.
+type genPhase int
+
+const (
+	phaseIdle         genPhase = iota // no generation in progress
+	phaseThinking                     // AI is reasoning internally (planning tokens)
+	phaseTool                         // a tool call is executing
+	phaseSynthesizing                 // composing final response after tool(s)
+)
+
+// activityEntry records one discrete action taken during generation.
+type activityEntry struct {
+	Icon      string
+	Label     string
+	StartedAt time.Time
+	Elapsed   time.Duration // zero while in progress
+	Done      bool
+	Success   bool
+}
+
+// ── Hook output entries (Claude Code-style) ───────────────────────────────
+// HookEntry represents one discrete action in the live hook output tree.
+// It may nest child actions up to depth maxHookDepth.
+const maxHookDepth = 5
+
+// HookEntry is a single node in the live action tree rendered below the
+// loading indicator during generation and persisted in the viewport after.
+type HookEntry struct {
+	ID         string
+	Icon       string // active glyph (e.g. "⚙"); replaced by ✓/✗ when done
+	Label      string // short description
+	Metadata   string // elapsed, progress, size, etc.
+	Output     string // optional preview output (first 2 lines)
+	Active     bool   // true while running
+	IsFinal    bool   // true once completed
+	IsError    bool   // true if failed
+	Collapsed  bool   // fold children
+	Depth      int    // nesting level (0 = top)
+	CreatedAt  time.Time
+	Elapsed    time.Duration // zero while active
+	SubEntries []HookEntry   // child actions (max depth 5)
+}
+
+// findHook searches a flat or nested slice for the entry with the given ID.
+// Returns a pointer into the slice for in-place mutation.
+func findHook(hooks []HookEntry, id string) *HookEntry {
+	for i := range hooks {
+		if hooks[i].ID == id {
+			return &hooks[i]
+		}
+		if ptr := findHook(hooks[i].SubEntries, id); ptr != nil {
+			return ptr
+		}
+	}
+	return nil
+}
+
+// hasActiveHooks recursively checks if any hook in the tree is still active.
+func hasActiveHooks(hooks []HookEntry) bool {
+	for i := range hooks {
+		if hooks[i].Active {
+			return true
+		}
+		if hasActiveHooks(hooks[i].SubEntries) {
+			return true
+		}
+	}
+	return false
+}
+
+// sealAllHooks forcibly marks every active hook as done (orphan protection).
+func sealAllHooks(hooks []HookEntry) []HookEntry {
+	for i := range hooks {
+		if hooks[i].Active {
+			hooks[i].Active = false
+			hooks[i].IsFinal = true
+			hooks[i].IsError = true
+			if hooks[i].Metadata == "" {
+				hooks[i].Metadata = "interrupted"
+			}
+		}
+		hooks[i].SubEntries = sealAllHooks(hooks[i].SubEntries)
+	}
+	return hooks
+}
+
+// toastItem is the internal representation of a queued toast notification.
+// Constructed only via pushToast() from a ToastMsg; never built directly outside model_extensions.go.
+type toastItem struct {
+	ID        string // empty for anonymous toasts
 	Icon      string
 	Text      string
-	Color     string
-	ExpiresAt time.Time
+	Color     string // resolved foreground hex (never empty after pushToast)
+	Priority  ToastPriority
+	Kind      ToastKind
+	Progress  float64 // 0.0–1.0; only meaningful for KindProgress
+	CreatedAt time.Time
+	ExpiresAt time.Time // zero value = KindPersistent (never auto-dismissed)
 }
 
 // Bookmark marks a specific message index in the conversation.
@@ -244,25 +424,27 @@ type Bookmark struct {
 
 // Message represents a single message in the conversation
 type Message struct {
-	Role         string // "user", "assistant", "consultant", "system", "tool", "tool_call", "internal", "a2a"
-	Content      string
-	IsConsultant bool
-	ToolName     string             // For tool messages
-	ToolResult   *tools.ToolResult  // For tool result messages
-	ToolParams   map[string]interface{} // For tool_call (request) messages
-	NestLevel    int                // Nesting depth for tool calls (0 = top level)
-	MessageType  string             // "tool", "tool_call", "internal", "a2a", "normal"
-	Collapsed    bool               // true = show 1-line summary; toggled with Ctrl+R
-	Elapsed        time.Duration    // tool execution duration (for display)
-	IntentCategory string           // ARC category at time of user message
+	Role           string // "user", "assistant", "consultant", "system", "tool", "tool_call", "internal", "a2a"
+	Content        string
+	IsConsultant   bool
+	ToolName       string                 // For tool messages
+	ToolResult     *tools.ToolResult      // For tool result messages
+	ToolParams     map[string]interface{} // For tool_call (request) messages
+	NestLevel      int                    // Nesting depth for tool calls (0 = top level)
+	MessageType    string                 // "tool", "tool_call", "internal", "a2a", "normal"
+	Collapsed      bool                   // true = show 1-line summary; toggled with Ctrl+R
+	Elapsed        time.Duration          // tool execution duration (for display)
+	IntentCategory string                 // ARC category at time of user message
+	HookEntries    []HookEntry            // Claude Code-style hooks for this message
+	IsStructured   bool                   // true if the message is primarily structured/hook-driven
 }
 
 // modelSelectState holds the dual-pane model selection view state.
 type modelSelectState struct {
-	activePane     int          // 0 = primary, 1 = secondary
+	activePane     int // 0 = primary, 1 = secondary
 	primaryList    list.Model
 	secondaryList  list.Model
-	providerFilter string       // "" = all; otherwise filter by provider ID
+	providerFilter string           // "" = all; otherwise filter by provider ID
 	providerKeys   []providerStatus // latest provider key statuses
 	refreshing     map[string]bool
 }
@@ -272,7 +454,7 @@ type apiKeyPromptState struct {
 	active     bool
 	provider   string
 	inputVal   string
-	validating bool   // true while background Ping is in flight
+	validating bool // true while background Ping is in flight
 	errMsg     string
 	websiteURL string
 }
@@ -280,7 +462,7 @@ type apiKeyPromptState struct {
 // NewModel creates a new TUI model.
 // modelName is the display name of the primary AI (e.g. "Grok-3").
 // consultantName is the display name of the consultant AI (e.g. "Gemini 2.0 Flash"); pass "" if unavailable.
-func NewModel(orch *engine.Orchestrator, pm *process.Manager, modelName, consultantName string) (*Model, error) {
+func NewModel(orch *engine.Orchestrator, pm *process.Manager, modelName, consultantName string, registry *commands.Registry) (*Model, error) {
 	// Initialize components
 	ta := textarea.New()
 	ta.Placeholder = "Ask me anything... (Tap here to type, Enter to send)"
@@ -289,8 +471,13 @@ func NewModel(orch *engine.Orchestrator, pm *process.Manager, modelName, consult
 	ta.SetWidth(80)
 	ta.SetHeight(3)
 	ta.ShowLineNumbers = false
-	ta.KeyMap.InsertNewline.SetEnabled(true) // Alt+Enter for newline
+	ta.KeyMap.InsertNewline.SetEnabled(true)         // Alt+Enter for newline
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle() // Keep cursor visible
+
+	// Use existing registry if provided, otherwise create a new one
+	if registry == nil {
+		registry = commands.NewRegistry()
+	}
 
 	sp := spinner.New()
 	sp.Spinner = BlockGSpinner()
@@ -302,8 +489,8 @@ func NewModel(orch *engine.Orchestrator, pm *process.Manager, modelName, consult
 	csp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("196")) // Blood Red
 
 	vp := viewport.New(80, 20)
-	vp.MouseWheelEnabled = true  // Enable mouse wheel scrolling
-	vp.MouseWheelDelta = 3       // Scroll 3 lines per wheel tick
+	vp.MouseWheelEnabled = true // Enable mouse wheel scrolling
+	vp.MouseWheelDelta = 3      // Scroll 3 lines per wheel tick
 
 	// Initialize glamour for markdown rendering
 	r, _ := glamour.NewTermRenderer(
@@ -311,15 +498,12 @@ func NewModel(orch *engine.Orchestrator, pm *process.Manager, modelName, consult
 		glamour.WithWordWrap(80),
 	)
 
-	// Initialize command registry
-	registry := commands.NewRegistry()
-
 	// Initialize help bubble
 	h := help.New()
-	
+
 	// Initialize model list
 	l := initModelList(80, 20)
-	
+
 	// Initialize tools table
 	toolColumns := []table.Column{
 		{Title: "Name", Width: 20},
@@ -333,31 +517,39 @@ func NewModel(orch *engine.Orchestrator, pm *process.Manager, modelName, consult
 	styles.UpdateForDraculaTheme()
 
 	m := &Model{
-		viewport:        vp,
-		textarea:        ta,
-		spinner:         sp,
-		consultantSpinner: csp,
-		help:            h,
-		keymap:          DefaultKeyMap(),
-		modelList:       l,
-		toolsTable:      tt,
-		state:           chatView,
-		commands:        registry,
-		orchestrator:    orch,
-		processManager:  pm,
-		statusBar:       NewStatusBar(styles),
-		ready:           false,
-		generating:      false,
-		isConsultant:    false,
-		messages:        []Message{},
-		currentModel:    modelName,
-		theme:           "dracula", // Default to Dracula
-		glamour:         r,
-		styles:          styles,
+		viewport:            vp,
+		textarea:            ta,
+		spinner:             sp,
+		consultantSpinner:   csp,
+		help:                h,
+		keymap:              DefaultKeyMap(),
+		modelList:           l,
+		toolsTable:          tt,
+		state:               chatView,
+		commands:            registry,
+		orchestrator:        orch,
+		processManager:      pm,
+		statusBar:           NewStatusBar(styles),
+		ready:               false,
+		generating:          false,
+		isConsultant:        false,
+		messages:            []Message{},
+		currentModel:        modelName,
+		theme:               "dracula", // Default to Dracula
+		glamour:             r,
+		styles:              styles,
 		currentColorIdx:     0,
 		rendererWidth:       80,
 		streamChunkInterval: 8,
 		toolStartTimes:      make(map[string]time.Time),
+		authInput:           textinput.New(),
+	}
+	m.authInput.Placeholder = "Enter credential..."
+	m.authInput.Focus()
+
+	// Cache CWD once so @ autocomplete never calls os.Getwd() per keystroke.
+	if cwd, err := os.Getwd(); err == nil {
+		m.atCompleteCWD = cwd
 	}
 
 	// Load mascot logo (embedded PNG → block-art lines). Graceful on failure.
@@ -390,6 +582,12 @@ func NewModel(orch *engine.Orchestrator, pm *process.Manager, modelName, consult
 
 	// Initialise analytics dashboard.
 	m.analytics = NewAnalyticsData()
+	if orch != nil && orch.ContextMgr != nil && m.analytics != nil {
+		m.analytics.ContextMaxToks = orch.ContextMgr.MaxTokens()
+		m.analytics.ContextUsedToks = orch.ContextMgr.TokensUsed()
+		m.analytics.ContextUsedPct = orch.ContextMgr.UsedPct()
+		m.statusBar.UpdateContext(m.analytics.ContextUsedPct, orch.ContextMgr.TotalCostUSD())
+	}
 
 	// Build minimal welcome message — full details available via /about.
 	consultantLine := ""
@@ -414,8 +612,8 @@ func (m *Model) Init() tea.Cmd {
 		m.consultantSpinner.Tick,
 		m.statusBar.Init(),
 		tea.EnableMouseAllMotion,
-		discoveryPollTick(),           // start cloud-brains polling ticker
-		glistenTick(),                 // start header animation
+		discoveryPollTick(),            // start cloud-brains polling ticker
+		glistenTick(),                  // start header animation
 		m.pollAllConfiguredProviders(), // populate model lists from all keyed providers on startup
 		providerPollTick(),             // schedule periodic re-poll every 5 minutes
 	)
@@ -480,25 +678,64 @@ func (m *Model) addToolMessageWithNesting(toolName string, result *tools.ToolRes
 	// Minimalist, tree-like structure
 	content = fmt.Sprintf("%s %s %s", icon, toolName, summary)
 
+	var hookOutput string
+	if result.Success {
+		hookOutput = result.Output
+	} else {
+		hookOutput = result.Error
+	}
+
+	entry := HookEntry{
+		Label:    fmt.Sprintf("Tool: %s", toolName),
+		Metadata: fmt.Sprintf("%.2fs", elapsed.Seconds()),
+		Active:   false,
+		IsFinal:  true,
+		IsError:  !result.Success,
+		Output:   hookOutput,
+		Elapsed:  elapsed,
+	}
+
 	m.messages = append(m.messages, Message{
-		Role:        "tool",
-		Content:     content,
-		ToolName:    toolName,
-		ToolResult:  result,
-		NestLevel:   level,
-		MessageType: "tool",
-		Elapsed:     elapsed,
+		Role:         "tool",
+		Content:      content,
+		ToolName:     toolName,
+		ToolResult:   result,
+		NestLevel:    level,
+		MessageType:  "tool",
+		Elapsed:      elapsed,
+		HookEntries:  []HookEntry{entry},
+		IsStructured: true,
+		Collapsed:    true, // start compact; Ctrl+O expands
 	})
 }
 
 // addToolCallMessage inserts a tool_call (request) message that renders as a
 // cyan-bordered box showing the tool name and its parameters before the result.
 func (m *Model) addToolCallMessage(toolName string, params map[string]interface{}) {
+	var p []string
+	for k, v := range params {
+		p = append(p, fmt.Sprintf("%s: %v", k, v))
+	}
+	meta := strings.Join(p, ", ")
+	if len(meta) > 50 {
+		meta = meta[:47] + "..."
+	}
+
+	entry := HookEntry{
+		Label:    fmt.Sprintf("Tool: %s", toolName),
+		Metadata: meta,
+		Active:   true,
+		Output:   "Executing...",
+	}
+
 	m.messages = append(m.messages, Message{
-		Role:        "tool_call",
-		ToolName:    toolName,
-		ToolParams:  params,
-		MessageType: "tool_call",
+		Role:         "tool_call",
+		ToolName:     toolName,
+		ToolParams:   params,
+		MessageType:  "tool_call",
+		HookEntries:  []HookEntry{entry},
+		IsStructured: true,
+		Collapsed:    true, // start compact; Ctrl+O expands
 	})
 }
 
@@ -534,8 +771,8 @@ func (m *Model) renderMessages() string {
 		case "user":
 			userLine := m.styles.UserMessage.Render(fmt.Sprintf("You: %s", msg.Content))
 			if msg.IntentCategory != "" {
-				label := arc.CategoryLabel(arc.IntentCategory(msg.IntentCategory))
-				emoji := arc.CategoryEmoji(arc.IntentCategory(msg.IntentCategory))
+				label := adaptive.CategoryLabel(adaptive.IntentCategory(msg.IntentCategory))
+				emoji := adaptive.CategoryEmoji(adaptive.IntentCategory(msg.IntentCategory))
 				badge := lipgloss.NewStyle().
 					Foreground(lipgloss.Color(TextGray)).
 					Background(lipgloss.Color(BgDarkAlt)).
@@ -547,16 +784,28 @@ func (m *Model) renderMessages() string {
 			output.WriteString("\n\n")
 
 		case "assistant":
-			// Clean up the content before rendering to avoid excessive indentation
-			cleanContent := m.cleanMarkdownContent(msg.Content)
-			rendered, err := m.glamour.Render(cleanContent)
-			if err != nil {
-				output.WriteString(m.styles.AIMessage.Render(cleanContent))
+			var contentArea string
+			if len(msg.HookEntries) > 0 || msg.IsStructured {
+				boxWidth := m.width - msg.NestLevel*2 - 4
+				if boxWidth < 20 {
+					boxWidth = 20
+				}
+				contentArea = RenderHookTree(msg.HookEntries, boxWidth, m.hookSpinFrame, m.styles.Hook)
+				// Apply AIMessage styling to keep the box if it has one, but mostly it's margin/padding
+				contentArea = m.styles.AIMessage.Render(contentArea)
 			} else {
-				// Trim excessive leading spaces from rendered output
-				rendered = m.trimRenderedIndentation(rendered)
-				output.WriteString(m.styles.AIMessage.Render(rendered))
+				// Clean up the content before rendering to avoid excessive indentation
+				cleanContent := m.cleanMarkdownContent(msg.Content)
+				rendered, err := m.glamour.Render(cleanContent)
+				if err != nil {
+					contentArea = m.styles.AIMessage.Render(cleanContent)
+				} else {
+					// Trim excessive leading spaces from rendered output
+					rendered = m.trimRenderedIndentation(rendered)
+					contentArea = m.styles.AIMessage.Render(rendered)
+				}
 			}
+			output.WriteString(contentArea)
 			output.WriteString("\n")
 
 		case "consultant":
@@ -585,33 +834,53 @@ func (m *Model) renderMessages() string {
 			nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(nameColor)).Bold(true)
 			header := "→ " + nameStyle.Render(msg.ToolName)
 
-			// Format parameters compactly: key: value, one per line, truncated.
-			paramStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(TextGray))
-			var paramLines []string
-			for k, v := range msg.ToolParams {
-				val := fmt.Sprintf("%v", v)
-				val = strings.ReplaceAll(val, "\n", " ")
-				if len(val) > 72 {
-					val = val[:69] + "…"
-				}
-				paramLines = append(paramLines,
-					paramStyle.Render(fmt.Sprintf("  %s: %s", k, val)))
-			}
-			var body string
-			if len(paramLines) > 0 {
-				body = strings.Join(paramLines, "\n")
-			}
-
+			var boxContent string
 			boxWidth := m.width - msg.NestLevel*2 - 4
 			if boxWidth < 20 {
 				boxWidth = 20
 			}
-			var boxContent string
-			if body != "" {
-				boxContent = lipgloss.JoinVertical(lipgloss.Left, header, body)
-			} else {
-				boxContent = header
+
+			if msg.Collapsed {
+				// Compact 1-line summary: "▶ → tool_name ..."
+				hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(TextGray)).Italic(true)
+				boxContent = "▶ " + header + "  " + hintStyle.Render("ctrl+o to expand")
+				callBoxStyle := lipgloss.NewStyle().
+					Border(lipgloss.NormalBorder()).
+					BorderForeground(lipgloss.Color(DraculaCyan)).
+					Padding(0, 1).
+					Width(boxWidth)
+				output.WriteString(callBoxStyle.Render(boxContent))
+				output.WriteString("\n")
+				break
 			}
+
+			if len(msg.HookEntries) > 0 || msg.IsStructured {
+				boxContent = RenderHookTree(msg.HookEntries, boxWidth, m.hookSpinFrame, m.styles.Hook)
+			} else {
+				// Format parameters compactly: key: value, one per line, truncated.
+				paramStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(TextGray))
+				var paramLines []string
+				for k, v := range msg.ToolParams {
+					val := fmt.Sprintf("%v", v)
+					val = strings.ReplaceAll(val, "\n", " ")
+					if len(val) > 72 {
+						val = val[:69] + "…"
+					}
+					paramLines = append(paramLines,
+						paramStyle.Render(fmt.Sprintf("  %s: %s", k, val)))
+				}
+				var body string
+				if len(paramLines) > 0 {
+					body = strings.Join(paramLines, "\n")
+				}
+
+				if body != "" {
+					boxContent = lipgloss.JoinVertical(lipgloss.Left, header, body)
+				} else {
+					boxContent = header
+				}
+			}
+
 			callBoxStyle := lipgloss.NewStyle().
 				Border(lipgloss.NormalBorder()).
 				BorderForeground(lipgloss.Color(DraculaCyan)).
@@ -633,67 +902,100 @@ func (m *Model) renderMessages() string {
 			nameColor := toolCategoryColor(msg.ToolName)
 			nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(nameColor))
 
+			if msg.Collapsed {
+				// Compact 1-line summary: "▶ 🔧 tool_name · 0.3s ✓  [ctrl+o]"
+				elapsed := ""
+				if msg.Elapsed > 0 {
+					elapsed = fmt.Sprintf("  ·  %.2fs", msg.Elapsed.Seconds())
+				}
+				hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(TextGray)).Italic(true)
+				summary := fmt.Sprintf("▶ 🔧 %s%s  %s  %s",
+					nameStyle.Render(msg.ToolName), elapsed, statusIcon,
+					hintStyle.Render("ctrl+o to expand"))
+				boxWidth := m.width - msg.NestLevel*2 - 4
+				if boxWidth < 20 {
+					boxWidth = 20
+				}
+				boxStyle := lipgloss.NewStyle().
+					Border(lipgloss.RoundedBorder()).
+					BorderForeground(lipgloss.Color(borderColor)).
+					Padding(0, 1).
+					Width(boxWidth)
+				output.WriteString(boxStyle.Render(summary))
+				output.WriteString("\n")
+				break
+			}
+
 			titleParts := "🔧 " + nameStyle.Render(msg.ToolName)
 			if msg.Elapsed > 0 {
 				titleParts += fmt.Sprintf("  ·  %.2fs", msg.Elapsed.Seconds())
 			}
 			titleParts += "  " + statusIcon
 
-			// Check for diff data (before/after from file write/edit operations)
 			var outputContent string
-			if msg.ToolResult != nil && msg.ToolResult.Data != nil {
-				before, hasBefore := msg.ToolResult.Data["before"].(string)
-				after, hasAfter := msg.ToolResult.Data["after"].(string)
-				if hasBefore && hasAfter {
-					diffLines := computeSimpleDiff(before, after)
-					const maxDiffLines = 20
-					addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(SuccessGreen))
-					rmStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ErrorRed))
-					ctxStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(TextGray))
-					var rendered []string
-					limit := len(diffLines)
-					truncated := 0
-					if limit > maxDiffLines && !msg.Collapsed {
-						truncated = limit - maxDiffLines
-						limit = maxDiffLines
+
+			if len(msg.HookEntries) > 0 || msg.IsStructured {
+				boxWidth := m.width - msg.NestLevel*2 - 4
+				if boxWidth < 20 {
+					boxWidth = 20
+				}
+				outputContent = RenderHookTree(msg.HookEntries, boxWidth, m.hookSpinFrame, m.styles.Hook)
+			} else {
+				// Check for diff data (before/after from file write/edit operations)
+				if msg.ToolResult != nil && msg.ToolResult.Data != nil {
+					before, hasBefore := msg.ToolResult.Data["before"].(string)
+					after, hasAfter := msg.ToolResult.Data["after"].(string)
+					if hasBefore && hasAfter {
+						diffLines := computeSimpleDiff(before, after)
+						const maxDiffLines = 20
+						addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(SuccessGreen))
+						rmStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ErrorRed))
+						ctxStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(TextGray))
+						var rendered []string
+						limit := len(diffLines)
+						truncated := 0
+						if limit > maxDiffLines && !msg.Collapsed {
+							truncated = limit - maxDiffLines
+							limit = maxDiffLines
+						}
+						for _, dl := range diffLines[:limit] {
+							if strings.HasPrefix(dl, "+") {
+								rendered = append(rendered, addStyle.Render(dl))
+							} else if strings.HasPrefix(dl, "-") {
+								rendered = append(rendered, rmStyle.Render(dl))
+							} else {
+								rendered = append(rendered, ctxStyle.Render(dl))
+							}
+						}
+						if truncated > 0 {
+							rendered = append(rendered, ctxStyle.Render(fmt.Sprintf("▶ %d more diff lines — ctrl+o", truncated)))
+						}
+						outputContent = strings.Join(rendered, "\n")
 					}
-					for _, dl := range diffLines[:limit] {
-						if strings.HasPrefix(dl, "+") {
-							rendered = append(rendered, addStyle.Render(dl))
-						} else if strings.HasPrefix(dl, "-") {
-							rendered = append(rendered, rmStyle.Render(dl))
+				}
+
+				// Fallback to raw output when no diff data.
+				if outputContent == "" {
+					var rawOutput string
+					if msg.ToolResult != nil {
+						if msg.ToolResult.Success {
+							rawOutput = msg.ToolResult.Output
 						} else {
-							rendered = append(rendered, ctxStyle.Render(dl))
+							rawOutput = msg.ToolResult.Error
 						}
 					}
-					if truncated > 0 {
-						rendered = append(rendered, ctxStyle.Render(fmt.Sprintf("▶ %d more diff lines — Ctrl+R", truncated)))
-					}
-					outputContent = strings.Join(rendered, "\n")
-				}
-			}
-
-			// Fallback to raw output when no diff data.
-			if outputContent == "" {
-				var rawOutput string
-				if msg.ToolResult != nil {
-					if msg.ToolResult.Success {
-						rawOutput = msg.ToolResult.Output
+					lines := strings.Split(rawOutput, "\n")
+					const maxToolLines = 15
+					var displayLines []string
+					if len(lines) > maxToolLines && !msg.Collapsed {
+						displayLines = lines[:maxToolLines]
+						displayLines = append(displayLines,
+							fmt.Sprintf("[↓ %d more lines — ctrl+o]", len(lines)-maxToolLines))
 					} else {
-						rawOutput = msg.ToolResult.Error
+						displayLines = lines
 					}
+					outputContent = strings.Join(displayLines, "\n")
 				}
-				lines := strings.Split(rawOutput, "\n")
-				const maxToolLines = 15
-				var displayLines []string
-				if len(lines) > maxToolLines && !msg.Collapsed {
-					displayLines = lines[:maxToolLines]
-					displayLines = append(displayLines,
-						fmt.Sprintf("[↓ %d more lines — Ctrl+R]", len(lines)-maxToolLines))
-				} else {
-					displayLines = lines
-				}
-				outputContent = strings.Join(displayLines, "\n")
 			}
 
 			boxWidth := m.width - msg.NestLevel*2 - 4
@@ -711,10 +1013,17 @@ func (m *Model) renderMessages() string {
 
 		case "internal":
 			style := m.getNestedStyle(msg.NestLevel, "internal")
-			if msg.Collapsed {
+			if len(msg.HookEntries) > 0 || msg.IsStructured {
+				boxWidth := m.width - msg.NestLevel*2 - 4
+				if boxWidth < 20 {
+					boxWidth = 20
+				}
+				content := prefix + RenderHookTree(msg.HookEntries, boxWidth, m.hookSpinFrame, m.styles.Hook)
+				output.WriteString(style.Render(content))
+			} else if msg.Collapsed {
 				hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 				n := len([]rune(msg.Content))
-				line := fmt.Sprintf("%s💭 ▶ reasoning · %d chars  %s", prefix, n, hintStyle.Render("ctrl+r"))
+				line := fmt.Sprintf("%s💭 ▶ reasoning · %d chars  %s", prefix, n, hintStyle.Render("ctrl+f"))
 				output.WriteString(style.Render(line))
 			} else {
 				content := prefix + msg.Content
@@ -724,10 +1033,17 @@ func (m *Model) renderMessages() string {
 
 		case "a2a":
 			style := m.getNestedStyle(msg.NestLevel, "a2a")
-			if msg.Collapsed {
+			if len(msg.HookEntries) > 0 || msg.IsStructured {
+				boxWidth := m.width - msg.NestLevel*2 - 4
+				if boxWidth < 20 {
+					boxWidth = 20
+				}
+				content := prefix + RenderHookTree(msg.HookEntries, boxWidth, m.hookSpinFrame, m.styles.Hook)
+				output.WriteString(style.Render(content))
+			} else if msg.Collapsed {
 				hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 				n := len([]rune(msg.Content))
-				line := fmt.Sprintf("%s🔄 ▶ agent·comm · %d chars  %s", prefix, n, hintStyle.Render("ctrl+r"))
+				line := fmt.Sprintf("%s🔄 ▶ agent·comm · %d chars  %s", prefix, n, hintStyle.Render("ctrl+f"))
 				output.WriteString(style.Render(line))
 			} else {
 				content := prefix + msg.Content
@@ -766,57 +1082,189 @@ func (m *Model) renderMessages() string {
 	return rendered
 }
 
-// extractPlanningIntent returns a short intent sentence (≤55 chars) from the
-// last meaningful line of the planning buffer. Returns "" if nothing suitable found.
-func extractPlanningIntent(text string) string {
-	lines := strings.Split(text, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" || strings.HasPrefix(line, "```") || strings.HasPrefix(line, "#") {
-			continue
+// toolActivityLabel returns a human-readable (icon, label) pair for a tool call,
+// extracting meaningful context from the params map where possible.
+func toolActivityLabel(name string, params map[string]interface{}) (icon, label string) {
+	str := func(key string) string {
+		if v, ok := params[key]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
 		}
-		// Strip leading markdown decorators
-		line = strings.TrimLeft(line, "*_->#|`~0123456789. ")
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if len([]rune(line)) <= 55 {
-			return line
-		}
-		// Truncate at word boundary
-		runes := []rune(line)
-		sub := string(runes[:52])
-		if idx := strings.LastIndex(sub, " "); idx > 10 {
-			return sub[:idx] + "..."
-		}
-		return sub + "..."
+		return ""
 	}
-	return ""
+	truncPath := func(p string, n int) string {
+		if len(p) <= n {
+			return p
+		}
+		return "…" + p[len(p)-n:]
+	}
+
+	switch name {
+	case "read_file":
+		if p := str("path"); p != "" {
+			return "📖", "Reading " + truncPath(p, 42)
+		}
+	case "write_file":
+		if p := str("path"); p != "" {
+			return "✏️ ", "Writing " + truncPath(p, 42)
+		}
+	case "delete_file":
+		if p := str("path"); p != "" {
+			return "🗑️ ", "Deleting " + truncPath(p, 40)
+		}
+	case "list_directory":
+		if p := str("path"); p != "" {
+			return "📂", "Listing " + truncPath(p, 42)
+		}
+	case "search_files":
+		if q := str("pattern"); q != "" {
+			return "🔍", "Searching for " + q
+		}
+	case "grep_content":
+		if q := str("pattern"); q != "" {
+			return "🔎", "Grepping for " + q
+		}
+	case "bash":
+		if cmd := str("command"); cmd != "" {
+			// Show first 48 chars of command
+			if len(cmd) > 48 {
+				cmd = cmd[:45] + "..."
+			}
+			return "⚡", cmd
+		}
+	case "git_status":
+		return "🌿", "git status"
+	case "git_diff":
+		return "📊", "git diff"
+	case "git_log":
+		return "📜", "git log"
+	case "git_commit":
+		if msg := str("message"); msg != "" {
+			if len(msg) > 45 {
+				msg = msg[:42] + "..."
+			}
+			return "📝", "git commit: " + msg
+		}
+		return "📝", "git commit"
+	case "git_push":
+		return "🚀", "git push"
+	case "git_pull":
+		return "⬇️ ", "git pull"
+	case "web_fetch":
+		if u := str("url"); u != "" {
+			return "🌐", "Fetching " + truncPath(u, 42)
+		}
+	case "http_request":
+		method := str("method")
+		if method == "" {
+			method = "GET"
+		}
+		if u := str("url"); u != "" {
+			return "🌐", method + " " + truncPath(u, 38)
+		}
+	case "download_file":
+		if u := str("url"); u != "" {
+			return "⬇️ ", "Downloading " + truncPath(u, 38)
+		}
+	case "browser_scrape", "browser_control":
+		if u := str("url"); u != "" {
+			return "🖥️ ", "Browser → " + truncPath(u, 38)
+		}
+	case "nmap_scan":
+		if t := str("target"); t != "" {
+			return "🔬", "nmap " + t
+		}
+	case "spawn_agent":
+		if t := str("type"); t != "" {
+			return "🤖", "Spawning " + t + " agent"
+		}
+		return "🤖", "Spawning agent"
+	case "collect_agent":
+		return "📥", "Collecting agent result"
+	case "create_tool":
+		if n := str("name"); n != "" {
+			return "🛠️ ", "Creating tool: " + n
+		}
+	}
+
+	// Default: humanize snake_case name
+	humanized := strings.ReplaceAll(name, "_", " ")
+	// Capitalize first letter
+	if len(humanized) > 0 {
+		humanized = strings.ToUpper(humanized[:1]) + humanized[1:]
+	}
+	return "🔧", humanized
 }
 
-// renderPlanningBox renders the planning box that hides internal AI monologue.
-// It shows "Planning..." when planningShowDots is true, or the latest extracted
-// intent sentence when planningShowDots is false. Cycles every 2 s via planningTick.
+// renderPlanningBox renders the live activity panel shown while the AI is generating.
+// Replaces the old "Planning..." box: shows actual actions and thinking progress.
 func (m *Model) renderPlanningBox() string {
 	boxWidth := m.viewport.Width - 4
 	if boxWidth < 20 {
 		boxWidth = 20
 	}
-	planStyle := lipgloss.NewStyle().
+
+	borderColor := "#6272a4" // default: thinking (indigo)
+	switch m.genPhase {
+	case phaseTool:
+		borderColor = "#f1fa8c" // yellow: tool executing
+	case phaseSynthesizing:
+		borderColor = "#50fa7b" // green: composing answer
+	}
+
+	panelStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#6272a4")).
+		BorderForeground(lipgloss.Color(borderColor)).
 		Padding(0, 1).
 		Width(boxWidth)
 
-	var label string
-	if m.planningShowDots || m.planningIntent == "" {
-		label = "💡 Planning..."
-	} else {
-		label = "💡 " + m.planningIntent
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272a4"))
+	okStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#50fa7b"))
+	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#ff5555"))
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f8f8f2"))
+	timeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272a4"))
+
+	var lines []string
+
+	// ── Activity log (completed tool calls) ───────────────────────────────
+	for _, e := range m.activityLog {
+		var marker string
+		if e.Success {
+			marker = okStyle.Render("✓")
+		} else {
+			marker = errStyle.Render("✗")
+		}
+		elapsed := ""
+		if e.Elapsed >= time.Millisecond {
+			elapsed = timeStyle.Render(fmt.Sprintf(" %.1fs", e.Elapsed.Seconds()))
+		}
+		line := marker + " " + dimStyle.Render(e.Icon) + " " + dimStyle.Render(e.Label) + elapsed
+		lines = append(lines, line)
 	}
 
-	return planStyle.Render(label)
+	// ── Current action ────────────────────────────────────────────────────
+	switch m.genPhase {
+	case phaseThinking:
+		toks := fmt.Sprintf("%d tokens", m.thinkingTokens)
+		lines = append(lines, "🤔 "+labelStyle.Render("Reasoning...")+" "+dimStyle.Render(toks))
+	case phaseTool:
+		if m.currentActivity != nil {
+			elapsed := time.Since(m.currentActivity.StartedAt)
+			lines = append(lines, "⚡ "+m.currentActivity.Icon+" "+labelStyle.Render(m.currentActivity.Label)+
+				" "+timeStyle.Render(fmt.Sprintf("%.1fs", elapsed.Seconds())))
+		} else {
+			lines = append(lines, "⚡ "+labelStyle.Render("Executing..."))
+		}
+	case phaseSynthesizing:
+		lines = append(lines, "✍️  "+labelStyle.Render("Composing response..."))
+	}
+
+	if len(lines) == 0 {
+		lines = append(lines, "💡 "+labelStyle.Render("Thinking..."))
+	}
+
+	return panelStyle.Render(strings.Join(lines, "\n"))
 }
 
 // ── Session export ────────────────────────────────────────────────────────────
@@ -946,6 +1394,113 @@ func (m *Model) exportPDF(md, path string) string {
 	return fmt.Sprintf("✅ Session exported to `%s` (%d messages).", path, len(m.messages))
 }
 
+// exportAsJSON serialises m.messages to JSON and returns the string.
+func (m *Model) exportAsJSON() string {
+	type jsonMsg struct {
+		Role     string `json:"role"`
+		Content  string `json:"content,omitempty"`
+		ToolName string `json:"tool,omitempty"`
+		Success  *bool  `json:"success,omitempty"`
+		Output   string `json:"output,omitempty"`
+		Elapsed  string `json:"elapsed,omitempty"`
+	}
+	var items []jsonMsg
+	for _, msg := range m.messages {
+		jm := jsonMsg{Role: msg.Role, Content: msg.Content}
+		if msg.ToolName != "" {
+			jm.ToolName = msg.ToolName
+		}
+		if msg.ToolResult != nil {
+			v := msg.ToolResult.Success
+			jm.Success = &v
+			if msg.ToolResult.Success {
+				jm.Output = msg.ToolResult.Output
+			} else {
+				jm.Output = msg.ToolResult.Error
+			}
+		}
+		if msg.Elapsed > 0 {
+			jm.Elapsed = msg.Elapsed.String()
+		}
+		items = append(items, jm)
+	}
+	type sessionJSON struct {
+		ExportedAt string    `json:"exported_at"`
+		Model      string    `json:"model"`
+		Messages   []jsonMsg `json:"messages"`
+	}
+	sess := sessionJSON{
+		ExportedAt: time.Now().Format(time.RFC3339),
+		Model:      m.currentModel,
+		Messages:   items,
+	}
+	data, err := json.MarshalIndent(sess, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// ── Search helpers ────────────────────────────────────────────────────────────
+
+// rebuildSearchMatches refreshes m.searchMatches based on m.searchQuery.
+func (m *Model) rebuildSearchMatches() {
+	m.searchMatches = m.searchMatches[:0]
+	if m.searchQuery == "" {
+		m.searchMatchIdx = 0
+		return
+	}
+	lq := strings.ToLower(m.searchQuery)
+	for i, msg := range m.messages {
+		haystack := strings.ToLower(msg.Content + msg.ToolName)
+		if msg.ToolResult != nil {
+			haystack += strings.ToLower(msg.ToolResult.Output + msg.ToolResult.Error)
+		}
+		if strings.Contains(haystack, lq) {
+			m.searchMatches = append(m.searchMatches, i)
+		}
+	}
+	if m.searchMatchIdx >= len(m.searchMatches) {
+		m.searchMatchIdx = 0
+	}
+}
+
+// applySearchHighlight post-processes a rendered content string: it marks every
+// line that contains the search query with a leading indicator and wraps the
+// matched text in an ANSI highlight. Returns the highlighted content and a slice
+// of line indices (0-based) where matches were found.
+func applySearchHighlight(content, query string) (string, []int) {
+	if query == "" {
+		return content, nil
+	}
+	lq := strings.ToLower(query)
+	hl := lipgloss.NewStyle().
+		Background(lipgloss.Color("220")).
+		Foreground(lipgloss.Color("0")).
+		Bold(true)
+	indicator := lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render("▶ ")
+
+	lines := strings.Split(content, "\n")
+	var matchLines []int
+	for i, line := range lines {
+		plain := strings.ToLower(stripANSICodes(line))
+		if !strings.Contains(plain, lq) {
+			continue
+		}
+		matchLines = append(matchLines, i)
+		// Best-effort: replace first occurrence of query (case-insensitive) in
+		// the raw line with a highlighted version. ANSI codes already present
+		// in the line may cause minor visual artifacts but the text is readable.
+		idx := strings.Index(strings.ToLower(line), lq)
+		if idx >= 0 {
+			lines[i] = indicator + line[:idx] + hl.Render(line[idx:idx+len(query)]) + line[idx+len(query):]
+		} else {
+			lines[i] = indicator + line
+		}
+	}
+	return strings.Join(lines, "\n"), matchLines
+}
+
 // writeExportFile writes content to path, creating parent directories as needed.
 func writeExportFile(path, content string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -1034,11 +1589,29 @@ func (m *Model) getNestedStyle(level int, msgType string) lipgloss.Style {
 // updateViewportContent updates the viewport with rendered messages
 func (m *Model) updateViewportContent() {
 	content := m.renderMessages()
+
+	// Apply search highlighting and scroll to current match when search is active.
+	if m.searchMode && m.searchQuery != "" {
+		var matchLines []int
+		content, matchLines = applySearchHighlight(content, m.searchQuery)
+		m.viewport.SetContent(content)
+		if len(matchLines) > 0 {
+			idx := m.searchMatchIdx
+			if idx < 0 || idx >= len(matchLines) {
+				idx = 0
+			}
+			targetLine := matchLines[idx]
+			if targetLine > m.viewport.Height/2 {
+				targetLine -= m.viewport.Height / 2
+			}
+			m.viewport.SetYOffset(targetLine)
+		}
+		return
+	}
+
 	m.viewport.SetContent(content)
 
 	// Auto-scroll to bottom unless the user has manually scrolled up.
-	// When content fits entirely in the viewport the GotoBottom call is a no-op
-	// so we always keep the newest messages anchored at the bottom.
 	if !m.userScrolledUp {
 		m.viewport.GotoBottom()
 	}
@@ -1142,10 +1715,16 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 	case strings.HasPrefix(result, "THEME:"):
 		theme := strings.TrimPrefix(result, "THEME:")
 		m.theme = theme
-		if theme == "light" {
+		switch theme {
+		case "light":
 			m.styles.UpdateForLightTheme()
-		} else {
+		case "arcane-blood", "arcane":
+			m.styles = NewArcaneBloodStyles()
+		default: // "dark", "dracula", etc.
 			m.styles.UpdateForDarkTheme()
+			if theme == "dracula" {
+				m.styles.UpdateForDraculaTheme()
+			}
 		}
 
 		// Update markdown renderer style
@@ -1231,7 +1810,7 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		if m.commands != nil {
 			toolReg = m.commands.GetToolRegistry()
 		}
-		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn, providerSetter)
+		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn, providerSetter, m.integrationGetter, m.integrationSetter)
 		return nil
 
 	case strings.HasPrefix(result, "SAVE_SESSION_OK:"):
@@ -1296,20 +1875,20 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 func (m *Model) handleBangCommand(input string) tea.Cmd {
 	cmdStr := strings.TrimPrefix(input, "!")
 	cmdStr = strings.TrimSpace(cmdStr)
-	
+
 	if cmdStr == "" {
 		return nil
 	}
-	
+
 	// Split command and args (simple split)
 	parts := strings.Fields(cmdStr)
 	if len(parts) == 0 {
 		return nil
 	}
-	
+
 	cmdName := parts[0]
 	args := parts[1:]
-	
+
 	id := fmt.Sprintf("cmd-%d", len(m.processManager.ListProcesses())+1)
 
 	// Start process
@@ -1495,32 +2074,139 @@ func stripEscapeSequences(s string) string {
 	return result.String()
 }
 
-// cleanMarkdownContent removes excessive indentation from markdown content
+// cleanMarkdownContent removes excessive indentation from markdown content and cleans up formatting
 func (m *Model) cleanMarkdownContent(content string) string {
+	// 1. Deduplicate LLM generation stutters (e.g. repeated sentences or chunks)
+	content = deduplicateStutter(content)
+
+	// 2. Un-wrap lines that were improperly broken by the terminal/output wrapping.
+	// We want to join lines that don't look like intentional line breaks.
 	lines := strings.Split(content, "\n")
 	var cleaned []string
 
-	for _, line := range lines {
-		// Don't modify code blocks
-		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+	// Generalized list fixes
+	// Matches things like "1Text", "1.Text", "1)Text", "-Text", "*Text" and normalizes them
+	listSquashRegex := regexp.MustCompile(`^(\s*)([0-9]+[.)]?|[-*+])([A-Za-z])`)
+
+	// Detects start of any list, header, blockquote, or codeblock
+	isNewBlockRegex := regexp.MustCompile(`^(\s*)([0-9]+[.)]\s+|[-*+]\s+|#+ |>|` + "```" + `)`)
+
+	inCodeBlock := false
+	var currentParagraph strings.Builder
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmed, "```") {
+			if currentParagraph.Len() > 0 {
+				cleaned = append(cleaned, currentParagraph.String())
+				currentParagraph.Reset()
+			}
+			cleaned = append(cleaned, line)
+			inCodeBlock = !inCodeBlock
+			continue
+		}
+
+		if inCodeBlock {
 			cleaned = append(cleaned, line)
 			continue
 		}
 
-		// For regular lines, normalize excessive leading spaces (but keep intentional indentation)
-		// If a line has more than 6 leading spaces, it's likely a rendering artifact
-		trimmed := strings.TrimLeft(line, " ")
-		leadingSpaces := len(line) - len(trimmed)
+		if listSquashRegex.MatchString(line) {
+			matches := listSquashRegex.FindStringSubmatch(line)
+			if len(matches) == 4 {
+				indent := matches[1]
+				bullet := matches[2]
+				char := matches[3]
 
-		if leadingSpaces > 6 {
-			// Reduce to max 2 spaces for normal indentation
-			cleaned = append(cleaned, "  "+trimmed)
+				if len(bullet) > 0 && unicode.IsDigit(rune(bullet[0])) && !strings.HasSuffix(bullet, ".") && !strings.HasSuffix(bullet, ")") {
+					bullet += "."
+				}
+
+				line = indent + bullet + " " + char + line[len(matches[0]):]
+				trimmed = strings.TrimSpace(line)
+			}
+		}
+
+		if trimmed == "" {
+			if currentParagraph.Len() > 0 {
+				cleaned = append(cleaned, currentParagraph.String())
+				currentParagraph.Reset()
+			}
+			cleaned = append(cleaned, "")
+			continue
+		}
+
+		isNewBlock := isNewBlockRegex.MatchString(line)
+
+		if isNewBlock && currentParagraph.Len() > 0 {
+			cleaned = append(cleaned, currentParagraph.String())
+			currentParagraph.Reset()
+		}
+
+		if currentParagraph.Len() > 0 {
+			lastChar := currentParagraph.String()[currentParagraph.Len()-1]
+			if lastChar != ' ' && lastChar != '-' {
+				currentParagraph.WriteByte(' ')
+			}
+			currentParagraph.WriteString(trimmed)
 		} else {
-			cleaned = append(cleaned, line)
+			leftTrimmed := strings.TrimLeft(line, " ")
+			leadingSpaces := len(line) - len(leftTrimmed)
+			if leadingSpaces > 6 {
+				currentParagraph.WriteString("  " + leftTrimmed)
+			} else {
+				currentParagraph.WriteString(line)
+			}
+		}
+
+		if i == len(lines)-1 && currentParagraph.Len() > 0 {
+			cleaned = append(cleaned, currentParagraph.String())
 		}
 	}
 
 	return strings.Join(cleaned, "\n")
+}
+
+// deduplicateStutter removes exact phrase repetitions generated by runaway LLMs.
+func deduplicateStutter(s string) string {
+	if len(s) < 10 {
+		return s
+	}
+
+	// We look for patterns of length L repeating immediately
+	// Try lengths from len(s)/2 down to 10
+	for l := len(s) / 2; l >= 10; l-- {
+		for i := 0; i <= len(s)-2*l; i++ {
+			chunk1 := s[i : i+l]
+			chunk2 := s[i+l : i+2*l]
+
+			if chunk1 == chunk2 {
+				// Found a stutter. Slice it out and recurse to catch multiple stutters.
+				return deduplicateStutter(s[:i+l] + s[i+2*l:])
+			}
+		}
+	}
+
+	// Also check for partial phrase stutter like "Hello! How can I help you today?Hello!"
+	// Where the end of a string repeats the beginning.
+	for overlap := 5; overlap < len(s)/2; overlap++ {
+		prefix := s[:overlap]
+		if strings.Contains(s[overlap:], prefix) {
+			idx := strings.Index(s[overlap:], prefix) + overlap
+			// If the prefix is immediately following some punctuation, or at the end
+			// It might be a restart stutter. Let's be careful.
+			if idx > 0 && (s[idx-1] == ' ' || s[idx-1] == '\n' || s[idx-1] == '?' || s[idx-1] == '!') {
+				// We found a repetition of the start of the message later in the message.
+				// If it's a known greeting stutter, strip the first part.
+				if strings.HasPrefix(strings.ToLower(prefix), "hello") {
+					return deduplicateStutter(s[idx:])
+				}
+			}
+		}
+	}
+
+	return s
 }
 
 // trimRenderedIndentation removes excessive indentation from rendered markdown
@@ -1559,7 +2245,7 @@ func stripPartialSequences(s string) string {
 		// Check for patterns like "11;rgb:" or similar escape sequence patterns
 		if i < len(s)-6 {
 			// Check for "N;rgb:" pattern (where N is a digit or two)
-			if (s[i] >= '0' && s[i] <= '9') {
+			if s[i] >= '0' && s[i] <= '9' {
 				// Look ahead for ;rgb: pattern
 				lookahead := i
 				digitCount := 0
@@ -1611,6 +2297,14 @@ func (m *Model) submitPrompt() tea.Cmd {
 	// Clear textarea
 	m.textarea.Reset()
 
+	// Append to input history (keep last 200 entries).
+	m.inputHistory = append(m.inputHistory, input)
+	m.inputHistoryLower = append(m.inputHistoryLower, strings.ToLower(input))
+	if len(m.inputHistory) > 200 {
+		m.inputHistory = m.inputHistory[len(m.inputHistory)-200:]
+		m.inputHistoryLower = m.inputHistoryLower[len(m.inputHistoryLower)-200:]
+	}
+
 	// Check if it's a command
 	if strings.HasPrefix(input, "/") {
 		// Handle HITL commands before routing to the general handler.
@@ -1626,7 +2320,7 @@ func (m *Model) submitPrompt() tea.Cmd {
 	}
 
 	// Classify intent for ARC badge
-	if cat := arc.ClassifyIntent(input); cat != arc.CategoryAuto {
+	if cat := adaptive.ClassifyIntent(input); cat != adaptive.CategoryAuto {
 		m.lastIntentCategory = string(cat)
 	} else {
 		m.lastIntentCategory = ""
@@ -1650,7 +2344,6 @@ func (m *Model) submitPrompt() tea.Cmd {
 	m.currentPhrase = GetRandomPhrase(m.isConsultant)
 	m.currentResponse.Reset()
 
-	// Call orchestrator
 	return tea.Batch(
 		m.spinner.Tick,
 		phraseTick(),
@@ -1672,6 +2365,11 @@ func (m *Model) callOrchestrator(prompt string) tea.Cmd {
 		// Send start generation message
 		if prog := m.getProgram(); prog != nil {
 			prog.Send(StartGenerationMsg{IsConsultant: isConsult, Prompt: prompt})
+		}
+
+		// Reset the extended-thinking buffer for this round-trip.
+		if prog := m.getProgram(); prog != nil {
+			prog.Send(thinkingResetMsg{})
 		}
 
 		// planBuf tracks the current segment in the goroutine; reset on each tool call.
@@ -1750,8 +2448,22 @@ func (m *Model) callOrchestrator(prompt string) tea.Cmd {
 			return engine.InterventionStop // Default if no UI
 		}
 
+		// Wire extended-thinking callback so the TUI can show a thinking panel.
+		// The closure captures prog to avoid races; the \x03 sentinel signals done.
+		if m.orchestrator != nil {
+			m.orchestrator.ThinkingCallback = func(token string) {
+				if prog := m.getProgram(); prog != nil {
+					if token == "\x03" {
+						prog.Send(ThinkingDoneMsg{})
+					} else {
+						prog.Send(ThinkingTokenMsg{Content: token})
+					}
+				}
+			}
+		}
+
 		// Call orchestrator with streaming support
-		err := m.orchestrator.ExecuteTaskWithStreaming(ctx, prompt, streamCallback, toolCallback, toolStartCallback, interventionCallback)
+		err := m.orchestrator.ExecuteTaskWithStreaming(ctx, prompt, streamCallback, toolCallback, toolStartCallback, interventionCallback, nil)
 		if err != nil {
 			return ErrorMsg{Err: err}
 		}
@@ -1772,9 +2484,9 @@ func (m *Model) callOrchestrator(prompt string) tea.Cmd {
 func (m *Model) RequestPermission(toolName, description string, params map[string]interface{}) tools.PermissionLevel {
 	// We are running on a background goroutine (the tool execution).
 	// We MUST communicate with the main TUI loop via messages to update UI state safely.
-	
+
 	respChan := make(chan tools.PermissionLevel, 1)
-	
+
 	if m.program != nil {
 		m.program.Send(PermissionRequestMsg{
 			ToolName:     toolName,
@@ -1986,7 +2698,7 @@ func (m *Model) SetModelInfo(reg *registry.ModelRegistry, available []commands.M
 	m.providerRegistry = reg
 	m.availableModels = available
 	m.commands.SetModelInfo(available, primary, consultant)
-	
+
 	// Populate list
 	m.updateModelListItems()
 }
@@ -1999,7 +2711,7 @@ func (m *Model) updateToolsTable() {
 
 	toolsList := m.orchestrator.Registry.List()
 	rows := make([]table.Row, len(toolsList))
-	
+
 	for i, t := range toolsList {
 		rows[i] = table.Row{
 			t.Name(),
@@ -2007,7 +2719,7 @@ func (m *Model) updateToolsTable() {
 			fmt.Sprintf("%v", t.Category()),
 		}
 	}
-	
+
 	m.toolsTable.table.SetRows(rows)
 }
 

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/velariumai/gorkbot/pkg/ai"
+	"github.com/velariumai/gorkbot/pkg/embeddings"
 	"github.com/velariumai/gorkbot/pkg/registry"
 )
 
@@ -18,13 +19,14 @@ type Manager struct {
 	bases  map[string]ai.AIProvider
 	mu     sync.RWMutex
 	logger *slog.Logger
+	cache  *SemanticCache
 
 	verboseThoughts bool // forwarded to Gemini
 
 	// Model confidence tracking via EWMA (α=0.1).
 	// Key: modelID, value: failure rate 0.0 (perfect) → 1.0 (always fails).
-	failureRates   map[string]float64
-	failureMu      sync.RWMutex
+	failureRates map[string]float64
+	failureMu    sync.RWMutex
 
 	// Session-level disable: cleared on restart, not persisted.
 	sessionDisabled map[string]bool
@@ -37,10 +39,20 @@ func NewManager(keys *KeyStore, logger *slog.Logger) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	
+	// Initialize semantic cache backed by Ollama Nomic embedder.
+	// configDir is derived from the KeyStore so no extra parameter is needed.
+	embedder := embeddings.NewOllamaEmbedder("", "")
+	cache, err := NewSemanticCache(embedder, keys.Dir())
+	if err != nil {
+		logger.Warn("providers.Manager: failed to init semantic cache", "error", err)
+	}
+
 	m := &Manager{
 		keys:            keys,
 		bases:           make(map[string]ai.AIProvider),
 		logger:          logger,
+		cache:           cache,
 		failureRates:    make(map[string]float64),
 		sessionDisabled: make(map[string]bool),
 	}
@@ -70,7 +82,7 @@ func (m *Manager) InitProvider(provider string) {
 	defer m.mu.Unlock()
 	base := m.buildBase(provider, key)
 	if base != nil {
-		m.bases[provider] = base
+		m.bases[provider] = NewWrappedProvider(base, m.cache)
 	}
 }
 
@@ -82,7 +94,7 @@ func (m *Manager) initProvider(provider string) {
 	}
 	base := m.buildBase(provider, key)
 	if base != nil {
-		m.bases[provider] = base
+		m.bases[provider] = NewWrappedProvider(base, m.cache)
 	}
 }
 
@@ -101,6 +113,8 @@ func (m *Manager) buildBase(provider, key string) ai.AIProvider {
 		return ai.NewMiniMaxProvider(key, "")
 	case ProviderOpenRouter:
 		return ai.NewOpenRouterProvider(key, "")
+	case ProviderMoonshot:
+		return ai.NewMoonshotProvider(key, "")
 	default:
 		m.logger.Warn("providers.Manager: unknown provider", "provider", provider)
 		return nil
@@ -283,8 +297,13 @@ func ProviderName(id string) string {
 		return "MiniMax"
 	case ProviderOpenRouter:
 		return "OpenRouter"
+	case ProviderMoonshot:
+		return "Moonshot"
 	default:
-		return id
+		if id == "" {
+			return id
+		}
+		return strings.ToUpper(id[:1]) + id[1:]
 	}
 }
 
@@ -300,9 +319,11 @@ func ProviderWebsite(id string) string {
 	case ProviderOpenAI:
 		return "platform.openai.com/api-keys"
 	case ProviderMiniMax:
-		return "www.minimax.io/user/apisecret"
+		return "platform.minimaxi.com/user-center/basic-information"
 	case ProviderOpenRouter:
-		return "openrouter.ai/keys"
+		return "openrouter.ai/settings/keys"
+	case ProviderMoonshot:
+		return "platform.moonshot.cn/console/api-keys"
 	default:
 		return ""
 	}

@@ -283,7 +283,7 @@ func (t *NgrokTunnelTool) Execute(ctx context.Context, args map[string]interface
 	// BETTER: Use `start_managed_process`?
 	// For this tool, let's just try to start it and check status via API, but sticking to CLI:
 	// We'll return instructions or try to spawn.
-	
+
 	// Actually, `ngrok http 8080 --log=stdout > ngrok.log &`
 	cmd := exec.CommandContext(ctx, "bash", "-c", fmt.Sprintf("nohup ngrok %s %s > ngrok.log 2>&1 & echo $!", proto, port))
 	out, err := cmd.CombinedOutput()

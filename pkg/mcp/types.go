@@ -21,13 +21,14 @@ const (
 
 // ServerConfig describes one MCP server in the config file.
 type ServerConfig struct {
-	Name      string            `json:"name"`
-	Transport Transport         `json:"transport"`
-	Command   string            `json:"command,omitempty"` // for stdio: executable path
-	Args      []string          `json:"args,omitempty"`    // for stdio: arguments
-	URL       string            `json:"url,omitempty"`     // for SSE: server URL
-	Env       map[string]string `json:"env,omitempty"`     // extra environment variables
-	Disabled  bool              `json:"disabled,omitempty"`
+	Name        string            `json:"name"`
+	Transport   Transport         `json:"transport"`
+	Command     string            `json:"command,omitempty"` // for stdio: executable path
+	Args        []string          `json:"args,omitempty"`    // for stdio: arguments
+	URL         string            `json:"url,omitempty"`     // for SSE: server URL
+	Env         map[string]string `json:"env,omitempty"`     // extra environment variables
+	Disabled    bool              `json:"disabled,omitempty"`
+	Description string            `json:"description,omitempty"` // human-readable description
 }
 
 // Config is the top-level config file structure (~/.config/gorkbot/mcp.json).
@@ -93,8 +94,8 @@ type InitializeResult struct {
 
 // ServerCaps describes what the server supports.
 type ServerCaps struct {
-	Tools    *ToolsCap    `json:"tools,omitempty"`
-	Prompts  *PromptsCap  `json:"prompts,omitempty"`
+	Tools     *ToolsCap     `json:"tools,omitempty"`
+	Prompts   *PromptsCap   `json:"prompts,omitempty"`
 	Resources *ResourcesCap `json:"resources,omitempty"`
 }
 

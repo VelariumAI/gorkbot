@@ -105,7 +105,7 @@ func (t *SpawnAgentTool) Execute(ctx context.Context, params map[string]interfac
 			aiProvider = p
 		}
 	}
-	
+
 	if aiProvider == nil {
 		if prim := t.registry.GetAIProvider(); prim != nil {
 			if p, ok := prim.(ai.AIProvider); ok {
@@ -236,7 +236,7 @@ func (t *CheckAgentStatusTool) Execute(ctx context.Context, params map[string]in
 	output := fmt.Sprintf("Agent Status: %s\n", agent.Status)
 	output += fmt.Sprintf("Type: %s\n", agent.Type)
 	output += fmt.Sprintf("Started: %s\n", agent.Started.Format(time.RFC3339))
-	
+
 	if !agent.Completed.IsZero() {
 		output += fmt.Sprintf("Completed: %s\n", agent.Completed.Format(time.RFC3339))
 		duration := agent.Completed.Sub(agent.Started)
@@ -260,6 +260,98 @@ func (t *CheckAgentStatusTool) Execute(ctx context.Context, params map[string]in
 			"result":   agent.Result,
 		},
 	}, nil
+}
+
+// CollectAgentTool blocks until a spawned agent finishes (or timeout) and returns its result.
+type CollectAgentTool struct {
+	tools.BaseTool
+	agentManager *Manager
+}
+
+func NewCollectAgentTool(manager *Manager) *CollectAgentTool {
+	return &CollectAgentTool{
+		BaseTool: tools.NewBaseTool(
+			"collect_agent",
+			"Block until a spawned agent completes (or timeout expires) and return its full result. "+
+				"Use this after spawn_agent when you need the result before continuing.",
+			tools.CategoryMeta,
+			false,
+			tools.PermissionAlways,
+		),
+		agentManager: manager,
+	}
+}
+
+func (t *CollectAgentTool) Parameters() json.RawMessage {
+	schema := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"agent_id": map[string]interface{}{
+				"type":        "string",
+				"description": "The ID returned by spawn_agent",
+			},
+			"timeout_seconds": map[string]interface{}{
+				"type":        "integer",
+				"description": "Max seconds to wait for completion (default: 300)",
+			},
+		},
+		"required": []string{"agent_id"},
+	}
+	data, _ := json.Marshal(schema)
+	return data
+}
+
+func (t *CollectAgentTool) Execute(ctx context.Context, params map[string]interface{}) (*tools.ToolResult, error) {
+	agentID, ok := params["agent_id"].(string)
+	if !ok || agentID == "" {
+		return &tools.ToolResult{Success: false, Error: "agent_id is required"}, nil
+	}
+
+	timeoutSec := 300
+	if v, ok := params["timeout_seconds"].(float64); ok && v > 0 {
+		timeoutSec = int(v)
+	}
+
+	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	for {
+		agent := t.agentManager.GetAgent(agentID)
+		if agent == nil {
+			return &tools.ToolResult{Success: false, Error: fmt.Sprintf("agent %q not found", agentID)}, nil
+		}
+
+		switch agent.Status {
+		case "completed":
+			output := fmt.Sprintf("Agent %s completed in %s.\n\nResult:\n%s",
+				agentID,
+				agent.Completed.Sub(agent.Started).Round(time.Millisecond),
+				agent.Result,
+			)
+			return &tools.ToolResult{
+				Success: true,
+				Output:  output,
+				Data:    map[string]interface{}{"agent_id": agent.ID, "status": agent.Status, "result": agent.Result},
+			}, nil
+		case "failed":
+			return &tools.ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("agent %s failed: %v", agentID, agent.Error),
+			}, nil
+		}
+
+		if time.Now().After(deadline) {
+			return &tools.ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("timed out waiting for agent %s after %ds (still %s)", agentID, timeoutSec, agent.Status),
+			}, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return &tools.ToolResult{Success: false, Error: "context cancelled while waiting for agent"}, nil
+		case <-time.After(500 * time.Millisecond):
+			// poll
+		}
+	}
 }
 
 // ListAgentsTool lists available agent types
@@ -303,14 +395,16 @@ func (t *ListAgentsTool) Execute(ctx context.Context, params map[string]interfac
 		format = f
 	}
 
-	agents := t.agentManager.GetRegistry().List()
+	agentTypes := t.agentManager.GetRegistry().List()
+	running := t.agentManager.GetRunningAgents()
+	completed := t.agentManager.GetCompletedAgents()
 
 	var output string
 
 	switch format {
 	case "json":
-		agentData := make([]map[string]string, 0, len(agents))
-		for _, agent := range agents {
+		agentData := make([]map[string]string, 0, len(agentTypes))
+		for _, agent := range agentTypes {
 			agentData = append(agentData, map[string]string{
 				"type":        string(agent.Type()),
 				"name":        agent.Name(),
@@ -321,9 +415,28 @@ func (t *ListAgentsTool) Execute(ctx context.Context, params map[string]interfac
 		output = string(data)
 
 	case "table":
-		output = "Available Specialized Agents\n"
-		output += "============================\n\n"
-		for _, agent := range agents {
+		// Section 1: running/completed instances
+		allInstances := append(running, completed...)
+		if len(allInstances) > 0 {
+			output += "Active Agent Instances\n"
+			output += "======================\n"
+			for _, ag := range allInstances {
+				elapsed := time.Since(ag.Started).Round(time.Second)
+				if !ag.Completed.IsZero() {
+					elapsed = ag.Completed.Sub(ag.Started).Round(time.Millisecond)
+				}
+				output += fmt.Sprintf("ID: %s  Type: %s  Status: %s  Elapsed: %s\n",
+					ag.ID, ag.Type, ag.Status, elapsed)
+			}
+			output += "\n"
+		} else {
+			output += "No background agents in this session.\n\n"
+		}
+
+		// Section 2: available types
+		output += "Available Agent Types\n"
+		output += "=====================\n\n"
+		for _, agent := range agentTypes {
 			output += fmt.Sprintf("Type: %s\n", agent.Type())
 			output += fmt.Sprintf("Name: %s\n", agent.Name())
 			output += fmt.Sprintf("Description: %s\n\n", agent.Description())
@@ -333,7 +446,11 @@ func (t *ListAgentsTool) Execute(ctx context.Context, params map[string]interfac
 	return &tools.ToolResult{
 		Success: true,
 		Output:  output,
-		Data:    map[string]interface{}{"count": len(agents)},
+		Data: map[string]interface{}{
+			"types":     len(agentTypes),
+			"running":   len(running),
+			"completed": len(completed),
+		},
 	}, nil
 }
 

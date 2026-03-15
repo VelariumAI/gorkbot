@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/velariumai/gorkbot/pkg/commands"
+	pkgconfig "github.com/velariumai/gorkbot/pkg/config"
 	"github.com/velariumai/gorkbot/pkg/tools"
 )
 
@@ -15,13 +16,14 @@ import (
 type settingsTab int
 
 const (
-	tabModels    settingsTab = iota // 0 — Model routing summary
-	tabVerbosity                    // 1 — Debug / logging toggles
-	tabTools                        // 2 — Tool group enable/disable
-	tabProviders                    // 3 — API provider enable/disable
+	tabModels       settingsTab = iota // 0 — Model routing summary
+	tabVerbosity                       // 1 — Debug / logging toggles
+	tabTools                           // 2 — Tool group enable/disable
+	tabProviders                       // 3 — API provider enable/disable
+	tabIntegrations                    // 4 — Integration env vars (budget, webhook, etc.)
 )
 
-var tabLabels = []string{"Model Routing", "Verbosity", "Tool Groups", "API Providers"}
+var tabLabels = []string{"Model Routing", "Verbosity", "Tool Groups", "API Providers", "Integrations"}
 
 // SettingsOverlay is a four-tab modal for configuring runtime preferences.
 // It implements the Overlay interface and persists changes immediately via
@@ -35,8 +37,8 @@ type SettingsOverlay struct {
 	activeTab settingsTab
 	cursor    int
 
-	orch        *commands.OrchestratorAdapter
-	toolReg     *tools.Registry
+	orch           *commands.OrchestratorAdapter
+	toolReg        *tools.Registry
 	appStateSetter func(cats []string) error // writes disabled categories to disk
 
 	// Verbosity section toggles (read from orch on construction)
@@ -46,12 +48,21 @@ type SettingsOverlay struct {
 	toolGroups []toolGroupRow
 
 	// Provider rows: one row per known provider
-	providerRows    []providerRow
-	providerSetter  func(ids []string) error // persists disabled provider list
+	providerRows   []providerRow
+	providerSetter func(ids []string) error // persists disabled provider list
 
 	// Status line shown at the bottom of the modal after an action
 	statusMsg   string
 	statusIsErr bool
+
+	// Integration settings (tabIntegrations)
+	integrationGetter func() map[string]string      // returns current env var values
+	integrationSetter func(key, value string) error // persists + os.Setenv
+
+	// Inline text-editing state for tabIntegrations
+	editingField bool
+	editBuffer   string
+	editOriginal string
 }
 
 type toolGroupRow struct {
@@ -65,8 +76,8 @@ type providerRow struct {
 	enabled bool
 }
 
-// NewSettingsOverlay constructs a SettingsOverlay. Pass nil for appStateSetter
-// or providerSetter to skip disk persistence of those sections.
+// NewSettingsOverlay constructs a SettingsOverlay. Pass nil for any callback
+// to skip persistence of that section.
 func NewSettingsOverlay(
 	w, h int,
 	orch *commands.OrchestratorAdapter,
@@ -74,15 +85,19 @@ func NewSettingsOverlay(
 	appStateSetter func(cats []string) error,
 	initialDebug bool,
 	providerSetter func(ids []string) error,
+	integrationGetter func() map[string]string,
+	integrationSetter func(key, value string) error,
 ) *SettingsOverlay {
 	s := &SettingsOverlay{
-		width:          w,
-		height:         h,
-		orch:           orch,
-		toolReg:        toolReg,
-		appStateSetter: appStateSetter,
-		debugMode:      initialDebug,
-		providerSetter: providerSetter,
+		width:             w,
+		height:            h,
+		orch:              orch,
+		toolReg:           toolReg,
+		appStateSetter:    appStateSetter,
+		debugMode:         initialDebug,
+		providerSetter:    providerSetter,
+		integrationGetter: integrationGetter,
+		integrationSetter: integrationSetter,
 	}
 	s.refreshToolGroups()
 	s.refreshProviderRows()
@@ -145,6 +160,34 @@ func (s *SettingsOverlay) Update(msg tea.Msg) (Overlay, tea.Cmd) {
 		return s, nil
 	}
 
+	// ── In-field text editing mode ────────────────────────────────────────────
+	if s.editingField {
+		switch keyMsg.String() {
+		case "esc", "ctrl+c":
+			// Cancel: restore original value.
+			s.editBuffer = s.editOriginal
+			s.editingField = false
+			s.statusMsg = "Edit cancelled"
+		case "enter":
+			// Save value.
+			s.saveIntegrationField()
+			s.editingField = false
+		case "backspace", "ctrl+h":
+			if len(s.editBuffer) > 0 {
+				runes := []rune(s.editBuffer)
+				s.editBuffer = string(runes[:len(runes)-1])
+			}
+		case "ctrl+u":
+			s.editBuffer = ""
+		default:
+			// Append printable characters.
+			if len(keyMsg.Runes) > 0 && keyMsg.Runes[0] >= 32 {
+				s.editBuffer += string(keyMsg.Runes)
+			}
+		}
+		return s, nil
+	}
+
 	s.statusMsg = "" // clear status on any key
 
 	switch keyMsg.String() {
@@ -168,11 +211,52 @@ func (s *SettingsOverlay) Update(msg tea.Msg) (Overlay, tea.Cmd) {
 			s.cursor++
 		}
 
-	case "enter", " ":
-		s.handleAction()
+	case "enter":
+		if s.activeTab == tabIntegrations {
+			s.startEditingField()
+		} else {
+			s.handleAction()
+		}
+	case " ":
+		if s.activeTab != tabIntegrations {
+			s.handleAction()
+		}
 	}
 
 	return s, nil
+}
+
+// startEditingField enters inline-edit mode for the currently selected integration row.
+func (s *SettingsOverlay) startEditingField() {
+	if s.cursor >= len(pkgconfig.IntegrationKeys) {
+		return
+	}
+	key := pkgconfig.IntegrationKeys[s.cursor].Key
+	current := ""
+	if s.integrationGetter != nil {
+		current = s.integrationGetter()[key]
+	}
+	s.editBuffer = current
+	s.editOriginal = current
+	s.editingField = true
+	s.statusMsg = ""
+}
+
+// saveIntegrationField persists the editBuffer for the currently selected row.
+func (s *SettingsOverlay) saveIntegrationField() {
+	if s.cursor >= len(pkgconfig.IntegrationKeys) {
+		return
+	}
+	key := pkgconfig.IntegrationKeys[s.cursor].Key
+	if s.integrationSetter != nil {
+		if err := s.integrationSetter(key, s.editBuffer); err != nil {
+			s.statusMsg = fmt.Sprintf("Save failed: %v", err)
+			s.statusIsErr = true
+			return
+		}
+	}
+	s.statusMsg = fmt.Sprintf("%s updated", pkgconfig.IntegrationKeys[s.cursor].Label)
+	s.statusIsErr = false
 }
 
 func (s *SettingsOverlay) maxCursor() int {
@@ -189,6 +273,8 @@ func (s *SettingsOverlay) maxCursor() int {
 			return 0
 		}
 		return len(s.providerRows) - 1
+	case tabIntegrations:
+		return len(pkgconfig.IntegrationKeys) - 1
 	default:
 		return 0
 	}
@@ -313,6 +399,8 @@ func (s *SettingsOverlay) View() string {
 		lines = append(lines, s.renderToolsSection(cursorStyle, checkStyle, uncheckStyle, dimStyle)...)
 	case tabProviders:
 		lines = append(lines, s.renderProvidersSection(cursorStyle, checkStyle, uncheckStyle, dimStyle)...)
+	case tabIntegrations:
+		lines = append(lines, s.renderIntegrationsSection(cursorStyle, dimStyle, boxW)...)
 	}
 
 	// Status
@@ -325,7 +413,15 @@ func (s *SettingsOverlay) View() string {
 
 	// Help line
 	lines = append(lines, strings.Repeat("─", boxW-4))
-	lines = append(lines, helpStyle.Render("  Tab=switch section  ↑↓=navigate  Enter/Space=toggle  Esc=close"))
+	var helpText string
+	if s.editingField {
+		helpText = "  Type value  Enter=save  Esc=cancel  Ctrl+U=clear"
+	} else if s.activeTab == tabIntegrations {
+		helpText = "  Tab=switch section  ↑↓=navigate  Enter=edit field  Esc=close"
+	} else {
+		helpText = "  Tab=switch section  ↑↓=navigate  Enter/Space=toggle  Esc=close"
+	}
+	lines = append(lines, helpStyle.Render(helpText))
 
 	content := strings.Join(lines, "\n")
 
@@ -428,4 +524,112 @@ func (s *SettingsOverlay) renderProvidersSection(cur, check, uncheck, dim lipglo
 	lines = append(lines, "")
 	lines = append(lines, dim.Render("  Disabled providers are skipped during failover cascade."))
 	return lines
+}
+
+func (s *SettingsOverlay) renderIntegrationsSection(cur, dim lipgloss.Style, boxW int) []string {
+	var lines []string
+
+	// Gather current values.
+	vals := map[string]string{}
+	if s.integrationGetter != nil {
+		vals = s.integrationGetter()
+	}
+
+	editStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Bold(true) // amber for edit mode
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	sensitiveStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+
+	// Group header names (derived from key prefixes).
+	lastGroup := ""
+	groupOf := func(key string) string {
+		switch {
+		case strings.HasPrefix(key, "BUDGET_"):
+			return "Budget Limits"
+		case strings.HasPrefix(key, "WEBHOOK_"):
+			return "Webhook Server"
+		case strings.HasPrefix(key, "SCHEDULER_"):
+			return "Scheduler Notifications"
+		default:
+			return "Other"
+		}
+	}
+
+	for i, entry := range pkgconfig.IntegrationKeys {
+		// Emit group header when group changes.
+		if g := groupOf(entry.Key); g != lastGroup {
+			lastGroup = g
+			if i > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, lipgloss.NewStyle().
+				Foreground(lipgloss.Color("99")).Bold(true).
+				Render("  ── "+g+" ──"))
+		}
+
+		isCurrent := i == s.cursor
+		arrow := "  "
+		if isCurrent && !s.editingField {
+			arrow = cur.Render("> ")
+		} else if isCurrent && s.editingField {
+			arrow = editStyle.Render("> ")
+		}
+
+		// Build value display.
+		var displayVal string
+		if isCurrent && s.editingField {
+			// Show edit buffer with blinking cursor character.
+			buf := s.editBuffer
+			if entry.Sensitive {
+				buf = strings.Repeat("*", len([]rune(s.editBuffer)))
+			}
+			displayVal = editStyle.Render("[" + buf + "█]")
+		} else {
+			v := vals[entry.Key]
+			if v == "" {
+				displayVal = dim.Render("(not set)")
+			} else if entry.Sensitive {
+				displayVal = sensitiveStyle.Render(strings.Repeat("*", minInt(len(v), 12)))
+			} else {
+				maxLen := boxW - 28
+				if maxLen < 8 {
+					maxLen = 8
+				}
+				if len(v) > maxLen {
+					v = v[:maxLen-1] + "…"
+				}
+				displayVal = valueStyle.Render(v)
+			}
+		}
+
+		label := entry.Label
+		if len(label) > 22 {
+			label = label[:21] + "…"
+		}
+		line := fmt.Sprintf("%s%-23s %s", arrow, label, displayVal)
+		lines = append(lines, line)
+
+		// Show description below selected (non-editing) row.
+		if isCurrent && !s.editingField {
+			lines = append(lines, descStyle.Render("     "+entry.Description))
+		}
+	}
+
+	if s.integrationGetter == nil {
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  (settings not configured — restart required)"))
+	} else {
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  Budget/notification changes take effect immediately."))
+		lines = append(lines, dim.Render("  Webhook port changes require restart."))
+	}
+	return lines
+}
+
+// min is a helper for int minimum (Go 1.21 has built-in but keeping compat).
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

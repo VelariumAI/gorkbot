@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/velariumai/gorkbot/internal/mel"
+	"github.com/velariumai/gorkbot/pkg/adaptive"
 	"github.com/velariumai/gorkbot/pkg/sense"
 )
 
@@ -18,12 +18,12 @@ import (
 type UnifiedMemory struct {
 	AgeMem  *sense.AgeMem
 	Engrams *sense.EngramStore
-	MEL     *mel.VectorStore
+	MEL     *adaptive.VectorStore
 }
 
 // NewUnifiedMemory creates a UnifiedMemory backed by the given subsystems.
 // Any component may be nil — Query degrades gracefully.
-func NewUnifiedMemory(ageMem *sense.AgeMem, engrams *sense.EngramStore, store *mel.VectorStore) *UnifiedMemory {
+func NewUnifiedMemory(ageMem *sense.AgeMem, engrams *sense.EngramStore, store *adaptive.VectorStore) *UnifiedMemory {
 	return &UnifiedMemory{
 		AgeMem:  ageMem,
 		Engrams: engrams,

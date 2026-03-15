@@ -1,0 +1,13 @@
+{
+  "name": "curl_fetch",
+  "description": "Dependency-free web fetcher using native bash curl and sed for HTML-to-text parsing. Bypasses broken/missing web tool chains.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

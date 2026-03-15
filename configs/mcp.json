@@ -1,0 +1,87 @@
+{
+  "_comment": "Gorkbot MCP Server Configuration — run 'gorkbot setup' to auto-install, or copy to ~/.config/gorkbot/mcp.json",
+  "_docs": "Tools appear as mcp_<name>_<toolname>. Run /mcp reload after editing. Replace <GORKBOT_PROJECT_DIR> with absolute path.",
+  "servers": [
+    {
+      "name": "sequential-thinking",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "description": "Structured multi-step reasoning chains. Use for complex plans, debugging, research synthesis.",
+      "disabled": false
+    },
+    {
+      "name": "filesystem",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "<GORKBOT_PROJECT_DIR>", "~/.config/gorkbot"],
+      "description": "File I/O within allowed directories. Replace <GORKBOT_PROJECT_DIR> with your project path.",
+      "disabled": false
+    },
+    {
+      "name": "memory",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "description": "Persistent cross-session key-value entity graph for facts that survive restarts.",
+      "disabled": false
+    },
+    {
+      "name": "time",
+      "command": "python3",
+      "args": ["-m", "mcp_server_time"],
+      "description": "Current time and timezone lookups. pip install mcp-server-time",
+      "disabled": false
+    },
+    {
+      "name": "fetch",
+      "command": "python3",
+      "args": ["-m", "mcp_server_fetch"],
+      "description": "Raw HTTP fetch for any URL. pip install mcp-server-fetch",
+      "disabled": false
+    },
+    {
+      "name": "github",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}" },
+      "description": "GitHub API — issues, PRs, repos, code search. Set GITHUB_PERSONAL_ACCESS_TOKEN in .env, then set disabled:false.",
+      "disabled": true
+    },
+    {
+      "name": "brave-search",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": { "BRAVE_API_KEY": "${BRAVE_API_KEY}" },
+      "description": "Brave web search API. Set BRAVE_API_KEY in .env, then set disabled:false.",
+      "disabled": true
+    },
+    {
+      "name": "puppeteer",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+      "description": "Headless browser with JS rendering. Use when websites require JavaScript.",
+      "disabled": false
+    },
+    {
+      "name": "notebooklm",
+      "command": "python3",
+      "args": ["<GORKBOT_PROJECT_DIR>/server/notebooklm_mcp.py"],
+      "shaper_path": "<GORKBOT_PROJECT_DIR>/plugins/notebooklm_shaper.py",
+      "auth_provider": "google",
+      "description": "Google NotebookLM notebooks, sources, AI chat. Requires GEMINI_API_KEY. Google Drive sources need /auth notebooklm login.",
+      "disabled": false
+    },
+    {
+      "name": "gorkbot-introspect",
+      "command": "python3",
+      "args": ["<GORKBOT_PROJECT_DIR>/mcp_servers/gorkbot_introspect.py"],
+      "description": "Gorkbot self-introspection: live capabilities, loaded tools, active config. Linux/macOS/Android only.",
+      "disabled": false
+    },
+    {
+      "name": "gorkbot-termux",
+      "command": "python3",
+      "args": ["<GORKBOT_PROJECT_DIR>/mcp_servers/gorkbot_termux.py"],
+      "description": "Termux environment management and Android system APIs. Android/Termux only.",
+      "disabled": false
+    }
+  ]
+}

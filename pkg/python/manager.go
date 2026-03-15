@@ -92,14 +92,14 @@ type ToolParam struct {
 
 // PluginManifest defines the metadata for a Python plugin
 type PluginManifest struct {
-	Name        string            `json:"name"`
-	Version     string            `json:"version"`
-	Description string            `json:"description"`
-	Author      string            `json:"author"`
-	EntryPoint  string            `json:"entry_point"` // Python file with execute() function
+	Name        string               `json:"name"`
+	Version     string               `json:"version"`
+	Description string               `json:"description"`
+	Author      string               `json:"author"`
+	EntryPoint  string               `json:"entry_point"` // Python file with execute() function
 	Parameters  map[string]ToolParam `json:"parameters"`
-	Requires    []string          `json:"requires,omitempty"` // pip dependencies
-	Category    string            `json:"category"`
+	Requires    []string             `json:"requires,omitempty"` // pip dependencies
+	Category    string               `json:"category"`
 }
 
 // PythonTool is a Go wrapper that makes a Python script appear as a Go Tool
@@ -189,10 +189,10 @@ func (t *PythonTool) Execute(ctx context.Context, params map[string]interface{})
 
 	// Prepare input for Python script
 	input := map[string]interface{}{
-		"action":   "execute",
-		"tool":     t.name,
-		"params":   params,
-		"timeout":  300, // 5 minute default timeout
+		"action":  "execute",
+		"tool":    t.name,
+		"params":  params,
+		"timeout": 300, // 5 minute default timeout
 	}
 
 	inputJSON, err := json.Marshal(input)

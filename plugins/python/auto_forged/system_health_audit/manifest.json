@@ -1,0 +1,13 @@
+{
+  "name": "system_health_audit",
+  "description": "Performs a comprehensive system health audit checking disk, memory, swap, and provides resource exhaustion analysis with recommendations",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

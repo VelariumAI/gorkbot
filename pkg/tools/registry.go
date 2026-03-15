@@ -8,7 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/velariumai/gorkbot/pkg/persist"
 	"github.com/velariumai/gorkbot/pkg/scheduler"
+	"github.com/velariumai/gorkbot/pkg/sense"
 	"github.com/velariumai/gorkbot/pkg/usercommands"
 )
 
@@ -39,15 +41,15 @@ type Registry struct {
 	mu                 sync.RWMutex
 	sessionPerms       map[string]bool // tools allowed for this session
 	permissionHandler  PermissionHandler
-	configDir          string              // config directory for persisting dynamic tools
-	pendingRebuild     []string            // tools that need a Go rebuild for permanent integration
-	disabledCategories   map[ToolCategory]bool // categories disabled via /settings
-	schedulerInst        *scheduler.Scheduler    // optional: injected into ctx before tool execution
-	userCmdLoader        *usercommands.Loader    // optional: injected into ctx before tool execution
-	contextStats         ContextStatsReporter    // optional: injected into ctx for context_stats tool
-	introspectionRep     IntrospectionReporter   // optional: injected into ctx for query_* tools
-	goalLedger           GoalLedgerAccessor      // optional: injected into ctx for goal tools
-	colonyRunner         func(ctx context.Context, sys, prompt string) (string, error) // runner for colony_debate tool
+	configDir          string                                                        // config directory for persisting dynamic tools
+	pendingRebuild     []string                                                      // tools that need a Go rebuild for permanent integration
+	disabledCategories map[ToolCategory]bool                                         // categories disabled via /settings
+	schedulerInst      *scheduler.Scheduler                                          // optional: injected into ctx before tool execution
+	userCmdLoader      *usercommands.Loader                                          // optional: injected into ctx before tool execution
+	contextStats       ContextStatsReporter                                          // optional: injected into ctx for context_stats tool
+	introspectionRep   IntrospectionReporter                                         // optional: injected into ctx for query_* tools
+	goalLedger         GoalLedgerAccessor                                            // optional: injected into ctx for goal tools
+	colonyRunner       func(ctx context.Context, sys, prompt string) (string, error) // runner for colony_debate tool
 	// securityBriefFn returns a formatted brief of the current security assessment context.
 	// Used by redteam agents to inject shared findings into their system prompts.
 	securityBriefFn func() string
@@ -56,6 +58,52 @@ type Registry struct {
 	pipelineRunner func(ctx context.Context, agentType, task string) (string, error)
 	// auditDB is the structured SQLite audit log (nil = disabled).
 	auditDB *AuditDB
+
+	// senseTracer is the SENSE event tracer (nil = disabled).
+	// When set, every tool execution produces a SENSETrace event.
+	senseTracer senseTracerIface
+
+	// inputSanitizer is the SENSE stabilization middleware (nil = disabled).
+	// When set, all tool parameters are validated before execution.
+	inputSanitizer inputSanitizerIface
+
+	// envSnapshot provides a live view of host capabilities for pre-flight
+	// checks (nil = disabled).  Defined as an interface to avoid a circular
+	// import between pkg/tools and pkg/env.
+	envSnapshot envSnapshotReader
+
+	// persistStore is the SQLite conversation store (nil = disabled).
+	// Used by session_search to query past conversation history.
+	persistStore *persist.Store
+
+	DryRun bool // If true, validation succeeds but tool execution returns a mocked success
+}
+
+// senseTracerIface is the subset of sense.SENSETracer used by the registry.
+// Defined as an interface to avoid a direct import of pkg/sense (which would
+// create a circular dependency if sense ever imports pkg/tools).
+type senseTracerIface interface {
+	LogToolSuccess(tool, inputJSON, output string, durationMS int64)
+	LogToolFailure(tool, inputJSON, errMsg string, durationMS int64)
+	LogSanitizerReject(tool, field, reason string)
+	LogParamError(tool, errMsg string)
+}
+
+// inputSanitizerIface is the subset of sense.InputSanitizer used by the registry.
+type inputSanitizerIface interface {
+	SanitizeParams(params map[string]interface{}) error
+}
+
+// envSnapshotReader is the subset of pkg/env.EnvProbe used by the registry
+// for capability pre-flight checks.  Defined as an interface to prevent an
+// import cycle (pkg/env must remain dependency-free of pkg/tools).
+type envSnapshotReader interface {
+	// HasBinary returns true when the named CLI tool was found in PATH during
+	// the most recent probe.  Returns true (permissive) when no snapshot exists.
+	HasBinary(name string) bool
+	// HasPythonPackage returns true when the given import-module name was found
+	// importable during the most recent probe.
+	HasPythonPackage(importName string) bool
 }
 
 // NewRegistry creates a new tool registry
@@ -130,6 +178,41 @@ func (r *Registry) GetAuditDB() *AuditDB {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.auditDB
+}
+
+// SetSENSETracer wires the SENSE event tracer into the registry.
+// After this call every tool execution emits a SENSETrace event.
+func (r *Registry) SetSENSETracer(t senseTracerIface) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.senseTracer = t
+}
+
+// SetInputSanitizer wires the SENSE stabilization middleware into the registry.
+// After this call every tool invocation has its parameters validated before
+// execution is permitted.
+func (r *Registry) SetInputSanitizer(s inputSanitizerIface) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.inputSanitizer = s
+}
+
+// SetEnvSnapshot wires the environment snapshot reader into the registry for
+// capability pre-flight checks.  Tools that implement CapabilityRequirer will
+// have their binary/package requirements validated before execution.
+func (r *Registry) SetEnvSnapshot(s envSnapshotReader) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.envSnapshot = s
+}
+
+// SetPersistStore wires the SQLite conversation store into the registry so that
+// the session_search tool can query past conversation history.  Must be called
+// before RegisterDefaultTools if persistence is desired.
+func (r *Registry) SetPersistStore(store *persist.Store) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.persistStore = store
 }
 
 // SetAIProvider sets the AI provider for tools that need it (e.g., Task tool)
@@ -350,6 +433,26 @@ func (r *Registry) ListByCategory(category ToolCategory) []Tool {
 	return tools
 }
 
+// ListAll returns all registered tool descriptors for schema introspection.
+func (r *Registry) ListAll() []sense.ToolDescriptor {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var descs []sense.ToolDescriptor
+	for _, tool := range r.tools {
+		descs = append(descs, sense.ToolDescriptor{
+			Name:               tool.Name(),
+			Description:        tool.Description(),
+			Category:           string(tool.Category()),
+			Parameters:         tool.Parameters(),
+			RequiresPermission: tool.RequiresPermission(),
+			DefaultPermission:  string(tool.DefaultPermission()),
+			OutputFormat:       string(tool.OutputFormat()),
+		})
+	}
+	return descs
+}
+
 // Execute executes a tool with permission checking and analytics tracking
 func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, error) {
 	startTime := time.Now()
@@ -373,6 +476,88 @@ func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, 
 			Success: false,
 			Error:   fmt.Sprintf("tool category %q is disabled — enable it in /settings", string(tool.Category())),
 		}, nil
+	}
+
+	// ── Capability Pre-flight Check ──────────────────────────────────────────
+	// If the tool declares required binaries or Python packages, verify they
+	// are present BEFORE attempting execution.  This surfaces "nmap not
+	// installed" immediately instead of after a multi-second timeout.
+	r.mu.RLock()
+	envSnap := r.envSnapshot
+	r.mu.RUnlock()
+	if envSnap != nil {
+		if cr, ok := tool.(CapabilityRequirer); ok {
+			for _, bin := range cr.RequiredBinaries() {
+				if !envSnap.HasBinary(bin) {
+					return &ToolResult{
+						Success: false,
+						Error: fmt.Sprintf(
+							"tool %q requires binary %q which was not found in PATH — "+
+								"install it first (e.g. `pkg install %s` on Termux)",
+							normalizedName, bin, bin),
+					}, nil
+				}
+			}
+			for _, pkg := range cr.RequiredPythonPackages() {
+				if !envSnap.HasPythonPackage(pkg) {
+					return &ToolResult{
+						Success: false,
+						Error: fmt.Sprintf(
+							"tool %q requires Python package %q — "+
+								"install it first (e.g. `pip install %s`)",
+							normalizedName, pkg, pkg),
+					}, nil
+				}
+			}
+		}
+	}
+
+	// ── SENSE Stabilization Middleware ──────────────────────────────────────
+	// Validate all parameters through the input sanitizer BEFORE schema
+	// validation or permission checks.  This enforces the three invariants:
+	// control-char rejection, path sandboxing, and resource-name validation.
+	r.mu.RLock()
+	sanitizer := r.inputSanitizer
+	tracer := r.senseTracer
+	r.mu.RUnlock()
+	if sanitizer != nil {
+		if sanErr := sanitizer.SanitizeParams(normalizedParams); sanErr != nil {
+			errMsg := sanErr.Error()
+			if tracer != nil {
+				tracer.LogSanitizerReject(normalizedName, req.ToolName, errMsg)
+			}
+			return &ToolResult{
+				Success: false,
+				Error:   errMsg,
+			}, sanErr
+		}
+	}
+
+	// Pre-execution param validation: check required fields from the tool's
+	// JSON schema BEFORE acquiring a permission prompt or executing.
+	// Catches "pattern required" / "url required" class of preventable errors
+	// that otherwise fill the audit log as tool_error entries.
+	if missing := validateRequiredParams(tool.Parameters(), normalizedParams); len(missing) > 0 {
+		errMsg := fmt.Sprintf("missing required parameter(s) for %s: %s",
+			normalizedName, strings.Join(missing, ", "))
+		result := &ToolResult{Success: false, Error: errMsg}
+		// Log to audit DB immediately so the param_error category is captured.
+		duration := time.Since(startTime)
+		r.mu.RLock()
+		adb := r.auditDB
+		r.mu.RUnlock()
+		if adb != nil {
+			argsJSON := ""
+			if b, jErr := json.Marshal(normalizedParams); jErr == nil {
+				argsJSON = string(b)
+			}
+			adb.LogExecution(normalizedName, argsJSON, false, "param_error", errMsg, duration.Milliseconds())
+		}
+		// Emit SENSE param-error trace event.
+		if tracer != nil {
+			tracer.LogParamError(normalizedName, errMsg)
+		}
+		return result, fmt.Errorf("%s", errMsg)
 	}
 
 	// Check permissions
@@ -416,8 +601,20 @@ func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, 
 		ctxWithRegistry = context.WithValue(ctxWithRegistry, GoalLedgerKey, r.goalLedger)
 	}
 
-	// Execute the tool with normalized params
-	result, err := tool.Execute(ctxWithRegistry, normalizedParams)
+	var result *ToolResult
+	var err error
+
+	if r.DryRun {
+		// Mock success for dry run
+		mockOut := fmt.Sprintf("[DRY-RUN] Tool '%s' validated successfully. Execution skipped.", normalizedName)
+		result = &ToolResult{
+			Success: true,
+			Output:  mockOut,
+		}
+	} else {
+		// Execute the tool with normalized params
+		result, err = tool.Execute(ctxWithRegistry, normalizedParams)
+	}
 
 	// Record analytics and structured audit log.
 	duration := time.Since(startTime)
@@ -444,6 +641,29 @@ func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, 
 		}
 		errCat := classifyToolError(err, result)
 		adb.LogExecution(normalizedName, argsJSON, success, errCat, rawErrStr, duration.Milliseconds())
+	}
+
+	// Emit SENSE trace event (fire-and-forget — tracer is internally async-safe).
+	if tracer != nil {
+		argsJSON := ""
+		if b, jErr := json.Marshal(normalizedParams); jErr == nil {
+			argsJSON = string(b)
+		}
+		if success {
+			outStr := ""
+			if result != nil {
+				outStr = result.Output
+			}
+			tracer.LogToolSuccess(normalizedName, argsJSON, outStr, duration.Milliseconds())
+		} else {
+			errStr := ""
+			if err != nil {
+				errStr = err.Error()
+			} else if result != nil {
+				errStr = result.Error
+			}
+			tracer.LogToolFailure(normalizedName, argsJSON, errStr, duration.Milliseconds())
+		}
 	}
 
 	return result, err
@@ -551,6 +771,8 @@ func (r *Registry) GetSystemPrompt() string {
 	sb.WriteString("- Need clean text content from a URL? → Use 'web_fetch' (returns clean text, not HTML)\n")
 	sb.WriteString("- Need to extract specific content from a URL using CSS/XPath? → Use 'scrapling_fetch'\n")
 	sb.WriteString("- Need to run shell commands? → Use 'bash'\n")
+	sb.WriteString("- Need elevated/privileged command execution (sudo/root/su)? → Use 'privileged_execute' (auto-escalation router — never embed sudo in bash)\n")
+	sb.WriteString("- Need structured/parseable output from a command (ps, df, env, /proc)? → Use 'structured_bash' (returns typed JSON: json/tabular/keyvalue/raw + 5 MB cap)\n")
 	sb.WriteString("- Need to read a file? → Use 'read_file'\n")
 	sb.WriteString("- Need to search for text in files? → Use 'grep_content'\n")
 	sb.WriteString("- Need to make HTTP requests with custom headers/body? → Use 'http_request'\n")
@@ -616,6 +838,8 @@ func (r *Registry) GetSystemPromptNative() string {
 	sb.WriteString("- Need clean text content from a URL? → Use 'web_fetch' (returns clean text, not HTML)\n")
 	sb.WriteString("- Need to extract specific content from a URL using CSS/XPath? → Use 'scrapling_fetch'\n")
 	sb.WriteString("- Need to run shell commands? → Use 'bash'\n")
+	sb.WriteString("- Need elevated/privileged command execution (sudo/root/su)? → Use 'privileged_execute' (auto-escalation router — never embed sudo in bash)\n")
+	sb.WriteString("- Need structured/parseable output from a command (ps, df, env, /proc)? → Use 'structured_bash' (returns typed JSON: json/tabular/keyvalue/raw + 5 MB cap)\n")
 	sb.WriteString("- Need to read a file? → Use 'read_file'\n")
 	sb.WriteString("- Need to search for text in files? → Use 'grep_content'\n")
 	sb.WriteString("- Need to make HTTP requests with custom headers/body? → Use 'http_request'\n")
@@ -647,282 +871,76 @@ func (r *Registry) GetSystemPromptNative() string {
 	return sb.String()
 }
 
-// RegisterDefaultTools registers all built-in tools
+// RegisterDefaultTools registers tools based on configured tool packs (tiers).
 func (r *Registry) RegisterDefaultTools() error {
-	tools := []Tool{
-		// Shell tools
-		NewBashTool(),
+	packs := GetToolPacks()
+	active := GetActivePacks()
 
-		// File tools
-		NewReadFileTool(),
-		NewWriteFileTool(),
-		NewEditFileTool(),
-		NewMultiEditFileTool(),
-		NewListDirectoryTool(),
-		NewSearchFilesTool(),
-		NewGrepContentTool(),
-		NewFileInfoTool(),
-		NewDeleteFileTool(),
-
-		// Hashline file tools (hash-validated edits — prevents stale-line failures)
-		NewReadFileHashedTool(),
-		NewEditFileHashedTool(),
-		NewASTGrepTool(),
-
-		// Git tools
-		NewGitStatusTool(),
-		NewGitDiffTool(),
-		NewGitLogTool(),
-		NewGitCommitTool(),
-		NewGitPushTool(),
-		NewGitPullTool(),
-
-		// Web tools
-		NewWebFetchTool(),
-		NewHttpRequestTool(),
-		NewCheckPortTool(),
-		NewDownloadFileTool(),
-		NewXPullTool(),
-
-		// System tools
-		NewListProcessesTool(),
-		NewKillProcessTool(),
-		NewEnvVarTool(),
-		NewSystemInfoTool(),
-		NewDiskUsageTool(),
-
-		// Meta tools
-		NewCreateToolTool(),
-		NewModifyToolTool(),
-		NewListToolsTool(),
-		NewToolInfoTool(),
-		NewAuditToolCallTool(),
-		NewContextStatsTool(),
-
-		// Task management
-		NewTodoWriteTool(),
-		NewTodoReadTool(),
-		NewCompleteTool(),
-
-		// Skills
-		NewConsultationTool(),
-		NewWebSearchTool(),
-		NewWebReaderTool(),
-		NewDOCXTool(),
-		NewXLSXTool(),
-		NewPDFTool(),
-		NewPPTXTool(),
-		NewFrontendDesignTool(),
-
-		// AI / ML tools
-		NewAIImageGenerateTool(),
-		NewAISummarizeAudioTool(),
-		NewMLModelRunTool(),
-
-		// Background agent tools (parallel sub-agent execution)
-		NewSpawnAgentTool(),
-		NewCollectAgentTool(),
-		NewListAgentsTool(),
-
-		// Database tools
-		NewDBQueryTool(),
-		NewDBMigrateTool(),
-
-		// Network tools
-		NewNetworkScanTool(),
-		NewSocketConnectTool(),
-		NewNetworkEscapeProxyTool(),
-
-		// Media tools
-		NewImageProcessTool(),
-		NewMediaConvertTool(),
-
-		// Android / Termux tools — android_control.go (granular device control)
-		NewAdbScreenshotTool(),
-		NewAdbShellTool(),
-		NewAppCatalogTool(),
-		NewAppControlTool(),
-		NewAppStatusTool(),
-		NewScreenCaptureTool(),
-		NewScreenshotTool(),
-		NewScreenrecordTool(),
-		NewCaptureScreenHackTool(),
-		NewUiDumpTool(),
-		NewDeviceInfoTool(),
-		NewContextStateTool(),
-		NewKillAppTool(),
-		NewLaunchAppTool(),
-		NewVisionCaptureTool(),
-		NewVisionAnalyzeTool(),
-		NewLiveVisionTool(),
-		NewScreenAnalyzeTool(),
-		NewManageDepsTool(),
-		NewTermuxControlTool(),
-		NewSaveStateTool(),
-		NewStartHealthMonitorTool(),
-		NewBrowserScrapeTool(),
-		NewBrowserControlTool(),
-
-		// Android / Termux tools — other sources
-		NewSensorReadTool(),
-		NewNotificationSendTool(),
-		NewIntentBroadcastTool(),
-		NewLogcatDumpTool(),
-		NewClipboardManagerTool(),
-		NewNotificationListenerTool(),
-		NewAccessibilityQueryTool(),
-		NewApkDecompileTool(),
-		NewSqliteExplorerTool(),
-		NewTermuxApiBridgeTool(),
-
-		// Worktree tools (isolated git environments for agents)
-		NewCreateWorktreeTool(),
-		NewListWorktreesTool(),
-		NewRemoveWorktreeTool(),
-		NewIntegrateWorktreeTool(),
-
-		// DevOps & Cloud tools
-		NewDockerManagerTool(),
-		NewK8sKubectlTool(),
-		NewAwsS3SyncTool(),
-		NewGitBlameAnalyzeTool(),
-		NewNgrokTunnelTool(),
-		NewCiTriggerTool(),
-
-		// Security tools (basic)
-		NewNmapScanTool(),
-		NewPacketCaptureTool(),
-		NewWifiAnalyzerTool(),
-		NewShodanQueryTool(),
-		NewMetasploitRpcTool(),
-		NewSslValidatorTool(),
-
-		// Security tools — comprehensive pentesting suite
-		NewMasscanRunTool(),
-		NewDnsEnumTool(),
-		NewArpScanRunTool(),
-		NewTracerouteRunTool(),
-		NewNiktoScanTool(),
-		NewGobusterScanTool(),
-		NewFfufRunTool(),
-		NewSqlmapScanTool(),
-		NewWafw00fRunTool(),
-		NewHttpHeaderAuditTool(),
-		NewJwtDecodeTool(),
-		NewHydraRunTool(),
-		NewHashcatRunTool(),
-		NewJohnRunTool(),
-		NewHashIdentifyTool(),
-		NewSearchsploitQueryTool(),
-		NewCveLookupTool(),
-		NewEnum4linuxRunTool(),
-		NewSmbmapRunTool(),
-		NewSuidCheckTool(),
-		NewSudoCheckTool(),
-		NewLinpeasRunTool(),
-		NewStringsAnalyzeTool(),
-		NewHexdumpFileTool(),
-		NewNetstatAnalysisTool(),
-		NewSubfinderRunTool(),
-		NewNucleiScanTool(),
-		NewTotpGenerateTool(),
-
-		// Media & Content tools
-		NewFfmpegProTool(),
-		NewAudioTranscribeTool(),
-		NewTtsGenerateTool(),
-		NewImageOcrBatchTool(),
-		NewVideoSummarizeTool(),
-		NewMemeGeneratorTool(),
-
-		// Data Science & Knowledge tools
-		NewCsvPivotTool(),
-		NewPlotGenerateTool(),
-		NewArxivSearchTool(),
-		NewWebArchiveTool(),
-		NewWhoisLookupTool(),
-
-		// Personal & Life tools
-		NewCalendarManageTool(),
-		NewEmailClientTool(),
-		NewContactSyncTool(),
-		NewSmartHomeApiTool(),
-
-		// Meta & Maintenance tools
-		NewCronManagerTool(),
-		NewBackupRestoreTool(),
-		NewSystemMonitorTool(),
-
-		// Package management
-		NewPkgInstallTool(),
-
-		// SENSE tools
-		NewCode2WorldTool(),
-		NewRecordEngramTool(),
-
-		// Self-introspection tools (query internal intelligence systems)
-		NewQueryRoutingStatsTool(),
-		NewQueryHeuristicsTool(),
-		NewQueryMemoryStateTool(),
-		NewQuerySystemStateTool(),
-
-		// Prospective memory: cross-session goal ledger
-		NewAddGoalTool(),
-		NewCloseGoalTool(),
-		NewListGoalsTool(),
-
-		// Security assessment: shared findings context
-		NewReportFindingTool(),
-
-		// Agentic pipeline: multi-step coordinated agent execution
-		NewRunPipelineTool(),
-
-		// Vision tools (MediaProjection companion + Grok Vision API)
-		NewVisionInstallTool(),
-		NewADBSetupTool(), // ADB diagnostics only — not used for capture
-		NewVisionScreenTool(),
-		NewVisionCaptureOnlyTool(),
-		NewVisionFileTool(),
-		NewVisionOCRTool(),
-		NewVisionFindTool(),
-		NewVisionWatchTool(),
-
-		// Sprint 1 - New tools from nanoclaw/opencrabs port
-		NewDocParserTool(),
-		NewCodeExecTool(),
-		NewRebuildTool(),
-		NewScheduleTaskTool(),
-		NewListScheduledTasksTool(),
-		NewCancelScheduledTaskTool(),
-		NewPauseResumeScheduledTaskTool(),
-		NewDefineCommandTool(),
-
-		// Scrapling web scraping tools
-		NewScraplingFetchTool(),
-		NewScraplingStealthTool(),
-		NewScraplingDynamicTool(),
-		NewScraplingExtractTool(),
-		NewScraplingSearchTool(),
-
-		// Jupyter notebook tool
-		NewJupyterTool(),
+	for _, packName := range active {
+		packName = strings.TrimSpace(packName)
+		if tools, ok := packs[packName]; ok {
+			for _, tool := range tools {
+				if err := r.Register(tool); err != nil {
+					// Ignore duplicate registrations
+				}
+			}
+		}
 	}
 
-	for _, tool := range tools {
-		if err := r.Register(tool); err != nil {
-			return fmt.Errorf("failed to register %s: %w", tool.Name(), err)
+	// Wire the registry into PythonSandboxTool so sandboxed code can invoke
+	// allowed tools via the Unix-domain RPC socket.
+	if t, ok := r.tools["python_execute"]; ok {
+		if pst, ok := t.(*PythonSandboxTool); ok {
+			pst.SetRegistry(r)
 		}
 	}
 
 	// Colony debate tool — runner wired later via SetColonyRunner
 	if r.colonyRunner != nil {
-		if err := r.Register(NewColonyDebateTool(r.colonyRunner)); err != nil {
-			return fmt.Errorf("failed to register colony_debate: %w", err)
-		}
+		r.RegisterOrReplace(NewColonyDebateTool(r.colonyRunner))
 	}
+
+	// Brain tools — persistent self-knowledge management
+	RegisterBrainTools(r)
 
 	// CCI retrieval tools — mcp_context_* suite (Tier 3 cold memory, Tier 2 specialists)
 	RegisterCCITools(r)
 
+	// Session search tool — requires persist.Store (nil-safe: tool returns error if store absent)
+	RegisterSessionSearchTool(r, r.persistStore)
+
 	return nil
+}
+
+// validateRequiredParams checks that all fields in the "required" array of the
+// tool's JSON schema are present (and non-nil) in params.
+// Returns the list of missing field names, or nil if all required fields exist.
+//
+// Design notes:
+//   - Only the "required" array at the top level of the schema is checked.
+//     Nested required arrays (e.g., inside "properties.x.required") are
+//     intentionally ignored to keep validation O(required_fields) and avoid
+//     re-implementing a full JSON Schema validator.
+//   - A nil value in params is treated as absent — the model must supply an
+//     actual value, not a JSON null, for required fields.
+//   - An empty or nil schema silently passes validation (graceful degradation
+//     for tools that return nil from Parameters()).
+func validateRequiredParams(schema json.RawMessage, params map[string]interface{}) []string {
+	if len(schema) == 0 {
+		return nil
+	}
+	var s struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(schema, &s); err != nil || len(s.Required) == 0 {
+		return nil
+	}
+	var missing []string
+	for _, field := range s.Required {
+		val, present := params[field]
+		if !present || val == nil {
+			missing = append(missing, field)
+		}
+	}
+	return missing
 }

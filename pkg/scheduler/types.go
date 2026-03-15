@@ -39,4 +39,12 @@ type ScheduledTask struct {
 	LastRun       *time.Time   `json:"last_run,omitempty"`
 	LastResult    string       `json:"last_result,omitempty"`
 	RunCount      int          `json:"run_count"`
+
+	// Retry + notification fields (added for ResultDispatcher).
+	MaxRetries         int    `json:"max_retries,omitempty"` // 0 = no retry
+	RetryCount         int    `json:"retry_count,omitempty"`
+	LastError          string `json:"last_error,omitempty"`
+	NotifyDiscordChan  string `json:"notify_discord_channel,omitempty"`
+	NotifyTelegramChat int64  `json:"notify_telegram_chat,omitempty"`
+	TimeoutSeconds     int    `json:"timeout_seconds,omitempty"` // 0 = 5min default
 }

@@ -95,6 +95,14 @@ func (a *BaseAgent) Execute(ctx context.Context, task string, provider ai.AIProv
 	var finalResponse string
 
 	for turn := 0; turn < maxTurns; turn++ {
+		// Check shared session budget if available.
+		if budget := BudgetFromContext(ctx); budget != nil {
+			if !budget.Consume(1) {
+				finalResponse += fmt.Sprintf("\n\n[Session budget exhausted: %s]", budget.Report())
+				break
+			}
+		}
+
 		// Generate response
 		response, err := provider.GenerateWithHistory(ctx, history)
 		if err != nil {
@@ -113,7 +121,7 @@ func (a *BaseAgent) Execute(ctx context.Context, task string, provider ai.AIProv
 		}
 
 		if registry == nil {
-			// If no registry, we can't execute tools. 
+			// If no registry, we can't execute tools.
 			// We should probably inform the agent or just stop?
 			// For now, let's stop to prevent loops.
 			break
@@ -145,7 +153,7 @@ func (a *BaseAgent) Execute(ctx context.Context, task string, provider ai.AIProv
 		toolResultsMessage := "Here are the results from the tools you requested:\n\n"
 		toolResultsMessage += fmt.Sprintf("%s\n\n", resultStrJoin(toolResults, "\n\n"))
 		toolResultsMessage += "Please continue with the task based on these results."
-		
+
 		history.AddUserMessage(toolResultsMessage)
 	}
 

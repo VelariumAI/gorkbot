@@ -111,7 +111,7 @@ func (p *ProcessOverlay) View() string {
 	}
 
 	header := p.styles.ActiveTab.Render(" Process Manager ")
-	
+
 	// Calculate center position
 	// Overlay box
 	box := p.styles.ConsultantBox.Render(
@@ -121,7 +121,7 @@ func (p *ProcessOverlay) View() string {
 			p.styles.Help.Render("esc: close • r: refresh • k: kill"),
 		),
 	)
-	
+
 	return lipgloss.Place(p.width, p.height,
 		lipgloss.Center, lipgloss.Center,
 		box,

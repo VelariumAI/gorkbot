@@ -18,15 +18,16 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 )
 
 // RewardMetrics holds the LIE evaluation for one AI response.
 type RewardMetrics struct {
-	LengthScore    float64 // 0–1: rewards comprehensive responses
+	LengthScore       float64 // 0–1: rewards comprehensive responses
 	RedundancyPenalty float64 // 0–1: penalises repeated content
-	StructureBonus float64 // 0–1: rewards structured reasoning (reasoning + answer)
-	FinalReward    float64 // combined score, positive = good
-	Feedback       string  // human-readable narrative for injection into context
+	StructureBonus    float64 // 0–1: rewards structured reasoning (reasoning + answer)
+	FinalReward       float64 // combined score, positive = good
+	Feedback          string  // human-readable narrative for injection into context
 }
 
 // LIEEvaluator tracks the reasoning trajectory of a conversation and evaluates
@@ -41,6 +42,10 @@ type LIEEvaluator struct {
 	// Weight applied to the structure bonus.
 	StructureWeight float64
 	// Sliding window of recent AI responses for redundancy detection.
+	// mu guards recentResponses — AnalyzeAgency can be called from both the
+	// TUI streaming path and ExecuteTaskWithTools (Telegram/Discord), so
+	// concurrent Evaluate calls are possible.
+	mu              sync.Mutex
 	recentResponses []string
 	maxWindowSize   int
 }
@@ -68,9 +73,12 @@ func (l *LIEEvaluator) Evaluate(response string) (RewardMetrics, bool) {
 	lengthScore := 1 / (1 + math.Exp(-3*(x-1))) // centred at MinComprehensiveTokens
 
 	// ── Redundancy penalty ───────────────────────────────────────────────────
-	redundancy := l.measureRedundancy(response)
+	// Lock for the whole recentResponses read+write critical section.
+	l.mu.Lock()
+	redundancy := l.measureRedundancy(response) // reads recentResponses (lock held)
 
 	// ── Structure bonus ──────────────────────────────────────────────────────
+	// (pure string ops, does not access recentResponses)
 	structureBonus := l.measureStructure(response)
 
 	// ── Final reward ─────────────────────────────────────────────────────────
@@ -85,6 +93,13 @@ func (l *LIEEvaluator) Evaluate(response string) (RewardMetrics, bool) {
 		reward = -1
 	}
 
+	// Update trajectory window.
+	l.recentResponses = append(l.recentResponses, response)
+	if len(l.recentResponses) > l.maxWindowSize {
+		l.recentResponses = l.recentResponses[1:]
+	}
+	l.mu.Unlock()
+
 	metrics := RewardMetrics{
 		LengthScore:       lengthScore,
 		RedundancyPenalty: redundancy,
@@ -97,12 +112,6 @@ func (l *LIEEvaluator) Evaluate(response string) (RewardMetrics, bool) {
 	if reward < 0.2 || redundancy > 0.6 {
 		metrics.Feedback = l.buildFeedback(metrics, tokens)
 		inject = true
-	}
-
-	// Update trajectory window.
-	l.recentResponses = append(l.recentResponses, response)
-	if len(l.recentResponses) > l.maxWindowSize {
-		l.recentResponses = l.recentResponses[1:]
 	}
 
 	return metrics, inject

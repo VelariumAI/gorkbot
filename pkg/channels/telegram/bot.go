@@ -21,15 +21,48 @@ type Config struct {
 // Returns the response string to send back to the user.
 type MessageHandler func(ctx context.Context, userID int64, username, text string) (string, error)
 
+// StreamHandler is called for streaming responses; cb receives individual tokens.
+type StreamHandler func(ctx context.Context, userID int64, username, text string, cb StreamCallback) error
+
+// BridgeRegistry is the minimal interface the bot needs from the channel bridge.
+type BridgeRegistry interface {
+	GetOrCreate(platform, platformUserID, username string) (string, error)
+	GenerateLinkCode(canonicalID string) (string, error)
+	ConsumeLink(code, platform, platformUserID string) (string, error)
+	LinkedPlatforms(canonicalID string) ([]string, error)
+}
+
 // Bot wraps the Telegram bot API and routes messages to a MessageHandler.
 type Bot struct {
-	cfg     Config
-	api     *tgbotapi.BotAPI
-	handler MessageHandler
-	logger  *slog.Logger
-	stop    chan struct{}
-	mu      sync.Mutex
-	running bool
+	cfg           Config
+	api           *tgbotapi.BotAPI
+	handler       MessageHandler
+	streamHandler StreamHandler
+	linkRegistry  BridgeRegistry
+	logger        *slog.Logger
+	stop          chan struct{}
+	mu            sync.Mutex
+	running       bool
+}
+
+// SetStreamHandler wires a streaming handler. When set, replies are streamed.
+func (b *Bot) SetStreamHandler(sh StreamHandler) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.streamHandler = sh
+}
+
+// SetBridgeRegistry wires the cross-channel identity registry.
+func (b *Bot) SetBridgeRegistry(r BridgeRegistry) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.linkRegistry = r
+}
+
+func (b *Bot) getStreamHandler() StreamHandler {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.streamHandler
 }
 
 // NewBot creates a new Bot but does not start polling.
@@ -110,6 +143,54 @@ func (b *Bot) Start(ctx context.Context) error {
 			case "/clear":
 				_ = b.SendMessage(chatID, "Session cleared.")
 				continue
+			case "/link":
+				if b.linkRegistry != nil {
+					canonicalID, _ := b.linkRegistry.GetOrCreate("telegram", fmt.Sprintf("%d", userID), username)
+					code, err := b.linkRegistry.GenerateLinkCode(canonicalID)
+					if err != nil {
+						_ = b.SendMessage(chatID, "❌ Failed to generate link code.")
+					} else {
+						_ = b.SendMessage(chatID, fmt.Sprintf("Your link code: *%s* (valid 10 min)\nIn Discord: `!link %s`", code, code))
+					}
+				} else {
+					_ = b.SendMessage(chatID, "_Cross-channel bridge not configured._")
+				}
+				continue
+			case "/whoami":
+				if b.linkRegistry != nil {
+					canonicalID, _ := b.linkRegistry.GetOrCreate("telegram", fmt.Sprintf("%d", userID), username)
+					platforms, _ := b.linkRegistry.LinkedPlatforms(canonicalID)
+					_ = b.SendMessage(chatID, fmt.Sprintf("Canonical ID: `%s`\nLinked: %v", canonicalID, platforms))
+				}
+				continue
+			}
+
+			// Handle /link <code> for consuming link codes.
+			if len(text) > 6 && text[:6] == "/link " {
+				code := strings.TrimSpace(text[6:])
+				if b.linkRegistry != nil {
+					if _, err := b.linkRegistry.ConsumeLink(code, "telegram", fmt.Sprintf("%d", userID)); err != nil {
+						_ = b.SendMessage(chatID, fmt.Sprintf("❌ Link failed: %v", err))
+					} else {
+						_ = b.SendMessage(chatID, "✅ Accounts linked! Your conversation history is shared across channels.")
+					}
+				}
+				continue
+			}
+
+			// Prefer streaming handler when available.
+			if sh := b.getStreamHandler(); sh != nil {
+				sr, srErr := NewStreamingResponder(b.api, chatID)
+				if srErr == nil {
+					err := sh(ctx, userID, username, text, sr.Push)
+					sr.Finalize()
+					if err != nil {
+						b.logger.Error("telegram stream handler error", "err", err)
+						_ = b.SendMessage(chatID, fmt.Sprintf("Error: %s", err.Error()))
+					}
+					continue
+				}
+				b.logger.Warn("telegram: streaming responder init failed, falling back", "err", srErr)
 			}
 
 			response, err := b.handler(ctx, userID, username, text)

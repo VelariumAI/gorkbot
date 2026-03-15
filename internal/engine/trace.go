@@ -112,7 +112,7 @@ func (tl *TraceLogger) LogLLMResponse(model string, responseLen int, elapsed tim
 // LogModeChange records an execution mode transition.
 func (tl *TraceLogger) LogModeChange(from, to string) {
 	tl.write(TraceEvent{
-		Kind: "mode_change",
+		Kind:  "mode_change",
 		Extra: map[string]string{"from": from, "to": to},
 	})
 }

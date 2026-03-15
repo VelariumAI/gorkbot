@@ -145,10 +145,10 @@ func (t *RebuildTool) Execute(ctx context.Context, params map[string]interface{}
 		Success: true,
 		Output:  sb.String(),
 		Data: map[string]interface{}{
-			"project_root":   projectRoot,
-			"binary_path":    outputBin,
-			"restart_after":  restartAfter,
-			"build_output":   buildOutput,
+			"project_root":  projectRoot,
+			"binary_path":   outputBin,
+			"restart_after": restartAfter,
+			"build_output":  buildOutput,
 		},
 	}, nil
 }

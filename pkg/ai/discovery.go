@@ -47,7 +47,7 @@ type GeminiModelListResponse struct {
 // FetchOpenAIModels performs model discovery against an OpenAI-compatible endpoint
 func FetchOpenAIModels(ctx context.Context, baseURL string, apiKey string) ([]registry.ModelDefinition, error) {
 	url := fmt.Sprintf("%s/v1/models", strings.TrimRight(baseURL, "/"))
-	
+
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create discovery request: %w", err)
@@ -77,7 +77,7 @@ func FetchOpenAIModels(ctx context.Context, baseURL string, apiKey string) ([]re
 		// Heuristic mapping for capabilities
 		// OpenAI response doesn't give context window or modality, so we must infer or lookup
 		capabilities := InferOpenAICapabilities(m.ID)
-		
+
 		def := registry.ModelDefinition{
 			ID:           registry.ModelID(m.ID),
 			Provider:     "xai", // Defaulting to xAI if used by Grok provider, but logic should be generic
@@ -134,16 +134,16 @@ func FetchGeminiModels(ctx context.Context, apiKey string) ([]registry.ModelDefi
 
 		// Google IDs come as "models/gemini-pro". We treat that as the ID.
 		// Or strip "models/"? Usually libraries prefer the full string or just the name.
-		// Let's keep "models/" prefix as it's the official resource name, 
+		// Let's keep "models/" prefix as it's the official resource name,
 		// OR strip it if the Generate function expects pure names.
 		// Standard Google AI client usually takes "gemini-pro".
 		cleanID := strings.TrimPrefix(m.Name, "models/")
 
 		capabilities := registry.CapabilitySet{
 			MaxContextTokens:  m.InputTokenLimit,
-			SupportsStreaming: true, // Most Gemini models support streaming
+			SupportsStreaming: true,                                                                                                                                            // Most Gemini models support streaming
 			SupportsVision:    strings.Contains(cleanID, "vision") || strings.Contains(cleanID, "1.5") || strings.Contains(cleanID, "2.0") || strings.Contains(cleanID, "2.5"), // 1.5+ are multimodal
-			SupportsTools:     strings.Contains(cleanID, "gemini"), // Most modern Gemini models support tools
+			SupportsTools:     strings.Contains(cleanID, "gemini"),                                                                                                             // Most modern Gemini models support tools
 			SupportsJSONMode:  strings.Contains(cleanID, "1.5") || strings.Contains(cleanID, "2.0") || strings.Contains(cleanID, "2.5"),
 			SupportsThinking:  geminiModelSupportsThinking(cleanID),
 		}
@@ -213,7 +213,7 @@ func FetchMiniMaxModels_Discovery(ctx context.Context, apiKey string) ([]registr
 // InferOpenAICapabilities tries to deduce model features from its ID
 func InferOpenAICapabilities(modelID string) registry.CapabilitySet {
 	caps := registry.CapabilitySet{
-		MaxContextTokens: 4096,  // Conservative default
+		MaxContextTokens:  4096, // Conservative default
 		SupportsStreaming: true,
 	}
 

@@ -154,7 +154,7 @@ func NewWifiAnalyzerTool() *WifiAnalyzerTool {
 
 func (t *WifiAnalyzerTool) Parameters() json.RawMessage {
 	schema := map[string]interface{}{
-		"type": "object",
+		"type":       "object",
 		"properties": map[string]interface{}{},
 	}
 	data, _ := json.Marshal(schema)
@@ -315,7 +315,7 @@ func (t *SslValidatorTool) Execute(ctx context.Context, args map[string]interfac
 	host := strings.Split(domain, ":")[0]
 	// Use explicit args instead of shell script to avoid escaping hell
 	script := fmt.Sprintf("echo | openssl s_client -servername %s -connect %s 2>/dev/null | openssl x509 -noout -dates -issuer -subject", host, domain)
-	
+
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

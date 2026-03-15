@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
-	"github.com/velariumai/gorkbot/internal/arc"
+	"github.com/velariumai/gorkbot/pkg/adaptive"
 	"github.com/velariumai/gorkbot/pkg/ai"
 	"github.com/velariumai/gorkbot/pkg/collab"
 	"github.com/velariumai/gorkbot/pkg/hooks"
@@ -16,13 +17,16 @@ import (
 // StreamCallback is called for each token as it arrives
 type StreamCallback func(token string)
 
+// AdviceCallback is called when expert consultant advice is received
+type AdviceCallback func(advice string)
+
 // InterventionCallback is called when the watchdog needs human input
 type InterventionCallback func(severity WatchdogSeverity, context string) InterventionResponse
 
 // ExecuteTaskWithStreaming handles a user prompt with real-time streaming output.
 // toolStartCallback (may be nil) is invoked just before each tool execution begins,
 // enabling the TUI to show a live "in-progress" panel and a tool call request box.
-func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt string, streamCallback StreamCallback, toolCallback func(string, *tools.ToolResult), toolStartCallback func(string, map[string]interface{}), interventionCallback InterventionCallback) error {
+func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt string, streamCallback StreamCallback, toolCallback func(string, *tools.ToolResult), toolStartCallback func(string, map[string]interface{}), interventionCallback InterventionCallback, adviceCallback AdviceCallback) error {
 	o.Logger.Info("Analyzing task complexity...", "prompt_length", len(prompt))
 
 	// ── Git Workspace Checkpoint ─────────────────────────────────────────────
@@ -77,7 +81,7 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		if o.Hooks != nil {
 			o.Hooks.FireAsync(ctx, hooks.EventConsultantInvoked, hooks.Payload{
 				Extra: map[string]interface{}{
-					"trigger":   "complexity_or_keyword",
+					"trigger":    "complexity_or_keyword",
 					"prompt_len": len(prompt),
 				},
 			})
@@ -98,6 +102,9 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		} else {
 			consultationAdvice = advice
 			o.Logger.Info("Consultation received", "length", len(advice))
+			if adviceCallback != nil {
+				adviceCallback(advice)
+			}
 			// Fire consultant_response hook.
 			if o.Hooks != nil {
 				o.Hooks.FireAsync(ctx, hooks.EventConsultantResponse, hooks.Payload{
@@ -162,13 +169,18 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		}
 	}
 
+	// ── RAG: inject semantically similar past context ─────────────────────────
+	if o.RAGInjector != nil {
+		o.RAGInjector.InjectContext(ctx, prompt, o.ConversationHistory)
+	}
+
 	// ── LLM-Driven Intent Gate & Swarm Routing ────────────────────────────────
-	var intentCat arc.IntentCategory
+	var intentCat adaptive.IntentCategory
 	if o.Hooks != nil {
 		gateResult := o.RunIntentGate(ctx, prompt)
 		if gateResult != nil {
-			intentCat = arc.IntentCategory(gateResult.Category)
-			
+			intentCat = adaptive.IntentCategory(gateResult.Category)
+
 			// Autonomously spawn background agents if the Intent Gate suggested them.
 			if len(gateResult.SpawnAgents) > 0 && o.BackgroundAgents != nil {
 				spawnedIds := []string{}
@@ -192,18 +204,18 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 				}
 			}
 		} else {
-			intentCat = arc.ClassifyIntent(prompt)
+			intentCat = adaptive.ClassifyIntent(prompt)
 		}
 
 		o.Hooks.FireAsync(ctx, hooks.EventIntentDetected, hooks.Payload{
 			Extra: map[string]interface{}{
 				"category": string(intentCat),
-				"label":    arc.CategoryLabel(intentCat),
+				"label":    adaptive.CategoryLabel(intentCat),
 			},
 		})
 		o.Logger.Debug("Intent classified",
 			"category", string(intentCat),
-			"label", arc.CategoryLabel(intentCat),
+			"label", adaptive.CategoryLabel(intentCat),
 		)
 	}
 
@@ -221,9 +233,21 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 	// Add user message to history
 	o.ConversationHistory.AddUserMessage(userMessage)
 
+	// Persist user turn (fire-and-forget — never blocks the streaming path).
+	if o.PersistStore != nil {
+		go func(content string) { //nolint:errcheck
+			_ = o.PersistStore.SaveTurn(context.Background(), "user", content, nil)
+		}(prompt) // persist original prompt, not the consultant-augmented form
+	}
+
 	// Ensure history doesn't exceed context limit
 	maxContextTokens := 100000
 	o.ConversationHistory.TruncateToTokenLimit(maxContextTokens)
+
+	// ── Context compression: summarise old messages when history is large ─────
+	if o.CompressionPipe != nil {
+		_ = o.CompressionPipe.MaybeCompress(ctx, o.ConversationHistory)
+	}
 
 	// Capture current provider ID for cascade detection.
 	currentProviderID := ""
@@ -270,10 +294,40 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 			orchestrator:         o,
 			interventionCallback: interventionCallback,
 			relay:                o.Relay,
+			thinkingCallback:     o.ThinkingCallback,
+		}
+
+		// Apply thinking budget to provider if supported.
+		primaryForTurn := o.Primary
+		if o.ThinkingBudget > 0 {
+			if ap, ok := primaryForTurn.(*ai.AnthropicProvider); ok {
+				clone := *ap
+				clone.ThinkingBudget = o.ThinkingBudget
+				primaryForTurn = &clone
+			}
+		}
+
+		// ── Budget Guard: estimate cost and block/warn before the API call ─────
+		if o.BudgetGuard != nil {
+			provID := ""
+			modelID := ""
+			if o.Primary != nil {
+				provID = string(o.Primary.ID())
+				modelID = o.Primary.GetMetadata().ID
+			}
+			histToks := o.ConversationHistory.EstimateTokens()
+			dec := o.BudgetGuard.CheckAndTrack(provID, modelID, histToks, len(prompt)/4)
+			if dec.Action == BudgetBlock {
+				cancel()
+				return fmt.Errorf("budget exceeded: %s", dec.Message)
+			}
+			if dec.Action == BudgetWarn && streamCallback != nil {
+				streamCallback("\n⚠ " + dec.Message + "\n")
+			}
 		}
 
 		// Call AI with streaming
-		streamErr := o.Primary.StreamWithHistory(ctxWithCancel, o.ConversationHistory, streamWriter)
+		streamErr := primaryForTurn.StreamWithHistory(ctxWithCancel, o.ConversationHistory, streamWriter)
 		cancel() // Release context resources for this turn immediately
 
 		// ── Context window + billing tracking ────────────────────────────────
@@ -307,15 +361,35 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 				if ctxWithCancel.Err() == context.Canceled {
 					marker = fmt.Sprintf("\n\n[SYSTEM INTERVENTION: %s]", monitor.GetDiagnostics())
 					// Reset error if we caused it intentionally
-					streamErr = nil 
+					streamErr = nil
 				} else {
 					marker = "\n\n[Response interrupted — resuming from here on next turn]"
 				}
 			}
 			o.ConversationHistory.AddAssistantMessage(response + marker)
+
+			// Persist assistant turn (fire-and-forget).
+			if o.PersistStore != nil {
+				go func(content string) { //nolint:errcheck
+					_ = o.PersistStore.SaveTurn(context.Background(), "assistant", content, nil)
+				}(response)
+			}
 		}
 
 		if streamErr != nil {
+			// Emit SENSE trace events for provider-level failures.
+			if o.SENSETracer != nil {
+				errMsg := streamErr.Error()
+				if isContextOverflowErr(errMsg) {
+					ctxTokens := 0
+					if o.ContextMgr != nil {
+						ctxTokens = o.ContextMgr.InputTokens()
+					}
+					o.SENSETracer.LogContextOverflow(currentProviderID, ctxTokens, errMsg)
+				} else {
+					o.SENSETracer.LogProviderError(currentProviderID, "", errMsg)
+				}
+			}
 			// On first turn, try provider cascade for outage-type errors.
 			if isProviderOutage(streamErr) && turn == 0 && currentProviderID != "" {
 				retryable, msg := o.RunProviderCascade(ctx, currentProviderID)
@@ -390,60 +464,102 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 				continue
 			}
 
+			// ── Vector store: index completed turn for future RAG retrieval ────
+			if o.VectorStore != nil && o.SessionID != "" {
+				go o.VectorStore.IndexTurn(context.Background(), o.SessionID, "user", prompt)
+				go o.VectorStore.IndexTurn(context.Background(), o.SessionID, "assistant", response)
+			}
+
 			break
 		}
 
 		o.Logger.Info("Found tool requests", "count", len(toolRequests), "turn", turn+1)
 
-		// Execute all requested tools
-		toolResults := []string{}
-		for i, req := range toolRequests {
-			o.Logger.Info("Executing tool", "tool", req.ToolName, "index", i+1, "total", len(toolRequests))
+		// Execute tools — in parallel when more than one is requested.
+		// Results are collected into a slice pre-sized to match request order
+		// so the AI always receives results in the same order it requested them.
+		toolResults := make([]string, len(toolRequests))
 
-			// Notify TUI that this tool is starting (shows call box + live panel).
+		if len(toolRequests) == 1 {
+			// Fast path: single tool, no goroutine overhead.
+			req := toolRequests[0]
+			o.Logger.Info("Executing tool", "tool", req.ToolName, "index", 1, "total", 1)
 			if toolStartCallback != nil {
 				toolStartCallback(req.ToolName, req.Parameters)
 			}
 			if o.Relay != nil {
 				o.Relay.SendToolStart(req.ToolName)
 			}
-
 			result, err := o.ExecuteTool(ctx, req)
 			if err != nil {
 				o.Logger.Error("Tool execution error", "tool", req.ToolName, "error", err)
-				result = &tools.ToolResult{
-					Success: false,
-					Error:   err.Error(),
-				}
-				// Record failure in Ralph Loop tracker.
+				result = &tools.ToolResult{Success: false, Error: err.Error()}
 				if o.RalphLoop != nil {
 					o.RalphLoop.RecordFailure(req.ToolName, err.Error())
 				}
-			} else if !result.Success {
-				// Tool returned a failure result (not an error).
-				if o.RalphLoop != nil && result.Error != "" {
-					o.RalphLoop.RecordFailure(req.ToolName, result.Error)
-				}
+			} else if !result.Success && o.RalphLoop != nil && result.Error != "" {
+				o.RalphLoop.RecordFailure(req.ToolName, result.Error)
 			}
-
-			// Notify callback if provided
 			if toolCallback != nil {
 				toolCallback(req.ToolName, result)
 			}
 			if o.Relay != nil {
 				o.Relay.SendToolDone(req.ToolName)
 			}
-
-			// Format tool result for AI
-			var resultStr string
 			if result.Success {
-				resultStr = fmt.Sprintf("<tool_result tool=\"%s\">\nSuccess: true\nOutput:\n%s\n</tool_result>",
+				toolResults[0] = fmt.Sprintf("<tool_result tool=\"%s\">\nSuccess: true\nOutput:\n%s\n</tool_result>",
 					req.ToolName, result.Output)
 			} else {
-				resultStr = fmt.Sprintf("<tool_result tool=\"%s\">\nSuccess: false\nError: %s\n</tool_result>",
+				toolResults[0] = fmt.Sprintf("<tool_result tool=\"%s\">\nSuccess: false\nError: %s\n</tool_result>",
 					req.ToolName, result.Error)
 			}
-			toolResults = append(toolResults, resultStr)
+		} else {
+			// Parallel path: dispatch all tools concurrently, preserve result order.
+			var wg sync.WaitGroup
+			var ralphMu sync.Mutex // guards RalphLoop calls
+			for i, req := range toolRequests {
+				wg.Add(1)
+				go func(idx int, req tools.ToolRequest) {
+					defer wg.Done()
+					o.Logger.Info("Executing tool (parallel)", "tool", req.ToolName, "index", idx+1, "total", len(toolRequests))
+					if toolStartCallback != nil {
+						toolStartCallback(req.ToolName, req.Parameters)
+					}
+					if o.Relay != nil {
+						o.Relay.SendToolStart(req.ToolName)
+					}
+					result, err := o.ExecuteTool(ctx, req)
+					if err != nil {
+						o.Logger.Error("Tool execution error", "tool", req.ToolName, "error", err)
+						result = &tools.ToolResult{Success: false, Error: err.Error()}
+						ralphMu.Lock()
+						if o.RalphLoop != nil {
+							o.RalphLoop.RecordFailure(req.ToolName, err.Error())
+						}
+						ralphMu.Unlock()
+					} else if !result.Success && result.Error != "" {
+						ralphMu.Lock()
+						if o.RalphLoop != nil {
+							o.RalphLoop.RecordFailure(req.ToolName, result.Error)
+						}
+						ralphMu.Unlock()
+					}
+					if toolCallback != nil {
+						toolCallback(req.ToolName, result)
+					}
+					if o.Relay != nil {
+						o.Relay.SendToolDone(req.ToolName)
+					}
+					if result.Success {
+						toolResults[idx] = fmt.Sprintf("<tool_result tool=\"%s\">\nSuccess: true\nOutput:\n%s\n</tool_result>",
+							req.ToolName, result.Output)
+					} else {
+						toolResults[idx] = fmt.Sprintf("<tool_result tool=\"%s\">\nSuccess: false\nError: %s\n</tool_result>",
+							req.ToolName, result.Error)
+					}
+				}(i, req)
+			}
+			wg.Wait()
 		}
 
 		// Build tool results message and add to history
@@ -541,6 +657,11 @@ type streamCallbackWriter struct {
 	orchestrator         *Orchestrator
 	interventionCallback InterventionCallback
 	relay                *collab.Relay // nil when session sharing is inactive
+
+	// thinking-block sentinel routing (Anthropic extended thinking)
+	thinkingCallback StreamCallback  // nil = no thinking panel wired
+	inThinking       bool            // true while between \x02 and \x03
+	thinkingBuf      strings.Builder // accumulates partial thinking text within one Write call
 }
 
 func (w *streamCallbackWriter) Write(p []byte) (n int, err error) {
@@ -553,6 +674,55 @@ func (w *streamCallbackWriter) Write(p []byte) (n int, err error) {
 		}
 		return len(p), nil
 	}
+
+	// ── Extended thinking sentinel routing ─────────────────────────────────
+	// anthropic.go emits \x02 before thinking text and \x03 after it.
+	// We parse them out here so thinking tokens never reach the main stream
+	// or the response buffer (they're for the separate thinking panel only).
+	if w.thinkingCallback != nil || w.inThinking {
+		// Walk the token character by character to split on sentinel boundaries.
+		// Most tokens won't contain sentinels so we fast-path the common case.
+		const startSentinel = '\x02'
+		const endSentinel = '\x03'
+		hasStart := strings.ContainsRune(s, startSentinel)
+		hasEnd := strings.ContainsRune(s, endSentinel)
+		if w.inThinking || hasStart || hasEnd {
+			var mainText strings.Builder
+			for _, ch := range s {
+				switch {
+				case ch == startSentinel:
+					w.inThinking = true
+				case ch == endSentinel:
+					// Flush anything buffered in thinking mode, then signal done.
+					if w.thinkingCallback != nil && w.thinkingBuf.Len() > 0 {
+						w.thinkingCallback(w.thinkingBuf.String())
+						w.thinkingBuf.Reset()
+					}
+					// Signal end of thinking block.
+					if w.thinkingCallback != nil {
+						w.thinkingCallback("\x03") // ThinkingDone sentinel forwarded to TUI
+					}
+					w.inThinking = false
+				case w.inThinking:
+					// Accumulate in thinking buffer; flush in batches for smooth streaming.
+					w.thinkingBuf.WriteRune(ch)
+				default:
+					mainText.WriteRune(ch)
+				}
+			}
+			// Flush partial thinking buffer eagerly (each Write is already batched).
+			if w.inThinking && w.thinkingCallback != nil && w.thinkingBuf.Len() > 0 {
+				w.thinkingCallback(w.thinkingBuf.String())
+				w.thinkingBuf.Reset()
+			}
+			// Replace s with the non-thinking remainder.
+			s = mainText.String()
+			if s == "" {
+				return len(p), nil // nothing left for the main stream
+			}
+		}
+	}
+	// ── end sentinel routing ────────────────────────────────────────────────
 
 	// Monitor the stream for issues
 	if w.monitor != nil {

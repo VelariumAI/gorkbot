@@ -1,0 +1,13 @@
+{
+  "name": "shell_command_executor",
+  "description": "Executes safe shell commands and reads system files, with proper escaping and error handling",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

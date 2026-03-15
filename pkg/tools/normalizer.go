@@ -41,9 +41,9 @@ func NormalizeToolParams(toolName string, params map[string]interface{}) map[str
 		rename("dir", "path")
 	}
 
-	// "cmd" → "command" for bash
+	// "cmd" → "command" for all shell execution tools
 	switch toolName {
-	case "bash":
+	case "bash", "privileged_execute", "structured_bash":
 		rename("cmd", "command")
 	}
 
@@ -106,6 +106,12 @@ func normalizeToolName(name string) string {
 		return "bash"
 	case "shell":
 		return "bash"
+	// privileged_execute aliases
+	case "privileged_bash", "sudo_bash", "sudo_exec", "priv_exec", "priv_bash":
+		return "privileged_execute"
+	// structured_bash aliases
+	case "structured_exec", "structured_shell", "struct_bash", "parsed_bash":
+		return "structured_bash"
 	default:
 		return name
 	}

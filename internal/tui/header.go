@@ -68,7 +68,7 @@ func getGlistenColor(letterIdx, totalLetters int, glistenPos, spotlightPos float
 
 	// === MAIN GLISTEN WAVE (Background Pulse) ===
 	// Slow, deep pulse using cosine wave
-	pulsePhase := 2.0 * math.Pi * (glistenPos * 0.5) // Slower background pulse
+	pulsePhase := 2.0 * math.Pi * (glistenPos * 0.5)            // Slower background pulse
 	pulseBrightness := (math.Cos(pulsePhase) + 1.0) / 2.0 * 0.3 // Base brightness 0.0-0.3
 
 	// === SEARCHLIGHT SWEEP (Deterministic Single Pass) ===
@@ -92,9 +92,9 @@ func getGlistenColor(letterIdx, totalLetters int, glistenPos, spotlightPos float
 
 	// Map brightness to blood red color shades
 	if totalBrightness < 0.3 {
-		return "52"  // Darkest red
+		return "52" // Darkest red
 	} else if totalBrightness < 0.5 {
-		return "88"  // Dark red
+		return "88" // Dark red
 	} else if totalBrightness < 0.7 {
 		return "124" // Medium red
 	} else if totalBrightness < 0.9 {

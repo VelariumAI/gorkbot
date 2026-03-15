@@ -11,16 +11,16 @@ import (
 
 // Task represents a single task in the task list
 type Task struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	Status      string    `json:"status"` // pending, in_progress, completed
-	Priority    string    `json:"priority"` // low, medium, high
-	Created     time.Time `json:"created"`
-	Updated     time.Time `json:"updated"`
-	Completed   time.Time `json:"completed,omitempty"`
-	Subtasks    []Task    `json:"subtasks,omitempty"`
-	Dependencies []string `json:"dependencies,omitempty"` // IDs of tasks this depends on
+	ID           string    `json:"id"`
+	Title        string    `json:"title"`
+	Description  string    `json:"description"`
+	Status       string    `json:"status"`   // pending, in_progress, completed
+	Priority     string    `json:"priority"` // low, medium, high
+	Created      time.Time `json:"created"`
+	Updated      time.Time `json:"updated"`
+	Completed    time.Time `json:"completed,omitempty"`
+	Subtasks     []Task    `json:"subtasks,omitempty"`
+	Dependencies []string  `json:"dependencies,omitempty"` // IDs of tasks this depends on
 }
 
 // TaskList represents the entire task list
@@ -104,11 +104,11 @@ type TodoWriteTool struct {
 func NewTodoWriteTool() *TodoWriteTool {
 	return &TodoWriteTool{
 		BaseTool: BaseTool{
-			name:              "todo_write",
-			description:       "Create or update tasks in the task list",
-			category:          CategoryMeta,
+			name:               "todo_write",
+			description:        "Create or update tasks in the task list",
+			category:           CategoryMeta,
 			requiresPermission: false,
-			defaultPermission: PermissionAlways,
+			defaultPermission:  PermissionAlways,
 		},
 	}
 }
@@ -292,11 +292,11 @@ type TodoReadTool struct {
 func NewTodoReadTool() *TodoReadTool {
 	return &TodoReadTool{
 		BaseTool: BaseTool{
-			name:              "todo_read",
-			description:       "Read tasks from the task list with optional filtering",
-			category:          CategoryMeta,
+			name:               "todo_read",
+			description:        "Read tasks from the task list with optional filtering",
+			category:           CategoryMeta,
 			requiresPermission: false,
-			defaultPermission: PermissionAlways,
+			defaultPermission:  PermissionAlways,
 		},
 	}
 }
@@ -431,11 +431,11 @@ type CompleteTool struct {
 func NewCompleteTool() *CompleteTool {
 	return &CompleteTool{
 		BaseTool: BaseTool{
-			name:              "complete",
-			description:       "Mark a project as complete with a summary and archive all tasks",
-			category:          CategoryMeta,
+			name:               "complete",
+			description:        "Mark a project as complete with a summary and archive all tasks",
+			category:           CategoryMeta,
 			requiresPermission: false,
-			defaultPermission: PermissionAlways,
+			defaultPermission:  PermissionAlways,
 		},
 	}
 }

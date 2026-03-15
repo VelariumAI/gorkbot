@@ -1,0 +1,13 @@
+{
+  "name": "termux_bash_automation",
+  "description": "A generalized plugin for Termux automation tasks including file cleanup, environment variable management, bashrc reloading, and command execution",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

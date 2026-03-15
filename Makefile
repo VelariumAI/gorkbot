@@ -1,17 +1,28 @@
 APP_NAME := gorkbot
+WEB_APP_NAME := gorkweb
 CMD_PATH := ./cmd/gorkbot
+WEB_CMD_PATH := ./cmd/gorkweb
 BUILD_DIR := ./bin
 SHORT_NAME := gork
 INSTALL_DIR := $(HOME)/bin
+LLM_DIR := ./internal/llm
+LLAMA_ROOT := ./ext/llama.cpp
 
-.PHONY: all build clean install install-global build-windows build-android build-linux
+.PHONY: all build clean install install-global \
+        build-windows build-android build-linux \
+        build-llm-bridge build-llm clean-llm download-nomic build-web
 
-all: build
+all: build build-web
 
 build:
 	@echo "Building $(APP_NAME) for host OS..."
 	@mkdir -p $(BUILD_DIR)
 	go build -o $(BUILD_DIR)/$(APP_NAME) $(CMD_PATH)
+
+build-web:
+	@echo "Building $(WEB_APP_NAME) for host OS..."
+	@mkdir -p $(BUILD_DIR)
+	go build -o $(BUILD_DIR)/$(WEB_APP_NAME) $(WEB_CMD_PATH)
 
 build-windows:
 	@echo "Building for Windows (amd64)..."
@@ -32,26 +43,56 @@ clean:
 	@echo "Cleaning..."
 	@rm -rf $(BUILD_DIR)
 
-install: build
+install: build build-web
 	@echo "Installing to $(GOPATH)/bin..."
 	@go install $(CMD_PATH)
+	@go install $(WEB_CMD_PATH)
 
-# Install as 'gork' in ~/bin (works in Termux — no root needed).
-# Installs the launcher script (which loads .env) rather than the raw binary,
-# so API keys are always picked up automatically.
-# Then add  export PATH="$HOME/bin:$PATH"  to ~/.bashrc if not already there.
-install-global: build
-	@mkdir -p $(INSTALL_DIR)
-	@# Install the raw binary next to the launcher so the script can find it.
-	@cp $(BUILD_DIR)/$(APP_NAME) $(INSTALL_DIR)/$(APP_NAME)
-	@# Create a self-contained 'gork' launcher in ~/bin that sources .env from
-	@# the project directory and then delegates to the binary.
-	@PROJ="$(CURDIR)" && printf '#!/bin/bash\n# Gorkbot global launcher — auto-sources .env\nset -e\nENV_FILE="%s/.env"\nBINARY="%s/$(BUILD_DIR)/$(APP_NAME)"\nif [ -f "$$ENV_FILE" ]; then\n  set -a; source <(grep -v '"'"'^#'"'"' "$$ENV_FILE" | grep -v '"'"'^$$'"'"' | sed '"'"'s/\\r//'"'"'); set +a\nfi\nexec "$$BINARY" "$$@"\n' "$$PROJ" "$$PROJ" > $(INSTALL_DIR)/$(SHORT_NAME)
-	@chmod +x $(INSTALL_DIR)/$(SHORT_NAME)
-	@echo ""
-	@echo "✅ Installed as: $(INSTALL_DIR)/$(SHORT_NAME)"
-	@echo ""
-	@echo "If ~/bin is not yet on your PATH, run:"
-	@echo "  echo 'export PATH=\"\$$HOME/bin:\$$PATH\"' >> ~/.bashrc && source ~/.bashrc"
-	@echo ""
-	@echo "Then just type: gork"
+# ── Global installation ────────────────────────────────────────────────────
+# Full unified install: builds the C++ LLM bridge, compiles with llamacpp
+# tag, downloads nomic embedding model if absent, installs binary to
+# ~/bin/gorkbot, and writes a self-contained 'gork' launcher.
+# No root needed — works in Termux and standard Linux.
+#
+# Add ~/bin to PATH if not already there:
+#   echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+
+install-global: build-llm download-nomic build-web
+	@install -m 755 $(BUILD_DIR)/$(APP_NAME) $(INSTALL_DIR)/$(APP_NAME)
+	@install -m 755 $(BUILD_DIR)/$(WEB_APP_NAME) $(INSTALL_DIR)/$(WEB_APP_NAME)
+	@bash scripts/write_launcher.sh $(INSTALL_DIR) $(APP_NAME) $(SHORT_NAME)
+
+# ── Local LLM engine (llamacpp build tag) ─────────────────────────────────────
+
+# Compile the C++ bridge → internal/llm/libgorkbot_llm.a
+build-llm-bridge:
+	@echo "Compiling LLM bridge (C++ → static lib)..."
+	@bash scripts/build_llm_bridge.sh
+
+# Build gorkbot with the native LLM engine enabled.
+build-llm: build-llm-bridge
+	@echo "Building $(APP_NAME) with local LLM engine..."
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=1 go build -tags llamacpp -o $(BUILD_DIR)/$(APP_NAME) $(CMD_PATH)
+	@echo "✓ Built $(BUILD_DIR)/$(APP_NAME) (with llamacpp)"
+
+# Clean LLM bridge artifacts (does not touch ext/llama.cpp).
+clean-llm:
+	@echo "Cleaning LLM bridge artifacts..."
+	@rm -f $(LLM_DIR)/libgorkbot_llm.a $(LLM_DIR)/llm_bridge.o
+
+# Download the nomic-embed-text-v1.5 embedding model (~274 MB, Q4_K_M).
+# Used by the semantic MEL heuristic store when no cloud embedder is configured.
+download-nomic:
+	@echo "Downloading nomic-embed-text-v1.5.Q4_K_M.gguf..."
+	@mkdir -p $(HOME)/.cache/llama.cpp
+	@MODEL_FILE="$(HOME)/.cache/llama.cpp/nomic-embed-text-v1.5.Q4_K_M.gguf"; \
+	 URL="https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q4_K_M.gguf"; \
+	 if [ -f "$$MODEL_FILE" ]; then \
+	   echo "Already present: $$MODEL_FILE"; \
+	 else \
+	   echo "Downloading from HuggingFace (~274 MB)..."; \
+	   curl -L --progress-bar -C - -o "$$MODEL_FILE" "$$URL"; \
+	   echo "✓ Downloaded $$MODEL_FILE"; \
+	 fi
+
