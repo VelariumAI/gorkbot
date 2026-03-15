@@ -10,7 +10,8 @@ LLAMA_ROOT := ./ext/llama.cpp
 
 .PHONY: all build clean install install-global \
         build-windows build-android build-linux \
-        build-llm-bridge build-llm clean-llm download-nomic build-web
+        build-llm-bridge build-llm clean-llm download-nomic build-web \
+        init-submodules
 
 all: build build-web
 
@@ -64,8 +65,18 @@ install-global: build-llm download-nomic build-web
 
 # ── Local LLM engine (llamacpp build tag) ─────────────────────────────────────
 
+# Ensure ext/llama.cpp submodule is checked out before any C++ build step.
+init-submodules:
+	@if [ ! -f "$(LLAMA_ROOT)/include/llama.h" ]; then \
+	  echo "Initialising ext/llama.cpp submodule..."; \
+	  git submodule update --init --checkout --force ext/llama.cpp; \
+	  echo "✓ ext/llama.cpp ready"; \
+	else \
+	  echo "✓ ext/llama.cpp already present"; \
+	fi
+
 # Compile the C++ bridge → internal/llm/libgorkbot_llm.a
-build-llm-bridge:
+build-llm-bridge: init-submodules
 	@echo "Compiling LLM bridge (C++ → static lib)..."
 	@bash scripts/build_llm_bridge.sh
 
