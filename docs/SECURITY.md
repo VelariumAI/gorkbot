@@ -127,7 +127,7 @@ Your current setup is now **secure**:
 ```go
 // pkg/auth/oauth.go
 const (
-    DefaultClientID = "200519342786-...apps.googleusercontent.com"  // ✅ Public
+    DefaultClientID = "YOUR_CLIENT_ID.apps.googleusercontent.com"  // ✅ Public
     DefaultClientSecret = ""  // ✅ Empty (uses env var)
 )
 ```
@@ -135,7 +135,7 @@ const (
 ### Environment Variables (Private - NOT committed):
 ```bash
 # .env (in .gitignore)
-GOOGLE_CLIENT_ID=200519342786-...apps.googleusercontent.com
+GOOGLE_CLIENT_ID=YOUR_CLIENT_ID.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=GOCSPX-YOUR_CLIENT_SECRET_HERE  # ⚠️ Private!
 ```
 
