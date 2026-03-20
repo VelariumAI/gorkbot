@@ -106,3 +106,55 @@ test_mcp_json.go
 for_claude.txt
 for_claude.md
 glm-work_handoff.txt
+
+# ==== DEVELOPMENT ONLY (never commit) ====
+# Demo & test data
+bash_demo/
+blockmosaic/
+components/
+configs/
+mcp_servers/
+orchestrator/
+plugins/
+server/
+scripts/
+
+# Generated & dynamic tools
+pkg/tools/custom/
+pkg/vision/captures/
+
+# Cache directories
+.cache/
+tmp/
+temp/
+*.tmp
+
+# Data files (except templates)
+*.db
+*.sqlite
+*.sqlite3
+*.jsonl
+vector_store.json
+usage_history.jsonl
+
+# IDE project files
+.vscode/project.json
+.idea/
+*.iml
+
+# Python development
+venv/
+.venv/
+*.egg-info/
+
+# Ext submodule build artifacts
+ext/llama.cpp/build/
+ext/llama.cpp/gguf/
+ext/llama.cpp/examples/
+ext/llama.cpp/tests/
+ext/llama.cpp/cmake_build_*/
+
+# Generated code
+*_grpc.pb.go
+*_pb2.py
+*_generated.go

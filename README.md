@@ -1,12 +1,10 @@
-# Gorkbot - Multi-Provider AI Orchestration Platform
+# Gorkbot 🚀
 
-**Gorkbot** is a sophisticated, production-grade Go-based AI orchestration platform that seamlessly integrates multiple AI providers (xAI Grok, Google Gemini, Anthropic Claude, OpenAI GPT, MiniMax) into a unified intelligent agent system. It features a professional terminal user interface (TUI), a comprehensive tool ecosystem with 75+ built-in tools, advanced routing intelligence, memory management, and extensibility features for dynamic tool creation and custom integrations.
+**Gorkbot** is an **AI-powered orchestration platform** that unifies multiple large language models (LLMs) into a single, intelligent terminal interface. It integrates Grok (xAI), Gemini (Google), Claude (Anthropic), and other OpenAI-compatible providers into a sophisticated reasoning engine with real-time streaming, autonomous tool execution, cross-session memory, and human-in-the-loop approval gates.
 
-**Public Version:** 1.2.0-beta
-**Internal Version:** 5.3.0
-**Build:** Go 1.25.0
-**Platform:** Linux, macOS, Windows, Android/Termux
-**License:** Proprietary (Velarium AI)
+**Public Version:** 1.2.0-beta | **Internal Version:** 5.3.0 (Development)
+**Build:** Go 1.25.0 | **Platform:** Linux, macOS, Windows, Android/Termux
+**License:** MIT
 
 ---
 
