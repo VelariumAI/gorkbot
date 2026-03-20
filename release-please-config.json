@@ -62,9 +62,12 @@
       "release-as": null,
       "skip-github-release": false,
       "tag-separator": "v",
-      "component": null
+      "component": null,
+      "package-name": "gorkbot"
     }
   },
+  "release-type": "go",
+  "version-file": "VERSION",
   "pull-request-title-pattern": "chore(release): Automatic Version Bump v${version}",
   "release-notes": {
     "sections": [
