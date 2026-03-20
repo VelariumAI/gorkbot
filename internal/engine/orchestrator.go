@@ -62,6 +62,10 @@ type Orchestrator struct {
 	// and provider errors that occur during streaming (outside the tool layer).
 	SENSETracer *sense.SENSETracer
 
+	// MessageSuppressionMiddleware filters internal system messages based on verbose mode.
+	// Nil = no suppression (all messages passed through).
+	MessageSuppressor *MessageSuppressionMiddleware
+
 	// ── Enhanced systems (P0/P1/P2) ─────────────────────────────────────────
 	// ContextMgr tracks token usage and triggers auto-compaction.
 	ContextMgr *ContextManager

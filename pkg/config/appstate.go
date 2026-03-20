@@ -38,6 +38,15 @@ type AppState struct {
 
 	// EnsembleEnabled controls the multi-trajectory ensemble reasoning.
 	EnsembleEnabled *bool `json:"ensemble_enabled,omitempty"`
+
+	// VerboseMode controls whether internal system messages are suppressed.
+	// nil/false = silent mode (suppress internal messages)
+	// true = verbose mode (show all messages including system narration)
+	VerboseMode *bool `json:"verbose_mode,omitempty"`
+
+	// SuppressionConfig stores output filtering preferences.
+	// These control which categories of internal messages to suppress.
+	SuppressionConfig map[string]bool `json:"suppression_config,omitempty"`
 }
 
 // AppStateManager loads and saves AppState to a JSON file in the config directory.
@@ -163,6 +172,46 @@ func (m *AppStateManager) SetSREEnabled(v bool) error {
 func (m *AppStateManager) SetEnsembleEnabled(v bool) error {
 	m.mu.Lock()
 	m.st.EnsembleEnabled = &v
+	m.mu.Unlock()
+	return m.save()
+}
+
+// IsVerboseMode returns true when verbose mode is enabled (show all messages).
+// Returns false by default (nil means silent mode, suppression active).
+func (m *AppStateManager) IsVerboseMode() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.st.VerboseMode != nil && *m.st.VerboseMode
+}
+
+// SetVerboseMode persists the verbose mode enabled/disabled preference.
+func (m *AppStateManager) SetVerboseMode(v bool) error {
+	m.mu.Lock()
+	m.st.VerboseMode = &v
+	m.mu.Unlock()
+	return m.save()
+}
+
+// GetSuppressionConfig returns the output suppression configuration.
+// Returns nil if not set (will use defaults).
+func (m *AppStateManager) GetSuppressionConfig() map[string]bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.st.SuppressionConfig == nil {
+		return nil
+	}
+	// Return a copy to prevent external modification
+	config := make(map[string]bool)
+	for k, v := range m.st.SuppressionConfig {
+		config[k] = v
+	}
+	return config
+}
+
+// SetSuppressionConfig persists the output suppression configuration.
+func (m *AppStateManager) SetSuppressionConfig(config map[string]bool) error {
+	m.mu.Lock()
+	m.st.SuppressionConfig = config
 	m.mu.Unlock()
 	return m.save()
 }

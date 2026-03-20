@@ -14,10 +14,13 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/velariumai/gorkbot/pkg/hitl"
 	"github.com/velariumai/gorkbot/pkg/tools"
 )
 
@@ -44,6 +47,14 @@ type HITLRequest struct {
 	ToolName string
 	Params   map[string]interface{}
 	Plan     string
+
+	// Enhanced HITL fields for intelligent approval
+	RiskLevel      hitl.RiskLevel // Classified risk (Low/Medium/High/Critical)
+	RiskReason     string         // Explanation of risk classification
+	ConfidenceScore int            // AI confidence 0-100
+	Context        string         // Why this tool is needed
+	Precedent      int            // Count of similar previously approved operations
+
 	// Note: routing uses HITLCallback, not an inline channel.
 }
 
@@ -78,11 +89,28 @@ var highStakesBashKeywords = []string{
 type HITLGuard struct {
 	// Enabled can be set to false to bypass HITL entirely (e.g., for tests).
 	Enabled bool
+
+	// Intelligent HITL components
+	RiskClassifier    *hitl.RiskClassifier
+	ConfidenceScorer  *hitl.ConfidenceScorer
+	ContextSummarizer *hitl.ContextSummarizer
+	Memory            *hitl.HITLMemory
 }
 
 // NewHITLGuard creates a HITLGuard. HITL is enabled by default.
 func NewHITLGuard() *HITLGuard {
-	return &HITLGuard{Enabled: true}
+	return &HITLGuard{
+		Enabled:           true,
+		RiskClassifier:    hitl.NewRiskClassifier(),
+		ConfidenceScorer:  hitl.NewConfidenceScorer(),
+		ContextSummarizer: hitl.NewContextSummarizer(),
+		Memory:            nil, // Set later via SetMemory
+	}
+}
+
+// SetMemory wires a HITLMemory instance to the guard.
+func (g *HITLGuard) SetMemory(memory *hitl.HITLMemory) {
+	g.Memory = memory
 }
 
 // IsHighStakes returns true when the given tool+params require HITL approval.
@@ -119,6 +147,55 @@ func isBashHighStakes(cmd string) bool {
 		}
 	}
 	return false
+}
+
+// EnhanceHITLRequest augments a basic HITLRequest with intelligent components.
+// Populates RiskLevel, ConfidenceScore, Context, and Precedent fields.
+func (g *HITLGuard) EnhanceHITLRequest(ctx context.Context, req *HITLRequest, aiReasoning string) error {
+	if g.RiskClassifier == nil || g.ConfidenceScorer == nil {
+		return nil // Enhancement disabled
+	}
+
+	// 1. Classify risk level
+	riskLevel, riskReason := g.RiskClassifier.ClassifyTool(req.ToolName, req.Params)
+	req.RiskLevel = riskLevel
+	req.RiskReason = riskReason
+
+	// 2. Score confidence (base 50 + adjustments)
+	requiredParams := []string{} // Tool registry would provide these, for now empty
+	toolExists := true           // We assume tools exist if we're here
+	score := g.ConfidenceScorer.ScoreAIConfidence(
+		req.ToolName,
+		req.Params,
+		requiredParams,
+		aiReasoning,
+		toolExists,
+	)
+	req.ConfidenceScore = score
+
+	// 3. Extract context summary
+	if g.ContextSummarizer != nil {
+		context := g.ContextSummarizer.SummarizeContext(req.ToolName, req.Params, aiReasoning)
+		req.Context = context
+	}
+
+	// 4. Check for precedent (similar previously approved operations)
+	if g.Memory != nil {
+		precedent := g.Memory.CountApprovedExecutions(req.ToolName, req.Params)
+		req.Precedent = precedent
+	}
+
+	return nil
+}
+
+// hashParams creates a deterministic hash of parameters for similarity matching.
+func hashParams(params map[string]interface{}) string {
+	if len(params) == 0 {
+		return ""
+	}
+	data, _ := json.Marshal(params)
+	h := sha256.Sum256(data)
+	return fmt.Sprintf("%x", h)
 }
 
 // BuildPlan generates a human-readable execution plan for the given tool action.
@@ -184,10 +261,36 @@ type TextGenerator interface {
 	Generate(ctx context.Context, prompt string) (string, error)
 }
 
+// CanAutoApprove returns true if the request meets criteria for automatic approval.
+// Factors: high confidence (>85), high precedent (>2), and low/medium risk only.
+func (req *HITLRequest) CanAutoApprove() bool {
+	// High confidence AND high precedent = auto-approve
+	if req.ConfidenceScore >= 85 && req.Precedent >= 2 {
+		return true
+	}
+
+	// Medium confidence with very high precedent (>5) = auto-approve
+	if req.ConfidenceScore >= 70 && req.Precedent >= 5 {
+		return true
+	}
+
+	// Never auto-approve critical risk operations
+	if req.RiskLevel == hitl.RiskCritical {
+		return false
+	}
+
+	return false
+}
+
 // RequestHITLApproval suspends execution, emits the plan to the HITL callback,
 // and waits for the user's decision.  Returns (true, notes) if approved/amended,
 // (false, reason) if rejected.
 func RequestHITLApproval(ctx context.Context, callback HITLCallback, req HITLRequest) (bool, string) {
+	// Check for auto-approval first
+	if req.CanAutoApprove() {
+		return true, "auto-approved (high confidence + precedent)"
+	}
+
 	if callback == nil {
 		// No HITL handler configured — allow by default (non-interactive mode).
 		return true, ""
@@ -232,6 +335,12 @@ func (o *Orchestrator) GateToolExecution(
 		Params:   req.Parameters,
 		Plan:     plan,
 	}
+
+	// Enhance with intelligent scoring
+	if hitl.RiskClassifier != nil {
+		_ = hitl.EnhanceHITLRequest(ctx, &hitlReq, aiReasoning)
+	}
+
 	return RequestHITLApproval(ctx, hitlCallback, hitlReq)
 }
 

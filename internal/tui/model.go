@@ -119,10 +119,11 @@ type Model struct {
 	interventionChan   chan engine.InterventionResponse
 
 	// SENSE HITL approval state
-	awaitingHITL bool
-	hitlRequest  *engine.HITLRequest
-	hitlChan     chan engine.HITLDecision
-	hitlQueue    []hitlPendingItem // FIFO queue of pending HITL requests
+	awaitingHITL  bool
+	hitlRequest   *engine.HITLRequest
+	hitlChan      chan engine.HITLDecision
+	hitlQueue     []hitlPendingItem // FIFO queue of pending HITL requests
+	hitlOverlay   *HITLOverlay      // Rich HITL approval dialog
 
 	// Content
 	messages        []Message

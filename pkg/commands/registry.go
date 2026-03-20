@@ -98,6 +98,10 @@ type OrchestratorAdapter struct {
 	// A budget of 0 disables extended thinking.  Returns a status string.
 	SetThinkingBudget func(budget int) string
 
+	// Verbose mode helpers for message suppression
+	GetVerboseMode func() bool
+	SetVerboseMode func(enabled bool) error
+
 	// GetCascadeOrder returns the current provider failover order as a string slice.
 	GetCascadeOrder func() []string
 	// SetCascadeOrder updates the cascade order and persists it to AppState.
@@ -321,6 +325,14 @@ func (r *Registry) registerCommands() {
 		Description: "View settings and configuration",
 		Usage:       "/settings",
 		Handler:     r.handleSettings,
+	}
+
+	r.commands["verbose"] = &CommandDefinition{
+		Name:        "verbose",
+		Description: "Toggle verbose mode (show/hide internal system messages)",
+		Usage:       "/verbose [on|off|toggle]",
+		Handler:     r.handleVerbose,
+		IsModifier:  true,
 	}
 
 	r.commands["version"] = &CommandDefinition{
@@ -1285,6 +1297,46 @@ func (r *Registry) handleAuthNotebookLM(sub string, extraArgs []string) (string,
 func (r *Registry) handleSettings(args []string) (string, error) {
 	// Signal the TUI to open the interactive settings overlay.
 	return "SETTINGS_MODAL", nil
+}
+
+func (r *Registry) handleVerbose(args []string) (string, error) {
+	// Get current state
+	if r.Orch == nil || r.Orch.GetVerboseMode == nil {
+		return "Verbose mode is not available", nil
+	}
+
+	currentState := r.Orch.GetVerboseMode()
+
+	// Parse argument
+	var newState bool
+	if len(args) == 0 {
+		// Toggle
+		newState = !currentState
+	} else {
+		switch strings.ToLower(args[0]) {
+		case "on", "yes", "true", "1":
+			newState = true
+		case "off", "no", "false", "0":
+			newState = false
+		case "toggle":
+			newState = !currentState
+		default:
+			return fmt.Sprintf("Invalid argument: %s. Use 'on', 'off', or 'toggle'", args[0]), nil
+		}
+	}
+
+	// Set new state
+	if r.Orch.SetVerboseMode != nil {
+		if err := r.Orch.SetVerboseMode(newState); err != nil {
+			return fmt.Sprintf("Error setting verbose mode: %v", err), err
+		}
+	}
+
+	statusStr := "off (suppressing internal system messages)"
+	if newState {
+		statusStr = "on (showing all messages including system narration)"
+	}
+	return fmt.Sprintf("Verbose mode is now **%s**", statusStr), nil
 }
 
 // GetToolRegistry exposes the tool registry for use by the settings overlay.

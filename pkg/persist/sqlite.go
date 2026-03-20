@@ -139,6 +139,12 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("migrate v5: %w", err)
 		}
 	}
+
+	if version < 6 {
+		if err := s.migrateV6(); err != nil {
+			return fmt.Errorf("migrate v6: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -174,6 +180,39 @@ func (s *Store) migrateV5() error {
 
 	// Mark schema as v5.
 	_, err := s.db.Exec(`UPDATE schema_version SET version = 5`)
+	return err
+}
+
+// migrateV6 adds HITL decision history table for intelligent tool approval tracking.
+func (s *Store) migrateV6() error {
+	if _, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS hitl_decisions (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id      TEXT NOT NULL,
+			tool_name       TEXT NOT NULL,
+			params_hash     TEXT NOT NULL,
+			params_json     TEXT DEFAULT '{}',
+			approved        INTEGER DEFAULT 0,
+			rejected        INTEGER DEFAULT 0,
+			notes           TEXT DEFAULT '',
+			risk_level      INTEGER DEFAULT 0,
+			confidence      INTEGER DEFAULT 0,
+			execution_result TEXT DEFAULT '',
+			similar_count   INTEGER DEFAULT 0,
+			created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_hitl_tool ON hitl_decisions(tool_name);
+		CREATE INDEX IF NOT EXISTS idx_hitl_hash ON hitl_decisions(params_hash);
+		CREATE INDEX IF NOT EXISTS idx_hitl_session ON hitl_decisions(session_id);
+		CREATE INDEX IF NOT EXISTS idx_hitl_approval ON hitl_decisions(approved);
+		CREATE INDEX IF NOT EXISTS idx_hitl_time ON hitl_decisions(created_at DESC);
+	`); err != nil {
+		return err
+	}
+
+	// Mark schema as v6.
+	_, err := s.db.Exec(`UPDATE schema_version SET version = 6`)
 	return err
 }
 
@@ -552,6 +591,68 @@ func (s *Store) SessionCount(ctx context.Context) (int, error) {
 	var count int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT session_id) FROM conversations`).Scan(&count)
 	return count, err
+}
+
+// SaveHITLDecision stores a HITL approval/rejection decision in the database.
+func (s *Store) SaveHITLDecision(ctx context.Context, toolName, paramsHash, paramsJSON string, approved bool, riskLevel, confidence int, notes string) error {
+	approvedInt := 0
+	if approved {
+		approvedInt = 1
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO hitl_decisions (session_id, tool_name, params_hash, params_json, approved, risk_level, confidence, notes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, s.sessionID, toolName, paramsHash, paramsJSON, approvedInt, riskLevel, confidence, notes)
+	return err
+}
+
+// CountApprovedExecutions returns count of similar previously approved operations.
+func (s *Store) CountApprovedExecutions(ctx context.Context, toolName string, paramsHash string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM hitl_decisions
+		WHERE tool_name = ? AND params_hash = ? AND approved = 1
+	`, toolName, paramsHash).Scan(&count)
+	return count, err
+}
+
+// WasRecentlyRejected checks if a tool was rejected in the last N hours.
+func (s *Store) WasRecentlyRejected(ctx context.Context, toolName string, paramsHash string, hoursBack int) (bool, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM hitl_decisions
+		WHERE tool_name = ? AND params_hash = ? AND rejected = 1
+		AND created_at > datetime('now', '-' || ? || ' hours')
+	`, toolName, paramsHash, hoursBack).Scan(&count)
+	return count > 0, err
+}
+
+// GetHITLStats returns approval/rejection statistics for a tool.
+func (s *Store) GetHITLStats(ctx context.Context, toolName string) (approved int, rejected int, totalRisk float64, avgConfidence float64, err error) {
+	var approvedCount, rejectedCount int
+	var totalRiskVal float64
+	var avgConfVal float64
+
+	err = s.db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(CASE WHEN approved = 1 THEN 1 END),
+			COUNT(CASE WHEN rejected = 1 THEN 1 END),
+			COALESCE(AVG(risk_level), 0),
+			COALESCE(AVG(confidence), 0)
+		FROM hitl_decisions
+		WHERE tool_name = ?
+	`, toolName).Scan(&approvedCount, &rejectedCount, &totalRiskVal, &avgConfVal)
+
+	return approvedCount, rejectedCount, totalRiskVal, avgConfVal, err
+}
+
+// PruneOldHITLDecisions deletes HITL records older than the specified number of days.
+func (s *Store) PruneOldHITLDecisions(ctx context.Context, daysOld int) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM hitl_decisions
+		WHERE created_at < datetime('now', '-' || ? || ' days')
+	`, daysOld)
+	return err
 }
 
 // Close closes the underlying database connection.

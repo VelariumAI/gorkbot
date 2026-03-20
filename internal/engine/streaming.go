@@ -488,6 +488,7 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 			relay:                o.Relay,
 			thinkingCallback:     o.ThinkingCallback,
 			statusUpdateFreq:     10, // emit status every 10 tokens
+			suppressor:           o.MessageSuppressor, // Apply message suppression if configured
 		}
 
 		// Apply thinking budget to provider if supported.
@@ -966,6 +967,9 @@ type streamCallbackWriter struct {
 	modelID           string    // model being used (e.g. "grok-4-fast-")
 	statusUpdateFreq  int       // throttle status updates: emit every N tokens (default 10)
 	lastStatusTokens  int       // tokens at last status update
+
+	// Message suppression for filtering internal system messages
+	suppressor *MessageSuppressionMiddleware // nil = no suppression (all messages passed through)
 }
 
 func (w *streamCallbackWriter) Write(p []byte) (n int, err error) {
@@ -1078,8 +1082,12 @@ func (w *streamCallbackWriter) Write(p []byte) (n int, err error) {
 		}
 	}
 
-	// Call the stream callback with the token
-	if w.callback != nil {
+	// Apply message suppression if configured, then call the callback
+	if w.suppressor != nil {
+		s = w.suppressor.ProcessStreamingToken(s)
+	}
+
+	if w.callback != nil && s != "" {
 		w.callback(s)
 	}
 

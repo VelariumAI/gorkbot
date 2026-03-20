@@ -270,6 +270,9 @@ func main() {
 	// 6. Orchestration Engine
 	orch := engine.NewOrchestrator(primary, consultant, registry, logger, *watchdogFlag)
 
+	// 6.0.5 Initialize message suppression (will be set with verbose mode after AppState loads)
+	orch.MessageSuppressor = engine.NewMessageSuppressionMiddleware(false, logger)
+
 	// 6.1 SENSE AgeMem + Engram Store
 	if err := orch.InitSENSEMemory(env.ConfigDir); err != nil {
 		logger.Warn("SENSE AgeMem init failed", "error", err)
@@ -288,6 +291,10 @@ func main() {
 	if *enableEnsemble {
 		appState.SetEnsembleEnabled(true)
 	}
+
+	// Update message suppression with persisted verbose mode setting
+	verboseMode := appState.IsVerboseMode()
+	orch.MessageSuppressor.SetVerboseMode(verboseMode)
 
 	// 6.3 Initialize enhancements
 	orch.InitEnhancements(env.ConfigDir, ".")
@@ -398,6 +405,31 @@ func runTUI(orch *engine.Orchestrator, reg *registry.ModelRegistry, modelName, c
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating TUI: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Wire HITL callback to the TUI model
+	orch.HITLCallback = model.RequestHITLApproval
+
+	// Wire verbose mode callbacks to the commands registry
+	if cmdReg.Orch == nil {
+		cmdReg.Orch = &commands.OrchestratorAdapter{}
+	}
+	cmdReg.Orch.GetVerboseMode = func() bool {
+		if orch.MessageSuppressor == nil {
+			return false
+		}
+		return orch.MessageSuppressor.IsVerbose()
+	}
+	cmdReg.Orch.SetVerboseMode = func(enabled bool) error {
+		if orch.MessageSuppressor == nil {
+			return nil
+		}
+		orch.MessageSuppressor.SetVerboseMode(enabled)
+		// Persist to app state
+		if appState != nil {
+			return appState.SetVerboseMode(enabled)
+		}
+		return nil
 	}
 
 	// Wire up SRE and Ensemble settings callbacks if Orch adapter is available
