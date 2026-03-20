@@ -72,12 +72,6 @@ jobs:
           GOARCH: ${{ matrix.arch }}
         run: go build -v -o bin/gorkbot-${{ matrix.os }}-${{ matrix.arch }} ./cmd/gorkbot
 
-      - name: Build gorkbot
-        env:
-          GOOS: ${{ matrix.os }}
-          GOARCH: ${{ matrix.arch }}
-        run: go build -v -o bin/gorkbot-${{ matrix.os }}-${{ matrix.arch }} ./cmd/gorkbot
-
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -217,7 +211,6 @@ jobs:
           GOOS: ${{ steps.extract.outputs.goos }}
           GOARCH: ${{ steps.extract.outputs.goarch }}
         run: |
-          go build -v -x ./cmd/gorkbot
           go build -v -x ./cmd/gorkbot
           echo "✅ Build successful for ${{ matrix.platform }}"
 

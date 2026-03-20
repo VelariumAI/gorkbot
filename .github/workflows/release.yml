@@ -148,7 +148,6 @@ jobs:
           tag_name: ${{ needs.release-please.outputs.tag_name }}
           files: |
             dist/gorkbot-*
-            dist/gorkbot-*
             dist/SHA256SUMS
           draft: false
           prerelease: false
