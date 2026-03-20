@@ -1,9 +1,0 @@
-#!/bin/bash
-# Gorkbot Entry Point wrapper
-# Redirects 'gork' to the gorkbot binary
-
-# Determine directory of this script
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-
-# Execute gorkbot with all arguments passed
-"$DIR/gorkbot" "$@"
