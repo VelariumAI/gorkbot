@@ -1,6 +1,6 @@
 {
   "name": "system_monitor",
-  "description": "Monitors system resources (CPU, memory, disk), lists processes, runs bash commands for diagnostics, and returns audit/performance state snapshots.",
+  "description": "Monitors system resources (memory via free -h, disk via df -h, processes via top) on Termux/Android. Supports optional safe cleanup of caches/tmp. Reads JSON input with optional 'action' (monitor/cleanup) and returns parsed results.",
   "author": "ToolForge",
   "version": "1.0.0",
   "entry_point": "main.py",

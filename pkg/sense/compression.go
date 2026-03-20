@@ -190,6 +190,32 @@ func min(a, b int) int {
 	return b
 }
 
+// CompressFast produces a concise summary in a single LLM call.
+// Used by auto-compression paths (TieredCompactor) where speed matters more
+// than exhaustive quality. The full 4-stage Compress() is retained for the
+// explicit /compress and /compact commands.
+func (c *Compressor) CompressFast(ctx context.Context, messages []ConversationMessage) (StateSnapshot, error) {
+	raw := formatMessages(messages)
+	prompt := fmt.Sprintf(
+		`Summarize this conversation into a concise system-message context block (under 200 words).
+Cover: what the user is working on, key decisions made, tool outputs that matter, user preferences noted.
+Be factual and brief. Start with "## Session Context\n".
+
+CONVERSATION:
+%s
+
+SUMMARY:`, raw)
+	summary, err := c.gen.Generate(ctx, prompt)
+	if err != nil {
+		return StateSnapshot{}, fmt.Errorf("compress fast: %w", err)
+	}
+	saved := estimateTokens(raw) - estimateTokens(summary)
+	if saved < 0 {
+		saved = 0
+	}
+	return StateSnapshot{Summary: summary, TokenSave: saved, CreatedAt: time.Now()}, nil
+}
+
 // stage1Scratchpad extracts raw key facts from the conversation.
 func (c *Compressor) stage1Scratchpad(ctx context.Context, raw string) (string, error) {
 	prompt := fmt.Sprintf(

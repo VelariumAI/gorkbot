@@ -26,7 +26,17 @@ type GeminiProvider struct {
 	supportsThinking bool    // true when the active model supports native thinking mode
 	temperature      float32 // effective temperature; valid only when temperatureSet
 	temperatureSet   bool    // distinguishes explicit 0.0 from "not configured"
+	// CachedContentName, when non-empty, is injected into every
+	// generateContent request so Gemini reuses the session-scoped KV cache.
+	// Managed externally by pkg/cache.GeminiCacheClient via SetCachedContent.
+	CachedContentName string
 }
+
+// SetCachedContent stores the Gemini CachedContent resource name
+// ("cachedContents/{id}") that subsequent generateContent calls will reference.
+// Thread-safety is the caller's responsibility (the orchestrator holds its
+// mutex when calling this).
+func (g *GeminiProvider) SetCachedContent(name string) { g.CachedContentName = name }
 
 // WithTemperature returns a shallow copy of the provider configured to use the
 // specified temperature. Implements the consultation.TemperatureConfigurable
@@ -53,6 +63,11 @@ func (g *GeminiProvider) effectiveTemp() float32 {
 type GeminiRequest struct {
 	Contents         []GeminiContent `json:"contents"`
 	GenerationConfig GeminiConfig    `json:"generationConfig,omitempty"`
+	// CachedContent is the resource name of a Gemini CachedContent entry
+	// (format: "cachedContents/{id}"). When set, Gemini reuses the cached
+	// KV state instead of re-processing the system prompt each turn.
+	// Created and managed by pkg/cache.GeminiCacheClient.
+	CachedContent string `json:"cachedContent,omitempty"`
 }
 
 type GeminiContent struct {
@@ -192,7 +207,8 @@ func (g *GeminiProvider) GenerateWithHistory(ctx context.Context, history *Conve
 	contents := g.convertHistoryToContents(history)
 
 	reqBody := GeminiRequest{
-		Contents: contents,
+		Contents:      contents,
+		CachedContent: g.CachedContentName,
 		GenerationConfig: GeminiConfig{
 			Temperature: g.effectiveTemp(),
 		},
@@ -406,7 +422,8 @@ func (g *GeminiProvider) StreamWithHistory(ctx context.Context, history *Convers
 	contents := g.convertHistoryToContents(history)
 
 	reqBody := GeminiRequest{
-		Contents: contents,
+		Contents:      contents,
+		CachedContent: g.CachedContentName,
 		GenerationConfig: GeminiConfig{
 			Temperature: g.effectiveTemp(),
 		},

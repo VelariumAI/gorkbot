@@ -1,0 +1,47 @@
+# Gorkbot Versioning
+
+## Public Release Version
+1.2.0-beta
+
+## Internal Development Version
+5.3.0
+
+## Release Notes
+
+### Public Version (1.2.0-beta)
+- **Status**: Beta - Feature-complete, architectural stability verified
+- **Target Audience**: Advanced users, developers, early adopters
+- **Date**: March 20, 2026
+
+### Internal Versioning
+- Application: 5.3.0
+- SENSE: 1.9.0
+- SRE: 1.0.0
+- XSKILL: 1.0.0
+
+## Version Format
+Public: `major.minor[.build[.revision]]-(alpha|beta|rc)`
+
+## Version Component Definitions
+
+### Major (1)
+Architectural paradigm shifts or complete rewrites. Incremented when foundational changes break compatibility.
+
+### Minor (2)
+Feature additions, significant improvements, or architectural refinements. Incremented when new capabilities ship.
+
+### Build (0)
+Bug fixes, patches, performance optimizations. Incremented for production releases.
+
+### Revision (none)
+Critical hotfixes applied after release. Only included if > 0.
+
+### Release Type
+- **alpha**: Experimental, early access, API unstable
+- **beta**: Feature-complete, some edge cases may exist, primary features stable
+- **rc**: Release candidate, production-ready pending final QA
+
+## Migration Path
+- Internal versions continue independently
+- Public version tracks major releases for user-facing stability
+- Subsystems (SENSE, SRE, XSKILL) remain on their own version tracks

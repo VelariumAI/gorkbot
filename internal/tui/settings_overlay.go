@@ -16,14 +16,15 @@ import (
 type settingsTab int
 
 const (
-	tabModels       settingsTab = iota // 0 — Model routing summary
-	tabVerbosity                       // 1 — Debug / logging toggles
-	tabTools                           // 2 — Tool group enable/disable
-	tabProviders                       // 3 — API provider enable/disable
-	tabIntegrations                    // 4 — Integration env vars (budget, webhook, etc.)
+	tabModels              settingsTab = iota // 0 — Model routing summary
+	tabVerbosity                              // 1 — Debug / logging toggles
+	tabTools                                  // 2 — Tool group enable/disable
+	tabProviders                              // 3 — API provider enable/disable
+	tabIntegrations                           // 4 — Integration env vars (budget, webhook, etc.)
+	tabReasoningEngine                        // 5 — SRE and ensemble toggles
 )
 
-var tabLabels = []string{"Model Routing", "Verbosity", "Tool Groups", "API Providers", "Integrations"}
+var tabLabels = []string{"Model Routing", "Verbosity", "Tool Groups", "API Providers", "Integrations", "Reasoning Engine"}
 
 // SettingsOverlay is a four-tab modal for configuring runtime preferences.
 // It implements the Overlay interface and persists changes immediately via
@@ -63,6 +64,12 @@ type SettingsOverlay struct {
 	editingField bool
 	editBuffer   string
 	editOriginal string
+
+	// Reasoning Engine settings (tabReasoningEngine)
+	sreEnabled       bool
+	ensembleEnabled  bool
+	sreEnabledSetter func(bool) error
+	ensembleSetter   func(bool) error
 }
 
 type toolGroupRow struct {
@@ -87,17 +94,24 @@ func NewSettingsOverlay(
 	providerSetter func(ids []string) error,
 	integrationGetter func() map[string]string,
 	integrationSetter func(key, value string) error,
+	sreEnabled, ensembleEnabled bool,
+	sreEnabledSetter func(bool) error,
+	ensembleSetter func(bool) error,
 ) *SettingsOverlay {
 	s := &SettingsOverlay{
-		width:             w,
-		height:            h,
-		orch:              orch,
-		toolReg:           toolReg,
-		appStateSetter:    appStateSetter,
-		debugMode:         initialDebug,
-		providerSetter:    providerSetter,
-		integrationGetter: integrationGetter,
-		integrationSetter: integrationSetter,
+		width:              w,
+		height:             h,
+		orch:               orch,
+		toolReg:            toolReg,
+		appStateSetter:     appStateSetter,
+		debugMode:          initialDebug,
+		providerSetter:     providerSetter,
+		integrationGetter:  integrationGetter,
+		integrationSetter:  integrationSetter,
+		sreEnabled:         sreEnabled,
+		ensembleEnabled:    ensembleEnabled,
+		sreEnabledSetter:   sreEnabledSetter,
+		ensembleSetter:     ensembleSetter,
 	}
 	s.refreshToolGroups()
 	s.refreshProviderRows()
@@ -275,6 +289,8 @@ func (s *SettingsOverlay) maxCursor() int {
 		return len(s.providerRows) - 1
 	case tabIntegrations:
 		return len(pkgconfig.IntegrationKeys) - 1
+	case tabReasoningEngine:
+		return 1 // two toggles: SRE and Ensemble
 	default:
 		return 0
 	}
@@ -340,6 +356,41 @@ func (s *SettingsOverlay) handleAction() {
 				s.statusIsErr = true
 			}
 		}
+
+	case tabReasoningEngine:
+		if s.cursor == 0 {
+			// Toggle SRE
+			s.sreEnabled = !s.sreEnabled
+			if s.sreEnabledSetter != nil {
+				if err := s.sreEnabledSetter(s.sreEnabled); err != nil {
+					s.statusMsg = "Failed to save SRE setting"
+					s.statusIsErr = true
+				} else {
+					if s.sreEnabled {
+						s.statusMsg = "Step-wise Reasoning enabled"
+					} else {
+						s.statusMsg = "Step-wise Reasoning disabled"
+					}
+					s.statusIsErr = false
+				}
+			}
+		} else if s.cursor == 1 {
+			// Toggle Ensemble
+			s.ensembleEnabled = !s.ensembleEnabled
+			if s.ensembleSetter != nil {
+				if err := s.ensembleSetter(s.ensembleEnabled); err != nil {
+					s.statusMsg = "Failed to save Ensemble setting"
+					s.statusIsErr = true
+				} else {
+					if s.ensembleEnabled {
+						s.statusMsg = "Ensemble enabled"
+					} else {
+						s.statusMsg = "Ensemble disabled"
+					}
+					s.statusIsErr = false
+				}
+			}
+		}
 	}
 }
 
@@ -401,6 +452,8 @@ func (s *SettingsOverlay) View() string {
 		lines = append(lines, s.renderProvidersSection(cursorStyle, checkStyle, uncheckStyle, dimStyle)...)
 	case tabIntegrations:
 		lines = append(lines, s.renderIntegrationsSection(cursorStyle, dimStyle, boxW)...)
+	case tabReasoningEngine:
+		lines = append(lines, s.renderReasoningEngineSection(cursorStyle, checkStyle, uncheckStyle)...)
 	}
 
 	// Status
@@ -623,6 +676,20 @@ func (s *SettingsOverlay) renderIntegrationsSection(cur, dim lipgloss.Style, box
 		lines = append(lines, dim.Render("  Budget/notification changes take effect immediately."))
 		lines = append(lines, dim.Render("  Webhook port changes require restart."))
 	}
+	return lines
+}
+
+func (s *SettingsOverlay) renderReasoningEngineSection(cursor, check, uncheck lipgloss.Style) []string {
+	var lines []string
+	lines = append(lines, s.renderToggleRow(0, "Step-wise Reasoning (SRE)", s.sreEnabled, cursor, check, uncheck))
+	lines = append(lines, s.renderToggleRow(1, "Multi-trajectory Ensemble", s.ensembleEnabled, cursor, check, uncheck))
+	lines = append(lines, "")
+	lines = append(lines, lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Render("  SRE: semantic grounding, phase-aware reasoning, correction"))
+	lines = append(lines, lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Render("  Ensemble: parallel traces with temperature variation"))
 	return lines
 }
 

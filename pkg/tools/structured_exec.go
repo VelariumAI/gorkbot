@@ -181,9 +181,15 @@ func tryParseTabular(raw string) ([]map[string]string, bool) {
 		return nil, false
 	}
 
-	// Skip "total N" artifact from ls -l
+	// Skip "total N" artifact from ls -l (e.g. "total 192M", "total 42").
+	// Only skip when the line is exactly two tokens — "total" + a numeric/size
+	// value.  This prevents false-positives where a header row like
+	// "total  used  free  shared" (from `free -h`) is mistakenly skipped,
+	// which would shift all rows and produce garbage key-value output.
 	startIdx := 0
-	if strings.HasPrefix(strings.TrimSpace(lines[0]), "total ") {
+	if firstFields := strings.Fields(lines[0]); len(firstFields) == 2 &&
+		strings.EqualFold(firstFields[0], "total") &&
+		isNumericOrSize(firstFields[1]) {
 		startIdx = 1
 	}
 	if startIdx >= len(lines)-1 {
@@ -281,6 +287,28 @@ func tryParseKeyValue(raw string) (map[string]string, bool) {
 		return nil, false
 	}
 	return kv, true
+}
+
+// isNumericOrSize returns true when s looks like a numeric value or a
+// human-readable size suffix (e.g. "42", "192M", "4.0G", "1.5K").
+// Used to distinguish "total 192M" (ls -l artifact) from "total  used  free"
+// (free -h column headers).
+func isNumericOrSize(s string) bool {
+	if s == "" {
+		return false
+	}
+	// Allow digits, dots, and common SI suffixes (K/M/G/T/k/m/g/t).
+	for _, r := range s {
+		if (r >= '0' && r <= '9') || r == '.' {
+			continue
+		}
+		switch r {
+		case 'K', 'M', 'G', 'T', 'k', 'm', 'g', 't', 'B', 'b':
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // nonEmptyLines splits s on newlines and returns only non-blank lines.

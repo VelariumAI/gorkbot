@@ -7,6 +7,25 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// formatTokenCount formats an integer token count with thousand separators.
+// Safe across all Go versions (avoids the comma format specifier).
+func formatTokenCount(n int) string {
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+
+	// Insert commas from right to left
+	var result strings.Builder
+	for i, digit := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			result.WriteRune(',')
+		}
+		result.WriteRune(digit)
+	}
+	return result.String()
+}
+
 // View renders the entire TUI
 func (m *Model) View() string {
 	if m.quitting {
@@ -270,7 +289,13 @@ func (m *Model) renderChatView() string {
 		thinkingBox = m.renderThinkingBox()
 	}
 
-	// Hook tree (live action log rendered below loading indicator)
+	// Live tools panel (replaces hook section for chat-based tool execution)
+	var livePanel string
+	if m.livePanel != nil && m.livePanel.HasActivity() {
+		livePanel = m.livePanel.View(m.styles)
+	}
+
+	// Hook tree (legacy DAG action log rendered below loading indicator)
 	hookSection := m.renderHookSection()
 
 	// Combine chat column
@@ -281,7 +306,9 @@ func (m *Model) renderChatView() string {
 	if loading != "" {
 		parts = append(parts, loading)
 	}
-	if hookSection != "" {
+	if livePanel != "" {
+		parts = append(parts, livePanel)
+	} else if hookSection != "" {
 		parts = append(parts, hookSection)
 	}
 	parts = append(parts, input)
@@ -370,25 +397,55 @@ func (m *Model) renderViewport() string {
 		Render(m.viewport.View())
 }
 
-// renderLoadingIndicator renders the loading spinner with a phase-aware label.
-// Always uses the single-line DegradedSigilFrame to avoid consuming vertical space.
+// renderLoadingIndicator renders the single authoritative status line (G ▶ ...).
+// Updates in-place without creating new lines.
+//
+// Status progression:
+// - Initial pipeline: "G ▶ Analyzing input..."
+// - During grounding: "G ▶ Grounding task and extracting anchors..."
+// - SRE Hypothesis phase: "G ▶ [SRE: HYPOTHESIS] Exploring multiple approaches..."
+// - SRE Prune phase: "G ▶ [SRE: PRUNE] Critically evaluating, pruning weaker paths..."
+// - SRE Converge phase: "G ▶ [SRE: CONVERGE] Synthesizing, verifying, and finalizing..."
+// - When first LLM token arrives: "G ▶ Thinking..."
+// - With tokens: "G ▶ Thinking... (1,247 tokens) | grok-4-fast-"
 func (m *Model) renderLoadingIndicator() string {
-	// Phase-aware label.
-	var phaseLabel string
-	switch m.genPhase {
-	case phaseThinking:
-		phaseLabel = "Reasoning..."
-	case phaseTool:
-		if m.currentActivity != nil {
-			phaseLabel = m.currentActivity.Icon + " " + m.currentActivity.Label
-		} else {
-			phaseLabel = "⚙  Executing tool..."
+	// Use the single authoritative status from statusPhase/statusDescription.
+	// Fall back to the loading phrase if no status is set.
+	gorkyPrefix := m.styles.GorkyGlyphStyle.Render(GorkyGlyph) + " "
+
+	statusText := m.statusDescription
+	if statusText == "" {
+		// Fallback to dynamic phase label if status not yet set.
+		switch m.genPhase {
+		case phaseThinking:
+			statusText = "Thinking..."
+		case phaseTool:
+			if m.currentActivity != nil {
+				statusText = m.currentActivity.Icon + " " + m.currentActivity.Label
+			} else {
+				statusText = "⚙  Executing tool..."
+			}
+		case phaseSynthesizing:
+			statusText = "Writing..."
+		default:
+			statusText = m.currentPhrase
 		}
-	case phaseSynthesizing:
-		phaseLabel = "✍  Composing response..."
-	default:
-		phaseLabel = m.currentPhrase
 	}
+
+	// Append token count if available and during thinking phase.
+	if m.statusTokens > 0 && m.statusPhase == "thinking" {
+		// Format token count with thousand separators (safe across Go versions)
+		tokenStr := formatTokenCount(m.statusTokens)
+		statusText = fmt.Sprintf("%s (%s tokens)", statusText, tokenStr)
+
+		// Append model ID if available.
+		if m.statusModel != "" {
+			statusText = statusText + " | " + m.statusModel
+		}
+	}
+
+	// Build the complete status line: "G ▶ <status>"
+	phaseLabel := gorkyPrefix + statusText
 
 	spinGlyph := DegradedSigilFrame(m.hookSpinFrame)
 	row := lipgloss.JoinHorizontal(lipgloss.Center, spinGlyph, "   ", loadingPhraseStyle.Render(phaseLabel))

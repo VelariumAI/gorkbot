@@ -1,6 +1,6 @@
 {
   "name": "shell_file_operations",
-  "description": "Unified tool for safe shell commands and system file reading with built-in error handling and retry logic for common issues like permission errors and transient failures.",
+  "description": "Executes shell commands, performs file operations, and monitors system resources with structured output parsing",
   "author": "ToolForge",
   "version": "1.0.0",
   "entry_point": "main.py",

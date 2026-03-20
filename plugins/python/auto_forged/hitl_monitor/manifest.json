@@ -1,0 +1,13 @@
+{
+  "name": "hitl_monitor",
+  "description": "Starts a background monitor that tails Gorkbot logs for [HITL] events and sends native notifications (Termux or fallback), with deduplication via PID file. Generalized for reusable permission/HITL alerting.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

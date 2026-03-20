@@ -39,7 +39,13 @@ import (
 // SenseDiscoveryTool produces the machine-readable JSON discovery document.
 type SenseDiscoveryTool struct {
 	BaseTool
+	reg *Registry // set at registration time via setRegistry() — fallback when context is empty
 }
+
+// setRegistry satisfies the registryAware interface so the tool always has a
+// reference to the live registry, even when called through a subagent pipeline
+// that builds a fresh context without injecting the registry key.
+func (t *SenseDiscoveryTool) setRegistry(reg *Registry) { t.reg = reg }
 
 // NewSenseDiscoveryTool creates the discovery tool.
 func NewSenseDiscoveryTool() *SenseDiscoveryTool {
@@ -48,8 +54,9 @@ func NewSenseDiscoveryTool() *SenseDiscoveryTool {
 			"sense_discovery",
 			"Dump a machine-readable JSON Discovery Document listing all registered "+
 				"Gorkbot tools (name, description, category, parameter schema, permission "+
-				"level) and all known CLI flags. Use this before constructing any tool call "+
-				"to verify the tool name and required parameters.",
+				"level) and all known CLI flags. ALWAYS call with compact=true for routine "+
+				"tool lookup — full schemas add ~22k tokens unnecessarily. Use compact=false "+
+				"only when you need full parameter schemas for a specific category.",
 			CategoryMeta,
 			false,
 			PermissionAlways,
@@ -76,6 +83,12 @@ func (t *SenseDiscoveryTool) Parameters() json.RawMessage {
 func (t *SenseDiscoveryTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
 	reg, ok := ctx.Value(registryContextKey).(*Registry)
 	if !ok || reg == nil {
+		// Fall back to the registry stored at registration time.
+		// This handles subagent/pipeline calls that build a fresh context
+		// without injecting the registry context key.
+		reg = t.reg
+	}
+	if reg == nil {
 		return &ToolResult{Success: false, Error: "registry not available in context"}, nil
 	}
 
@@ -123,6 +136,15 @@ func (t *SenseDiscoveryTool) Execute(ctx context.Context, params map[string]inte
 		err error
 	)
 	if compact {
+		// True compact mode: strip parameter schemas entirely (~10x token reduction).
+		// Names, descriptions, and categories are preserved; full schemas are omitted.
+		// Use compact=false with a specific category= filter when you need schemas.
+		stripped := make([]sense.ToolDescriptor, len(descs))
+		for i, d := range descs {
+			d.Parameters = nil
+			stripped[i] = d
+		}
+		doc.Tools = stripped
 		b, err = json.Marshal(doc)
 	} else {
 		b, err = json.MarshalIndent(doc, "", "  ")

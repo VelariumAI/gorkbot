@@ -85,6 +85,18 @@ type ToolCallMsg struct {
 	Params   map[string]interface{}
 }
 
+// ToolElapsedMsg carries per-tool elapsed time updates from the engine
+// heartbeat ticker. Called every ~250ms per live tool and once on completion.
+type ToolElapsedMsg struct {
+	ToolName string
+	Elapsed  time.Duration
+	Done     bool // true when tool completes
+	Success  bool // only meaningful when Done=true
+}
+
+// LivePanelClearMsg signals that the live tools panel should be cleared
+type LivePanelClearMsg struct{}
+
 // ColorTickMsg is sent to change spinner colors
 type ColorTickMsg time.Time
 
@@ -529,4 +541,50 @@ type AuthRequestMsg struct {
 	AuthType     string
 	Description  string
 	ResponseChan chan string // Sends the credential back
+}
+
+// ── SRE — Step-wise Reasoning Engine messages ───────────────────────────
+
+// SREPhaseMsg signals an SRE phase transition
+type SREPhaseMsg struct {
+	Phase string // "HYPOTHESIS" / "PRUNE" / "CONVERGE"
+	Turn  int
+}
+
+// SREGroundingMsg signals SRE grounding extraction results
+type SREGroundingMsg struct {
+	EntityCount     int
+	ConstraintCount int
+	FactCount       int
+	Confidence      float64
+}
+
+// SREEnsembleMsg signals SRE ensemble execution
+type SREEnsembleMsg struct {
+	ConflictCount int
+	Confidence    float64
+}
+
+// SRECorrectionMsg signals SRE deviation detection and backtrack
+type SRECorrectionMsg struct {
+	Reason      string
+	RevertPhase string
+}
+
+// SREAnchorMsg signals SRE anchor storage
+type SREAnchorMsg struct {
+	Key   string
+	Phase string
+}
+
+// ── Status line system ────────────────────────────────────────────────────────
+
+// StatusUpdateMsg updates the single authoritative status line.
+// Used to show pipeline progress, SRE phases, and token counts.
+// Updates display in-place using \r\x1b[K to avoid creating new lines.
+type StatusUpdateMsg struct {
+	Phase       string // "pipeline" / "grounding" / "hypothesis" / "prune" / "converge" / "thinking"
+	Description string // full descriptive text: "Analyzing input..." / "Grounding task..." / etc.
+	Tokens      int    // only set when > 0; for "Thinking... (1,247 tokens)"
+	Model       string // model ID suffix; only set during actual generation
 }

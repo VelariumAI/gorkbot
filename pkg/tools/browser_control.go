@@ -83,7 +83,7 @@ func (t *BrowserControlTool) Execute(ctx context.Context, params map[string]inte
 	}
 
 	// Find the project root to locate the script
-	projectRoot := os.Getenv("HOME") + "/project/gorkbot"
+	projectRoot := os.Getenv("HOME") + "/project/gorky"
 	scriptPath := filepath.Join(projectRoot, "scripts/browser_bridge.js")
 
 	// Command to run the node script

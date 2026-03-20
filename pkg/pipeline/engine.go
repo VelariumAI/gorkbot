@@ -71,52 +71,99 @@ func (e *Engine) Execute(ctx context.Context, p Pipeline) (map[string]string, er
 		}
 	}
 
-	// Topological sort (Kahn's algorithm).
-	sorted, err := topoSort(p.Steps, stepIndex)
+	// Topological sort (Kahn's algorithm) to detect cycles.
+	_, err := topoSort(p.Steps, stepIndex)
 	if err != nil {
 		return nil, fmt.Errorf("pipeline %q dependency cycle detected: %w", p.Name, err)
 	}
 
-	outputs := make(map[string]string, len(sorted))
+	outputs := make(map[string]string, len(p.Steps))
 	var mu sync.Mutex
 
-	for _, step := range sorted {
-		select {
-		case <-ctx.Done():
-			return outputs, ctx.Err()
-		default:
-		}
+	// Create a done channel for each step
+	dones := make(map[string]chan struct{}, len(p.Steps))
+	for _, s := range p.Steps {
+		dones[s.Name] = make(chan struct{})
+	}
 
-		// Substitute template vars from prior step outputs.
-		task := renderTemplate(step.Task, outputs)
+	// Context for cancellation on fatal error
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-		// Apply per-step timeout if set.
-		stepCtx := ctx
-		var cancel context.CancelFunc
-		if step.Timeout > 0 {
-			stepCtx, cancel = context.WithTimeout(ctx, step.Timeout)
-		}
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(p.Steps))
 
-		start := time.Now()
-		result, runErr := e.runner(stepCtx, step.AgentType, task)
-		_ = time.Since(start)
+	for _, step := range p.Steps {
+		wg.Add(1)
+		go func(s Step) {
+			defer wg.Done()
 
-		if cancel != nil {
-			cancel()
-		}
+			// Wait for dependencies
+			for _, dep := range s.DependsOn {
+				select {
+				case <-dones[dep]:
+					// Dependency finished, continue
+				case <-ctx.Done():
+					return // Pipeline aborted
+				}
+			}
 
-		if runErr != nil {
-			// Non-fatal: store error as output so subsequent steps can branch on it.
+			// Check context before executing
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			// Prepare outputs for template rendering
 			mu.Lock()
-			outputs[step.Name] = fmt.Sprintf("ERROR: %v", runErr)
+			allOutputs := make(map[string]string, len(outputs))
+			for k, v := range outputs {
+				allOutputs[k] = v
+			}
 			mu.Unlock()
-			// Fatal: abort pipeline.
-			return outputs, fmt.Errorf("step %q failed: %w", step.Name, runErr)
-		}
 
-		mu.Lock()
-		outputs[step.Name] = result
-		mu.Unlock()
+			// Substitute template vars from prior step outputs.
+			task := renderTemplate(s.Task, allOutputs)
+
+			// Apply per-step timeout if set.
+			stepCtx := ctx
+			var stepCancel context.CancelFunc
+			if s.Timeout > 0 {
+				stepCtx, stepCancel = context.WithTimeout(ctx, s.Timeout)
+			}
+
+			result, runErr := e.runner(stepCtx, s.AgentType, task)
+
+			if stepCancel != nil {
+				stepCancel()
+			}
+
+			if runErr != nil {
+				// Non-fatal: store error as output so subsequent steps can branch on it.
+				// However, if we decide to abort, we write to errCh and cancel.
+				// To preserve original semantics, if e.runner returns err, it's fatal.
+				mu.Lock()
+				outputs[s.Name] = fmt.Sprintf("ERROR: %v", runErr)
+				mu.Unlock()
+				
+				errCh <- fmt.Errorf("step %q failed: %w", s.Name, runErr)
+				cancel() // Abort other steps
+			} else {
+				mu.Lock()
+				outputs[s.Name] = result
+				mu.Unlock()
+			}
+			
+			close(dones[s.Name])
+		}(step)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	if err := <-errCh; err != nil {
+		return outputs, err
 	}
 
 	return outputs, nil
@@ -147,7 +194,9 @@ func renderTemplate(task string, outputs map[string]string) string {
 	result := task
 	for name, val := range outputs {
 		placeholder := "{{outputs." + name + "}}"
-		result = strings.ReplaceAll(result, placeholder, val)
+		if strings.Contains(result, placeholder) {
+			result = strings.ReplaceAll(result, placeholder, val)
+		}
 	}
 	return result
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/velariumai/gorkbot/pkg/adaptive"
 	"github.com/velariumai/gorkbot/pkg/ai"
 	"github.com/velariumai/gorkbot/pkg/discovery"
 	"github.com/velariumai/gorkbot/pkg/tools"
@@ -26,16 +27,31 @@ type SpawnSubAgentTool struct {
 	agentManager *Manager
 	registry     *tools.Registry
 	disc         *discovery.Manager
+	// concurrency, when non-nil, limits how many sub-agents per category may
+	// run simultaneously. Falls back to the MaxDepth const when nil.
+	concurrency *ConcurrencyManager
 }
 
 // NewSpawnSubAgentTool creates the discovery-aware spawner tool.
 func NewSpawnSubAgentTool(manager *Manager, reg *tools.Registry, disc *discovery.Manager) *SpawnSubAgentTool {
+	return NewSpawnSubAgentToolWithConcurrency(manager, reg, disc, nil)
+}
+
+// NewSpawnSubAgentToolWithConcurrency creates the spawner with a configurable
+// ConcurrencyManager. Pass nil to use the hardcoded MaxDepth/MaxConcurrent defaults.
+func NewSpawnSubAgentToolWithConcurrency(manager *Manager, reg *tools.Registry, disc *discovery.Manager, cm *ConcurrencyManager) *SpawnSubAgentTool {
+	maxDepth := MaxDepth
+	if cm != nil {
+		maxDepth = cm.MaxDepth()
+	}
+	desc := fmt.Sprintf(
+		"Delegate a sub-task to the best available AI model discovered via live API polling. "+
+			"Automatically selects the specialist model (reasoning/speed/coding/general). "+
+			"Supports an optional verifier pass. Depth limit: %d levels.", maxDepth)
 	return &SpawnSubAgentTool{
 		BaseTool: tools.NewBaseTool(
 			"spawn_sub_agent",
-			"Delegate a sub-task to the best available AI model discovered via live API polling. "+
-				"Automatically selects the specialist model (reasoning/speed/coding/general). "+
-				"Supports an optional verifier pass. Hard depth limit: 4 levels.",
+			desc,
 			tools.CategoryMeta,
 			false,
 			tools.PermissionAlways,
@@ -43,6 +59,7 @@ func NewSpawnSubAgentTool(manager *Manager, reg *tools.Registry, disc *discovery
 		agentManager: manager,
 		registry:     reg,
 		disc:         disc,
+		concurrency:  cm,
 	}
 }
 
@@ -58,6 +75,14 @@ func (t *SpawnSubAgentTool) Parameters() json.RawMessage {
 				"type":        "string",
 				"description": "Capability hint for model selection: reasoning, speed, coding, or general (default: general)",
 				"enum":        []string{"reasoning", "speed", "coding", "general"},
+			},
+			"agent_type": map[string]interface{}{
+				"type":        "string",
+				"description": "Explicit agent type to use (e.g. 'general-purpose', 'explore', 'redteam-recon'). Overrides RoutingTable and default.",
+			},
+			"source": map[string]interface{}{
+				"type":        "string",
+				"description": "Source identifier consulted by the RoutingTable for automatic agent type selection (e.g. 'telegram:12345678').",
 			},
 			"verify": map[string]interface{}{
 				"type":        "boolean",
@@ -84,10 +109,16 @@ func (t *SpawnSubAgentTool) Execute(ctx context.Context, params map[string]inter
 	if d, ok := ctx.Value(depthContextKey{}).(int); ok {
 		depth = d
 	}
-	if depth >= MaxDepth {
+
+	// Resolve effective depth limit from ConcurrencyManager or fall back to const.
+	maxDepth := MaxDepth
+	if t.concurrency != nil {
+		maxDepth = t.concurrency.MaxDepth()
+	}
+	if depth >= maxDepth {
 		return &tools.ToolResult{
 			Success: false,
-			Error:   fmt.Sprintf("max delegation depth (%d) reached", MaxDepth),
+			Error:   fmt.Sprintf("max delegation depth (%d) reached", maxDepth),
 		}, nil
 	}
 	childCtx := context.WithValue(ctx, depthContextKey{}, depth+1)
@@ -98,6 +129,17 @@ func (t *SpawnSubAgentTool) Execute(ctx context.Context, params map[string]inter
 		return &tools.ToolResult{Success: false, Error: "task is required"}, nil
 	}
 	categoryStr, _ := params["category"].(string)
+
+	// ── per-category concurrency gate ────────────────────────────────────────
+	if t.concurrency != nil {
+		if err := t.concurrency.Acquire(childCtx, categoryStr); err != nil {
+			return &tools.ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("concurrency limit reached for category %q: %v", categoryStr, err),
+			}, nil
+		}
+		defer t.concurrency.Release(categoryStr)
+	}
 	verify, _ := params["verify"].(bool)
 	successCriteria, _ := params["success_criteria"].(string)
 	isolated, _ := params["isolated"].(bool)
@@ -124,7 +166,26 @@ func (t *SpawnSubAgentTool) Execute(ctx context.Context, params map[string]inter
 	}
 
 	// ── spawn primary agent ──────────────────────────────────────────────────
-	agentID, err := t.agentManager.SpawnAgent(childCtx, AgentType("general-purpose"), task, aiProvider, t.registry)
+	// Three-tier agent type resolution: explicit param → RoutingTable → default.
+	agentType := AgentType("general-purpose")
+	if explicit, ok := params["agent_type"].(string); ok && explicit != "" {
+		agentType = AgentType(explicit)
+	} else {
+		// Consult RoutingTable when a source identifier is provided.
+		type rtProvider interface {
+			GetRoutingTable() *adaptive.RoutingTable
+		}
+		if orch, ok := ctx.Value(tools.OrchestratorContextKey()).(rtProvider); ok {
+			if rt := orch.GetRoutingTable(); rt != nil {
+				if source, ok := params["source"].(string); ok && source != "" {
+					if routed, matched := rt.Route(source); matched {
+						agentType = AgentType(routed)
+					}
+				}
+			}
+		}
+	}
+	agentID, err := t.agentManager.SpawnAgent(childCtx, agentType, task, aiProvider, t.registry)
 	if err != nil {
 		if worktreePath != "" {
 			_ = removeWorktreeByPath(worktreePath)

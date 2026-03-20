@@ -70,6 +70,7 @@ func GetToolPacks() map[string][]Tool {
 			NewBrowserScrapeTool(), NewBrowserControlTool(), NewSensorReadTool(), NewNotificationSendTool(),
 			NewIntentBroadcastTool(), NewLogcatDumpTool(), NewClipboardManagerTool(), NewNotificationListenerTool(),
 			NewAccessibilityQueryTool(), NewApkDecompileTool(), NewSqliteExplorerTool(), NewTermuxApiBridgeTool(),
+			NewSmsSendTool(),
 			NewTermuxSensorTool(), NewTermuxLocationTool(),
 		},
 		"vision": {

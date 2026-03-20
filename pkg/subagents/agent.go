@@ -128,26 +128,33 @@ func (a *BaseAgent) Execute(ctx context.Context, task string, provider ai.AIProv
 		}
 
 		// Execute tools
-		toolResults := []string{}
-		for _, req := range toolRequests {
-			result, err := registry.Execute(ctx, &req)
-			if err != nil {
-				result = &tools.ToolResult{
-					Success: false,
-					Error:   err.Error(),
-				}
-			}
+		toolResults := make([]string, len(toolRequests))
+		var wg sync.WaitGroup
 
-			var resultStr string
-			if result.Success {
-				resultStr = fmt.Sprintf("<tool_result tool=\"%s\">\nSuccess: true\nOutput:\n%s\n</tool_result>",
-					req.ToolName, result.Output)
-			} else {
-				resultStr = fmt.Sprintf("<tool_result tool=\"%s\">\nSuccess: false\nError: %s\n</tool_result>",
-					req.ToolName, result.Error)
-			}
-			toolResults = append(toolResults, resultStr)
+		for i, req := range toolRequests {
+			wg.Add(1)
+			go func(i int, req tools.ToolRequest) {
+				defer wg.Done()
+				result, err := registry.Execute(ctx, &req)
+				if err != nil {
+					result = &tools.ToolResult{
+						Success: false,
+						Error:   err.Error(),
+					}
+				}
+
+				var resultStr string
+				if result.Success {
+					resultStr = fmt.Sprintf("<tool_result tool=\"%s\">\nSuccess: true\nOutput:\n%s\n</tool_result>",
+						req.ToolName, result.Output)
+				} else {
+					resultStr = fmt.Sprintf("<tool_result tool=\"%s\">\nSuccess: false\nError: %s\n</tool_result>",
+						req.ToolName, result.Error)
+				}
+				toolResults[i] = resultStr
+			}(i, req)
 		}
+		wg.Wait()
 
 		// Add results to history
 		toolResultsMessage := "Here are the results from the tools you requested:\n\n"
@@ -272,7 +279,18 @@ func (m *Manager) cleanupCompletedAgents() {
 func (m *Manager) SpawnAgent(ctx context.Context, agentType AgentType, task string, provider ai.AIProvider, registry *tools.Registry) (string, error) {
 	agent, exists := m.registry.Get(agentType)
 	if !exists {
-		return "", fmt.Errorf("agent type %s not found", agentType)
+		// Build a list of valid types to help the caller correct the mistake.
+		valid := make([]string, 0, len(m.registry.agents))
+		for t := range m.registry.agents {
+			valid = append(valid, string(t))
+		}
+		// Sort for deterministic output (simple insertion sort — small slice).
+		for i := 1; i < len(valid); i++ {
+			for j := i; j > 0 && valid[j] < valid[j-1]; j-- {
+				valid[j], valid[j-1] = valid[j-1], valid[j]
+			}
+		}
+		return "", fmt.Errorf("agent type %q not found; valid types: %v", agentType, valid)
 	}
 
 	// Create running agent entry

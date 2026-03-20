@@ -1,0 +1,13 @@
+{
+  "name": "shell_command_runner",
+  "description": "Executes shell commands, optionally reads/writes files, and monitors system resources. Consolidates bash, structured_bash, read_file, write_file, and system_monitor operations.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

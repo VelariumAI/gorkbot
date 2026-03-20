@@ -157,7 +157,7 @@ try:
 except Exception as e:
     print(f"ERROR: {e}", file=sys.stderr)
     sys.exit(1)
-`, filepath.Join(home, "project/gorkbot/plugins/python/scrapling_fetch"), url)
+`, filepath.Join(home, "project/gorky/plugins/python/scrapling_fetch"), url)
 
 	cmd := exec.CommandContext(ctx, "python3", "-c", pythonScript)
 	var stdout, stderr bytes.Buffer

@@ -1,0 +1,13 @@
+{
+  "name": "structured_bash",
+  "description": "Generalized reusable tool that executes bash commands or privileged operations in the Termux/Android environment. Supports system monitoring, package management, git ops, process control, and structured JSON output for DevOps, admin, and data tasks.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

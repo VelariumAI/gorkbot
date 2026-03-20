@@ -67,7 +67,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, params map[string]interface
 	}
 
 	// Use quiet_search.py to suppress verbose Scrapling output
-	quietPluginPath := filepath.Join(os.Getenv("HOME"), "project/gorkbot/plugins/python/scrapling_search/quiet_search.py")
+	quietPluginPath := filepath.Join(os.Getenv("HOME"), "project/gorky/plugins/python/scrapling_search/quiet_search.py")
 
 	input := map[string]interface{}{
 		"query":       query,

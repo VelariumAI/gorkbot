@@ -1,0 +1,13 @@
+{
+  "name": "comprehensive_system_audit",
+  "description": "Generates a unified diagnostic report for Gorkbot including tool inventory (counts, categories, top tools), core skills, runtime status, failure analysis, termux-specific diagnostics, and process monitoring with security assessment.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

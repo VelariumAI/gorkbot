@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -181,8 +182,8 @@ func (ch *ConversationHistory) Truncate(n int) {
 	ch.messages = ch.messages[len(ch.messages)-n:]
 }
 
-// EstimateTokens estimates token count (rough approximation)
-// Average ~4 characters per token
+// EstimateTokens estimates token count (rough approximation: ~4 chars/token).
+// Includes ToolCalls.Arguments so native function-calling messages are counted.
 func (ch *ConversationHistory) EstimateTokens() int {
 	ch.mu.RLock()
 	defer ch.mu.RUnlock()
@@ -190,18 +191,23 @@ func (ch *ConversationHistory) EstimateTokens() int {
 	totalChars := 0
 	for _, msg := range ch.messages {
 		totalChars += len(msg.Content)
+		for _, tc := range msg.ToolCalls {
+			totalChars += len(tc.Arguments) + len(tc.ToolName) + 20 // +20 overhead per call
+		}
 	}
 
 	return totalChars / 4
 }
 
-// TruncateToTokenLimit truncates history to fit within token limit
-// Keeps system messages and most recent conversation
+// TruncateToTokenLimit truncates history to fit within token limit.
+// It prioritizes system messages and then keeps the most recent conversation
+// messages. If a message is too large to fit in the remaining budget, it is
+// truncated (keeping head and tail) rather than being dropped entirely.
 func (ch *ConversationHistory) TruncateToTokenLimit(maxTokens int) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	// Separate system messages from conversation
+	// 1. Preserve System Messages
 	systemMessages := []ConversationMessage{}
 	conversationMessages := []ConversationMessage{}
 
@@ -213,36 +219,66 @@ func (ch *ConversationHistory) TruncateToTokenLimit(maxTokens int) {
 		}
 	}
 
-	// Calculate tokens for system messages
 	systemTokens := 0
 	for _, msg := range systemMessages {
 		systemTokens += len(msg.Content) / 4
 	}
 
-	// Available tokens for conversation
 	availableTokens := maxTokens - systemTokens
 	if availableTokens <= 0 {
-		// Only keep system messages if they exceed limit
 		ch.messages = systemMessages
 		return
 	}
 
-	// Keep most recent conversation messages that fit.
-	// Use continue (not break) so a single oversized message doesn't silently
-	// drop all older messages — we skip it and keep trying smaller older ones.
+	// 2. Keep most recent conversation messages, but truncate them if they are too big.
 	keptMessages := []ConversationMessage{}
 	currentTokens := 0
 
+	// We iterate backwards from newest to oldest.
 	for i := len(conversationMessages) - 1; i >= 0; i-- {
-		msgTokens := len(conversationMessages[i].Content) / 4
-		if currentTokens+msgTokens > availableTokens {
-			continue // skip this oversized message, keep scanning older ones
+		msg := conversationMessages[i]
+		msgTokens := len(msg.Content) / 4
+		for _, tc := range msg.ToolCalls {
+			msgTokens += (len(tc.Arguments) + len(tc.ToolName)) / 4
 		}
-		keptMessages = append([]ConversationMessage{conversationMessages[i]}, keptMessages...)
+
+		// Minimum tokens to give to a message before we stop trying to keep it.
+		const minMsgTokens = 100
+
+		if currentTokens+minMsgTokens > availableTokens {
+			break // No more room for even a tiny snippet.
+		}
+
+		remainingForThisMsg := availableTokens - currentTokens
+		if msgTokens > remainingForThisMsg {
+			// Sophisticated Truncation: Keep head and tail of the oversized message.
+			// head: 60%, tail: 40% of the remaining space.
+			targetChars := remainingForThisMsg * 4
+			if targetChars > 200 {
+				headChars := (targetChars * 6) / 10
+				tailChars := targetChars - headChars - 100 // leave room for notice
+				if tailChars < 0 {
+					tailChars = 0
+				}
+				
+				notice := fmt.Sprintf("\n\n[... %d characters truncated by Gorkbot Context Manager ...]\n\n", len(msg.Content)-targetChars)
+				msg.Content = msg.Content[:headChars] + notice + msg.Content[len(msg.Content)-tailChars:]
+				msgTokens = len(msg.Content) / 4
+			} else {
+				// Too small for head/tail, just take the head.
+				msg.Content = msg.Content[:targetChars] + " [...]"
+				msgTokens = len(msg.Content) / 4
+			}
+		}
+
+		keptMessages = append([]ConversationMessage{msg}, keptMessages...)
 		currentTokens += msgTokens
+		
+		if currentTokens >= availableTokens {
+			break
+		}
 	}
 
-	// Rebuild messages: system messages + kept conversation
 	ch.messages = append(systemMessages, keptMessages...)
 }
 

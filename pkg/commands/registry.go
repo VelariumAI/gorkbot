@@ -97,6 +97,27 @@ type OrchestratorAdapter struct {
 	// SetThinkingBudget sets the extended-thinking token budget on the orchestrator.
 	// A budget of 0 disables extended thinking.  Returns a status string.
 	SetThinkingBudget func(budget int) string
+
+	// GetCascadeOrder returns the current provider failover order as a string slice.
+	GetCascadeOrder func() []string
+	// SetCascadeOrder updates the cascade order and persists it to AppState.
+	SetCascadeOrder func(order []string) string
+	// ResetCascadeOrder restores the default cascade order and persists the change.
+	ResetCascadeOrder func() string
+
+	// ToggleSandbox toggles the SENSE input sanitizer. Returns true when now enabled.
+	ToggleSandbox func() bool
+	// SandboxEnabled returns true when the SENSE input sanitizer is active.
+	SandboxEnabled func() bool
+
+	// GetSREEnabled returns true when SRE is enabled.
+	GetSREEnabled func() bool
+	// SetSREEnabled enables or disables the Step-wise Reasoning Engine and persists the change.
+	SetSREEnabled func(bool) error
+	// GetEnsembleEnabled returns true when ensemble reasoning is enabled.
+	GetEnsembleEnabled func() bool
+	// SetEnsembleEnabled enables or disables ensemble reasoning and persists the change.
+	SetEnsembleEnabled func(bool) error
 }
 
 // Registry holds all available commands
@@ -528,6 +549,22 @@ func (r *Registry) registerCommands() {
 		IsModifier:  false,
 	}
 
+	r.commands["cascade"] = &CommandDefinition{
+		Name:        "cascade",
+		Description: "View or set the provider failover cascade order.",
+		Usage:       "/cascade  |  /cascade set <p1,p2,...>  |  /cascade reset",
+		Handler:     r.handleCascade,
+		IsModifier:  true,
+	}
+
+	r.commands["sandbox"] = &CommandDefinition{
+		Name:        "sandbox",
+		Description: "Toggle SENSE input sanitizer (path sandboxing, injection checks)",
+		Usage:       "/sandbox  |  /sandbox on  |  /sandbox off",
+		Handler:     r.handleSandbox,
+		IsModifier:  true,
+	}
+
 }
 
 // Command Handlers
@@ -537,32 +574,71 @@ func (r *Registry) handleClear(args []string) (string, error) {
 }
 
 func (r *Registry) handleHelp(args []string) (string, error) {
-	var sb strings.Builder
-	sb.WriteString("# Gorkbot Commands\n\n")
-	sb.WriteString("| Command | Description | Usage |\n")
-	sb.WriteString("|---------|-------------|-------|\n")
-
-	// Sort commands alphabetically for consistent display
-	commandNames := []string{
-		"help", "about", "clear", "chat", "model", "tools", "permissions", "auth",
-		"settings", "version", "theme", "compress", "bug", "quit",
-		"self", // SENSE self-knowledge layer
-		"env",  // host environment snapshot
-		// Enhanced commands
-		"context", "cost", "rewind", "mode", "export", "compact",
-		"skills", "rules", "hooks", "rename",
-		// P2+ commands
-		"mcp", "save", "resume", "rate", "share", "debug",
+	// Groups define display order and category headers.
+	// Any command not listed in a group falls into "Other".
+	type group struct {
+		header string
+		names  []string
+	}
+	groups := []group{
+		{"Interface", []string{"clear", "theme", "mouse", "debug", "quit"}},
+		{"Session", []string{"save", "resume", "rename", "chat", "export", "rewind"}},
+		{"AI & Models", []string{"model", "think", "mode", "cascade", "rate", "compress", "compact"}},
+		{"Tools & Permissions", []string{"tools", "permissions", "rules", "key", "auth", "sandbox"}},
+		{"Skills & Learning", []string{"skills", "self", "env", "context", "cost"}},
+		{"Integrations", []string{"mcp", "a2a", "telegram", "share", "schedule"}},
+		{"System", []string{"hooks", "commands", "settings", "version", "about", "bug", "help"}},
 	}
 
-	for _, name := range commandNames {
-		if cmd, exists := r.commands[name]; exists {
-			sb.WriteString(fmt.Sprintf("| `%s` | %s | `%s` |\n",
-				cmd.Name, cmd.Description, cmd.Usage))
+	// Track which commands have been placed in a group.
+	placed := make(map[string]bool)
+	for _, g := range groups {
+		for _, n := range g.names {
+			placed[n] = true
 		}
 	}
 
-	sb.WriteString("\n**Tip:** Press `Alt+Enter` for multi-line input\n")
+	// Collect ungrouped commands into "Other".
+	var ungrouped []string
+	for name := range r.commands {
+		if !placed[name] {
+			ungrouped = append(ungrouped, name)
+		}
+	}
+	sort.Strings(ungrouped)
+	if len(ungrouped) > 0 {
+		groups = append(groups, group{"Other", ungrouped})
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# Gorkbot Commands\n\n")
+
+	for _, g := range groups {
+		// Check if any commands in this group actually exist.
+		var rows []string
+		for _, name := range g.names {
+			cmd, exists := r.commands[name]
+			if !exists {
+				continue
+			}
+			rows = append(rows, fmt.Sprintf("| `/%-14s` | %-52s | `%s` |",
+				cmd.Name, cmd.Description, cmd.Usage))
+		}
+		if len(rows) == 0 {
+			continue
+		}
+		sb.WriteString("## " + g.header + "\n\n")
+		sb.WriteString("| Command | Description | Usage |\n")
+		sb.WriteString("|---------|-------------|-------|\n")
+		for _, row := range rows {
+			sb.WriteString(row + "\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("---\n")
+	sb.WriteString(fmt.Sprintf("**%d commands total** · `Alt+Enter` multi-line input · `Ctrl+R` history search · `Esc Esc` rewind menu\n",
+		len(r.commands)))
 	return sb.String(), nil
 }
 
@@ -2120,6 +2196,112 @@ Pass ` + "`--dry-run=false`" + ` to write SKILL.md files to disk.
 - ` + "`--min-evidence=N`" + ` — minimum failure count to generate a SKILL file (default: 2)
 - ` + "`--compact`" + ` — compact JSON output for ` + "`/self schema`" + `
 `
+}
+
+func (r *Registry) handleCascade(args []string) (string, error) {
+	if r.Orch == nil {
+		return "Orchestrator not available.", nil
+	}
+
+	sub := ""
+	if len(args) > 0 {
+		sub = strings.ToLower(args[0])
+	}
+
+	switch sub {
+	case "reset":
+		if r.Orch.ResetCascadeOrder != nil {
+			return r.Orch.ResetCascadeOrder(), nil
+		}
+		return "ResetCascadeOrder not wired.", nil
+
+	case "set":
+		if len(args) < 2 {
+			return "Usage: /cascade set <provider1,provider2,...>\nExample: /cascade set xai,anthropic,google,openai", nil
+		}
+		rawList := strings.Join(args[1:], " ")
+		rawList = strings.ReplaceAll(rawList, " ", ",")
+		parts := strings.Split(rawList, ",")
+		order := make([]string, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				order = append(order, p)
+			}
+		}
+		if len(order) == 0 {
+			return "No providers specified. Usage: /cascade set xai,anthropic,google", nil
+		}
+		if r.Orch.SetCascadeOrder != nil {
+			return r.Orch.SetCascadeOrder(order), nil
+		}
+		return "SetCascadeOrder not wired.", nil
+
+	default:
+		// Show current cascade order.
+		if r.Orch.GetCascadeOrder != nil {
+			order := r.Orch.GetCascadeOrder()
+			var sb strings.Builder
+			sb.WriteString("## Provider Failover Cascade\n\n")
+			if len(order) == 0 {
+				sb.WriteString("(empty — default order will be used)\n")
+			} else {
+				for i, p := range order {
+					sb.WriteString(fmt.Sprintf("%d. `%s`\n", i+1, p))
+				}
+			}
+			sb.WriteString("\n**Usage:**\n")
+			sb.WriteString("- `/cascade set xai,anthropic,google` — set custom order\n")
+			sb.WriteString("- `/cascade reset` — restore default order\n")
+			return sb.String(), nil
+		}
+		return "GetCascadeOrder not wired.", nil
+	}
+}
+
+func (r *Registry) handleSandbox(args []string) (string, error) {
+	if r.Orch == nil || r.Orch.ToggleSandbox == nil || r.Orch.SandboxEnabled == nil {
+		return "Sandbox toggle not available (orchestrator not wired).", nil
+	}
+
+	sub := ""
+	if len(args) > 0 {
+		sub = strings.ToLower(args[0])
+	}
+
+	switch sub {
+	case "on":
+		if r.Orch.SandboxEnabled() {
+			return "Sandbox is already **ON** — SENSE input sanitizer active.", nil
+		}
+		r.Orch.ToggleSandbox()
+		return "Sandbox **enabled** — SENSE path sandboxing and injection checks active.", nil
+
+	case "off":
+		if !r.Orch.SandboxEnabled() {
+			return "Sandbox is already **OFF** — SENSE input sanitizer bypassed.", nil
+		}
+		r.Orch.ToggleSandbox()
+		return "⚠ Sandbox **disabled** — SENSE path sandboxing bypassed. Use `/sandbox on` to re-enable.", nil
+
+	default:
+		// Show status when no args.
+		enabled := r.Orch.SandboxEnabled()
+		var sb strings.Builder
+		sb.WriteString("## SENSE Sandbox Status\n\n")
+		if enabled {
+			sb.WriteString("**Status: ON** ✅ — SENSE input sanitizer active\n\n")
+			sb.WriteString("Controls:\n")
+			sb.WriteString("- Control-char rejection (ASCII < 0x20, Unicode Cc/Cf)\n")
+			sb.WriteString("- Path sandboxing (file paths must resolve within CWD)\n")
+			sb.WriteString("- Resource-name validation (?, #, %)\n")
+		} else {
+			sb.WriteString("**Status: OFF** ⚠ — SENSE input sanitizer bypassed\n\n")
+			sb.WriteString("Path sandboxing and injection checks are disabled.\n")
+		}
+		sb.WriteString("\n**Usage:** `/sandbox on` | `/sandbox off`\n")
+		return sb.String(), nil
+	}
 }
 
 func (r *Registry) handleEnv(args []string) (string, error) {

@@ -157,10 +157,69 @@ func defaultColdDocs() map[string]string {
 		"tool-system":  coldDocTools,
 		"arc-mel":      coldDocARCMEL,
 		"cci":          coldDocCCI,
+		"sense":        coldDocSENSE,
+		"mcp":          coldDocMCP,
+		"session":      coldDocSession,
 	}
 }
 
 // ── Built-in Tier 3 cold docs ────────────────────────────────────────────────
+
+const coldDocSENSE = `# Tier 3 Spec: SENSE Subsystem (pkg/sense/)
+
+## Overview
+SENSE (Self-Evolving Neural Stabilization Engine) is Gorkbot's cognitive middleware. It provides input hardening, reasoning evaluation, and autonomous skill acquisition.
+
+## Key Components
+- **InputSanitizer** (input_sanitizer.go): Stabilization middleware. Validates agent-supplied tool parameters against policies (path_sandbox, resource_name). Rejects /tmp escapes and ASCII controls.
+- **LIE Evaluator** (lie.go): Length-Incentivized Exploration reward model. Scores responses based on Length, Redundancy (Jaccard trigrams), and Structure. Injects feedback system messages if reward < 0.2.
+- **AgeMem** (agemem.go): Agentic Memory. Tiered memory system with STM (Short-Term, 8k tokens) and LTM (Long-Term, persistent JSON). Uses time-based decay and priority scores.
+- **Engrams** (engrams.go): Conditional memories linking tool patterns to learned preferences.
+- **SkillEvolver** (skill_evolver.go): Evolutionary pipeline that converts SENSE failure traces into reusable SKILL.md files.
+
+## DO
+- Use sense_sanitize before executing any tool.
+- Record preferences via record_engram when the user corrects a tool parameter.
+- Use query_memory_state to check STM/LTM before suggesting a plan.
+
+## DON'T
+- Don't bypass the path sandbox.
+- Don't ignore LIE feedback; adjust the next response to be more diverse.
+`
+
+const coldDocMCP = `# Tier 3 Spec: MCP Integration (pkg/mcp/)
+
+## Overview
+Model Context Protocol (MCP) allows Gorkbot to connect to external tool servers.
+
+## Key Components
+- **Manager** (manager.go): Discovers servers from configs/mcp.json. Manages lifecycle of stdio-based JSON-RPC 2.0 clients.
+- **Client** (client.go): Per-server process handler. Performs the 'initialize' handshake and retrieves tool lists.
+- **mcpTool** (manager.go): Wrapper that makes MCP tools look like native Go tools.
+
+## DO
+- Prefix MCP tools with 'mcp_' to avoid namespace collisions.
+- Use /mcp reload if the config file changes.
+- Handle 'transport closed' errors by retrying the tool call once.
+
+## DON'T
+- Don't hardcode server paths; use environment variables or relative paths in mcp.json.
+`
+
+const coldDocSession = `# Tier 3 Spec: Session & Workspace (pkg/session/)
+
+## Overview
+Manages conversation persistence and git-based workspace safety.
+
+## Key Components
+- **WorkspaceManager** (workspace.go): Automatically creates git checkpoints (branch: workspace/...) before destructive tool execution.
+- **Exporter** (exporter.go): Handles /export to Markdown, Text, and PDF.
+- **Checkpoint** (checkpoint.go): Binary serialization of conversation state.
+
+## DO
+- Use /rewind to restore state after a failed code-editing attempt.
+- Always check git status via tools before proposing a commit.
+`
 
 const coldDocOrchestrator = `# Tier 3 Spec: Orchestrator (internal/engine/)
 

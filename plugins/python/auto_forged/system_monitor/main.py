@@ -1,30 +1,52 @@
 import sys
 import json
 import subprocess
+from datetime import datetime
 
-data = json.loads(sys.stdin.read())
-operation = data.get('operation', 'status')
+def run_bash(cmd):
+    try:
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            return result.stdout.strip()
+        else:
+            return f"Error ({result.returncode}): {result.stderr.strip()}"
+    except subprocess.TimeoutExpired:
+        return "Command timed out"
+    except Exception as e:
+        return f"Exception: {str(e)}"
 
-try:
-    if operation == 'status':
-        date_output = subprocess.getoutput('date')
-        disk_output = subprocess.getoutput('df -h')
-        mem_output = subprocess.getoutput('free -h')
-        proc_output = subprocess.getoutput('ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%mem | head -10')
-        output = f"Date/Time: {date_output}\n\nDisk Usage:\n{disk_output}\n\nMemory:\n{mem_output}\n\nTop Processes:\n{proc_output}\n\nAudit: 100% success rate, HITL enabled for destructive actions."
-        result = {"success": True, "output": output, "error": ""}
-    elif operation == 'list_processes':
-        output = subprocess.getoutput('ps aux --sort=-%cpu | head -20')
-        result = {"success": True, "output": output, "error": ""}
-    elif operation == 'disk_usage':
-        output = subprocess.getoutput('df -h')
-        result = {"success": True, "output": output, "error": ""}
-    elif operation == 'bash':
-        cmd = data.get('command', 'echo No command provided')
-        output = subprocess.getoutput(cmd)
-        result = {"success": True, "output": output, "error": ""}
-    else:
-        result = {"success": False, "output": "", "error": "Unknown operation"}
-    print(json.dumps(result))
-except Exception as e:
-    print(json.dumps({"success": False, "output": "", "error": str(e)}))
+def main():
+    input_data = json.load(sys.stdin)
+    action = input_data.get("action", "monitor")
+    paths = input_data.get("paths", ["/tmp/*", "~/.cache/*"])
+    
+    response = {"success": True, "output": {}, "error": ""}
+    
+    if action in ["monitor", "full"]:
+        mem = run_bash("free -h")
+        disk = run_bash("df -h")
+        top = run_bash("top -b -n1 | head -20")
+        timestamp = run_bash("date --iso-8601=seconds")
+        
+        response["output"] = {
+            "memory": mem,
+            "disk": disk,
+            "processes": top,
+            "timestamp": timestamp or datetime.utcnow().isoformat(),
+            "summary": f"Memory: {mem.splitlines()[1] if mem else 'N/A'} | Disk: {disk.splitlines()[-1] if disk else 'N/A'}"
+        }
+    
+    if action in ["cleanup", "clean"]:
+        clean_cmd = f"pkg clean && rm -rf {' '.join(paths)}"
+        cleanup_out = run_bash(clean_cmd)
+        response["output"]["cleanup"] = cleanup_out
+        response["output"]["cleaned_paths"] = paths
+    
+    if not response["output"]:
+        response["success"] = False
+        response["error"] = "No valid action specified"
+    
+    print(json.dumps(response, indent=2))
+
+if __name__ == "__main__":
+    main()

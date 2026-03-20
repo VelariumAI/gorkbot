@@ -1,0 +1,13 @@
+{
+  "name": "safe_log_cleanup",
+  "description": "Generates safe bash commands to list or clean old log files, with HITL warnings for any destructive delete operations",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

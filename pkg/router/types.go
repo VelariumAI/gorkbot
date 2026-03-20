@@ -51,8 +51,8 @@ type RouteDecision struct {
 
 // SystemConfiguration represents the selected model pair for the application lifecycle
 type SystemConfiguration struct {
-	PrimaryModel    registry.ModelDefinition // Strictly Grok (xAI)
-	SpecialistModel registry.ModelDefinition // Strictly Gemini (Google)
+	PrimaryModel    registry.ModelDefinition // Best available primary model
+	SpecialistModel registry.ModelDefinition // Best available specialist/consultant model
 	Reasoning       string
 }
 

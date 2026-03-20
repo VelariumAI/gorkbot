@@ -46,7 +46,7 @@ func (t *TotpGenerateTool) Execute(ctx context.Context, params map[string]interf
 		return &ToolResult{Success: false, Error: "secret is required"}, fmt.Errorf("secret required")
 	}
 
-	projectRoot := os.Getenv("HOME") + "/project/gorkbot"
+	projectRoot := os.Getenv("HOME") + "/project/gorky"
 	scriptPath := filepath.Join(projectRoot, "scripts/totp_bridge.js")
 
 	command := fmt.Sprintf("node %s %s",

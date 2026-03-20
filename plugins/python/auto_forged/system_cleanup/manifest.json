@@ -1,0 +1,13 @@
+{
+  "name": "system_cleanup",
+  "description": "Safely performs Termux/Android cleanup by running pkg clean, apt autoremove, and removing temp/cache files to free 5-10GB. Reads parameters from stdin for customization (safe_mode, targets).",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

@@ -10,8 +10,7 @@ LLAMA_ROOT := ./ext/llama.cpp
 
 .PHONY: all build clean install install-global \
         build-windows build-android build-linux \
-        build-llm-bridge build-llm clean-llm download-nomic build-web \
-        init-submodules build-llama-cpp
+        build-llm-bridge build-llm clean-llm download-nomic build-web
 
 all: build build-web
 
@@ -58,44 +57,15 @@ install: build build-web
 # Add ~/bin to PATH if not already there:
 #   echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
 
-install-global: init-submodules build-llm download-nomic build-web
+install-global: build-llm download-nomic build-web
 	@install -m 755 $(BUILD_DIR)/$(APP_NAME) $(INSTALL_DIR)/$(APP_NAME)
 	@install -m 755 $(BUILD_DIR)/$(WEB_APP_NAME) $(INSTALL_DIR)/$(WEB_APP_NAME)
 	@bash scripts/write_launcher.sh $(INSTALL_DIR) $(APP_NAME) $(SHORT_NAME)
 
 # ── Local LLM engine (llamacpp build tag) ─────────────────────────────────────
 
-# Ensure ext/llama.cpp submodule is checked out before any C++ build step.
-init-submodules:
-	@if [ ! -f "$(LLAMA_ROOT)/include/llama.h" ]; then \
-	  echo "Initialising ext/llama.cpp submodule..."; \
-	  git submodule update --init --checkout --force ext/llama.cpp; \
-	  echo "✓ ext/llama.cpp ready"; \
-	else \
-	  echo "✓ ext/llama.cpp already present"; \
-	fi
-
-# Build llama.cpp static libraries via cmake (Release, Vulkan, no tests/examples).
-# Output: ext/llama.cpp/build/libllama.a, libggml*.a — required by the linker.
-build-llama-cpp: init-submodules
-	@if [ ! -f "$(LLAMA_ROOT)/build/libllama.a" ]; then \
-	  echo "Building llama.cpp static libs (this takes a few minutes)..."; \
-	  cmake -S $(LLAMA_ROOT) -B $(LLAMA_ROOT)/build \
-	    -DCMAKE_BUILD_TYPE=Release \
-	    -DBUILD_SHARED_LIBS=OFF \
-	    -DGGML_VULKAN=ON \
-	    -DGGML_BUILD_TESTS=OFF \
-	    -DGGML_BUILD_EXAMPLES=OFF \
-	    -DLLAMA_BUILD_TESTS=OFF \
-	    -DLLAMA_BUILD_EXAMPLES=OFF; \
-	  cmake --build $(LLAMA_ROOT)/build --parallel 4; \
-	  echo "✓ llama.cpp libs ready"; \
-	else \
-	  echo "✓ llama.cpp libs already built"; \
-	fi
-
 # Compile the C++ bridge → internal/llm/libgorkbot_llm.a
-build-llm-bridge: build-llama-cpp
+build-llm-bridge:
 	@echo "Compiling LLM bridge (C++ → static lib)..."
 	@bash scripts/build_llm_bridge.sh
 

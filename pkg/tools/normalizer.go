@@ -112,6 +112,9 @@ func normalizeToolName(name string) string {
 	// structured_bash aliases
 	case "structured_exec", "structured_shell", "struct_bash", "parsed_bash":
 		return "structured_bash"
+	// skills_list aliases
+	case "skill_list", "list_skills", "list_skill":
+		return "skills_list"
 	default:
 		return name
 	}
