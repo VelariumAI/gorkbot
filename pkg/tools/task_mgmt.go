@@ -36,7 +36,7 @@ func getTaskListPath() (string, error) {
 		return "", err
 	}
 
-	configDir := filepath.Join(homeDir, ".config", "grokster")
+	configDir := filepath.Join(homeDir, ".config", "gorkbot")
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		return "", err
 	}

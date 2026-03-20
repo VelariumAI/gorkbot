@@ -2,7 +2,7 @@
 
 ## Overview
 
-Grokster includes a comprehensive permission system for managing tool access. The `/permissions` command allows you to view and reset tool permissions at any time.
+Gorkbot includes a comprehensive permission system for managing tool access. The `/permissions` command allows you to view and reset tool permissions at any time.
 
 ---
 
@@ -11,12 +11,12 @@ Grokster includes a comprehensive permission system for managing tool access. Th
 ### ✅ Always
 - Tool is permanently approved
 - No prompts on future executions
-- Stored in `~/.config/grokster/tool_permissions.json`
+- Stored in `~/.config/gorkbot/tool_permissions.json`
 - **Use for:** Trusted, frequently-used tools
 
 ### 🔓 Session
 - Approved for current session only
-- Cleared when you exit Grokster
+- Cleared when you exit Gorkbot
 - No persistent storage
 - **Use for:** Temporary access during this session
 
@@ -77,7 +77,7 @@ Total Tools: 44
 - Clears ALL persistent permissions (always/never)
 - Clears session permissions
 - All tools return to default "once" (ask every time)
-- Deletes `~/.config/grokster/tool_permissions.json`
+- Deletes `~/.config/gorkbot/tool_permissions.json`
 
 **Use when:**
 - You want a fresh start
@@ -146,7 +146,7 @@ When a tool requires permission, you'll see a **centered overlay** with:
 ## Storage
 
 ### Persistent Permissions
-- **File:** `~/.config/grokster/tool_permissions.json`
+- **File:** `~/.config/gorkbot/tool_permissions.json`
 - **Permissions:** 0600 (owner read/write only)
 - **Format:** JSON
 - **Contains:** always/never permissions
@@ -165,7 +165,7 @@ When a tool requires permission, you'll see a **centered overlay** with:
 
 ### Session Permissions
 - **Storage:** In-memory only
-- **Lifetime:** Current Grokster session
+- **Lifetime:** Current Gorkbot session
 - **Reset:** On exit or with `/permissions reset`
 
 ---

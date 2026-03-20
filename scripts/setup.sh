@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "Initializing Grokster setup..."
+echo "Initializing Gorkbot setup..."
 
 # Check Go
 if ! command -v go &> /dev/null; then
@@ -22,13 +22,13 @@ else
 fi
 
 # Build
-echo "Building Grokster..."
+echo "Building Gorkbot..."
 if command -v make &> /dev/null; then
     make build
 else
     echo "Make not found, using direct go build..."
     mkdir -p bin
-    go build -o bin/grokster ./cmd/grokster
+    go build -o bin/gorkbot ./cmd/gorkbot
 fi
 
-echo "Setup complete! Run './bin/grokster' to start."
+echo "Setup complete! Run './bin/gorkbot' to start."

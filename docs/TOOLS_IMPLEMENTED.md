@@ -1,8 +1,8 @@
-# Grokster Tools - Complete Implementation
+# Gorkbot Tools - Complete Implementation
 
 ## Overview
 
-Grokster now includes **28 comprehensive tools** organized into 7 categories, including the special "DIY tool" that allows AI agents to create custom tools on the fly.
+Gorkbot now includes **28 comprehensive tools** organized into 7 categories, including the special "DIY tool" that allows AI agents to create custom tools on the fly.
 
 ## Tool Categories
 
@@ -258,7 +258,7 @@ Grokster now includes **28 comprehensive tools** organized into 7 categories, in
 - **never** - Permanently blocked
 
 ### Security Features
-1. **Persistent Storage** - Permissions saved to `~/.config/grokster/tool_permissions.json`
+1. **Persistent Storage** - Permissions saved to `~/.config/gorkbot/tool_permissions.json`
 2. **File Permissions** - Config file stored with 0600 (owner read/write only)
 3. **Shell Escaping** - All bash commands properly escaped with `shellescape()`
 4. **Timeout Protection** - All tools have execution timeouts

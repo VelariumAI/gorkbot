@@ -1,4 +1,4 @@
-# Security Best Practices for Grokster
+# Security Best Practices for Gorkbot
 
 ## 🔒 Handling OAuth Secrets
 
@@ -70,7 +70,7 @@ nano .env
 GOOGLE_CLIENT_SECRET=NEW_SECRET_HERE
 
 # Test it works
-./grokster.sh login
+./gorkbot.sh login
 ```
 
 ### Step 3: If Already Committed to Git
@@ -92,10 +92,10 @@ git push origin --force --all
 **Better approach:** Start a new repo:
 ```bash
 # Backup current code
-cp -r grokster grokster-backup
+cp -r gorkbot gorkbot-backup
 
 # Create fresh repo
-cd grokster
+cd gorkbot
 rm -rf .git
 git init
 git add .
@@ -204,7 +204,7 @@ cd git-secrets
 make install
 
 # Configure
-cd /path/to/grokster
+cd /path/to/gorkbot
 git secrets --install
 git secrets --register-aws
 git secrets --add 'GOCSPX-[0-9A-Za-z_-]+'
@@ -261,7 +261,7 @@ git log -S "GOCSPX-" --all
 
 ## ✅ Current Status
 
-Your Grokster installation is now **secure**:
+Your Gorkbot installation is now **secure**:
 
 1. ✅ Client Secret removed from code
 2. ✅ Secret stored in `.env` (gitignored)

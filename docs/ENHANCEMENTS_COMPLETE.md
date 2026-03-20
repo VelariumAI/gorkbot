@@ -130,7 +130,7 @@ Turn 3: AI analyzes diff, provides summary
 - `GetSummary()` - Formatted report
 
 **Storage:**
-- File: `~/.config/grokster/tool_analytics.json`
+- File: `~/.config/gorkbot/tool_analytics.json`
 - Format:
   ```json
   {
@@ -171,7 +171,7 @@ Top 10 Most Used Tools:
 
 **Files modified:**
 - `pkg/tools/registry.go` - Analytics integration in `Execute()`
-- `cmd/grokster/main.go` - Analytics initialization
+- `cmd/gorkbot/main.go` - Analytics initialization
 
 ---
 
@@ -265,15 +265,15 @@ Top 10 Most Used Tools:
 3. `internal/tui/update.go` - Permission keyboard handling
 4. `internal/tui/view.go` - Permission overlay rendering
 5. `pkg/tools/registry.go` - Analytics integration
-6. `cmd/grokster/main.go` - Analytics initialization
+6. `cmd/gorkbot/main.go` - Analytics initialization
 
 ---
 
 ## 🎮 How to Use
 
-### Start Grokster
+### Start Gorkbot
 ```bash
-./grokster.sh
+./gorkbot.sh
 ```
 
 ### Example Interactions
@@ -316,7 +316,7 @@ Top 10 Most Used Tools:
 ```bash
 # In TUI, use the /tools command (future enhancement)
 # Or check the analytics file directly:
-cat ~/.config/grokster/tool_analytics.json | jq
+cat ~/.config/gorkbot/tool_analytics.json | jq
 ```
 
 ### Analytics Data Structure
@@ -398,7 +398,7 @@ Expected: Permission prompt appears, you can approve/deny
 ### 5. Test Analytics
 ```bash
 # After using several tools:
-cat ~/.config/grokster/tool_analytics.json
+cat ~/.config/gorkbot/tool_analytics.json
 Expected: JSON with execution counts, success rates
 ```
 
@@ -475,7 +475,7 @@ Expected: JSON with execution counts, success rates
 
 ## 🎊 Summary
 
-**Grokster now has a world-class tool system!**
+**Gorkbot now has a world-class tool system!**
 
 ✅ 28 tools ready for production use
 ✅ AI fully aware of all capabilities

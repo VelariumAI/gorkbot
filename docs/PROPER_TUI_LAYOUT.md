@@ -234,7 +234,7 @@ When terminal is resized:
 - ✅ Fixed input area
 - ✅ Clean appearance
 
-### Grokster (Now)
+### Gorkbot (Now)
 - ✅ All of the above!
 - ✅ Plus permission prompts
 - ✅ Plus loading indicators
@@ -264,8 +264,8 @@ When terminal is resized:
 
 ### Terminal Resize Test
 ```bash
-# Run Grokster
-./grokster.sh
+# Run Gorkbot
+./gorkbot.sh
 
 # Resize terminal window
 # → Layout should adjust smoothly
@@ -295,7 +295,7 @@ When terminal is resized:
 ## Build Status
 
 ```bash
-✅ Build successful: bin/grokster
+✅ Build successful: bin/gorkbot
 ✅ No compilation errors
 ✅ Ready for production use
 ```

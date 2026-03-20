@@ -265,7 +265,7 @@ sudo cp bin/gorkbot /usr/local/bin/
 #### Option 2: Using Wrapper Script
 ```bash
 ./gorkbot.sh          # TUI mode
-./grokster.sh         # Alias
+./gorkbot.sh         # Alias
 ./gorkbot.sh -p "..."  # One-shot mode
 ```
 
@@ -753,7 +753,7 @@ Token counts by provider vary based on model and thinking tokens.
 gorkbot/
 ├── cmd/                     # Executable entry points
 │   ├── gorkbot/            # Main TUI app
-│   ├── grokster/           # Alias
+│   ├── gorkbot/           # Alias
 │   └── ...                 # Other variants
 ├── internal/               # Private packages
 │   ├── engine/             # Orchestrator (29 files)

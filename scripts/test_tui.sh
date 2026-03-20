@@ -1,7 +1,7 @@
 #!/bin/bash
 # Quick TUI test script
 
-echo "🚀 Starting Grokster TUI..."
+echo "🚀 Starting Gorkbot TUI..."
 echo ""
 echo "Try these commands in the TUI:"
 echo "  /help     - See all commands"
@@ -11,4 +11,4 @@ echo ""
 echo "Or just chat normally!"
 echo ""
 
-./grokster.sh
+./gorkbot.sh

@@ -1,8 +1,8 @@
-# Grokster Tool & A2A System Design
+# Gorkbot Tool & A2A System Design
 
 ## 🎯 Overview
 
-Grokster now features a comprehensive tool system with:
+Gorkbot now features a comprehensive tool system with:
 1. **Robust Tool Framework** - Extensible tool architecture
 2. **Permission System** - Multi-level permission control with persistence
 3. **Built-in Tools** - Bash, file operations, git, web, etc.
@@ -183,7 +183,7 @@ Tool Execution Request
 
 Permissions are stored in:
 ```
-~/.config/grokster/tool_permissions.json
+~/.config/gorkbot/tool_permissions.json
 ```
 
 Format:

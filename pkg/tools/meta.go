@@ -773,8 +773,8 @@ func (t *ModifyToolTool) Execute(ctx context.Context, params map[string]interfac
 	if isStatic {
 		sb.WriteString("Type: Static (compiled-in) → overridden by dynamic wrapper\n")
 		sb.WriteString("Rebuild required for permanent integration.\n")
-		sb.WriteString("  Run: go build -o grokster ./cmd/grokster/\n")
-		sb.WriteString("  (Grokster will notify you on exit if a rebuild is pending.)\n")
+		sb.WriteString("  Run: go build -o gorkbot ./cmd/gorkbot/\n")
+		sb.WriteString("  (Gorkbot will notify you on exit if a rebuild is pending.)\n")
 	} else {
 		sb.WriteString("Type: Dynamic — hot-loaded, no rebuild needed.\n")
 	}

@@ -24,7 +24,7 @@ type Config struct {
 	UseTrueColor bool    // true = 24-bit ANSI color; false = 256-color fallback
 }
 
-// DefaultConfig returns sensible defaults for a Grokster header logo.
+// DefaultConfig returns sensible defaults for a Gorkbot header logo.
 func DefaultConfig() Config {
 	return Config{
 		MaxWidth:     30,

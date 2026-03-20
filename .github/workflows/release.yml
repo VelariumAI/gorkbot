@@ -86,7 +86,7 @@ jobs:
 
       - name: Verify build with new version
         run: |
-          go build -o ./bin/grokster-verify ./cmd/grokster/
+          go build -o ./bin/gorkbot-verify ./cmd/gorkbot/
           echo "✅ Build successful with version ${{ steps.extract.outputs.FULL_VERSION }}"
 
       - name: Commit version updates
@@ -126,19 +126,15 @@ jobs:
 
           # Linux x86_64
           GOOS=linux GOARCH=amd64 go build -o dist/gorkbot-linux-amd64 ./cmd/gorkbot
-          GOOS=linux GOARCH=amd64 go build -o dist/grokster-linux-amd64 ./cmd/grokster
 
           # macOS x86_64
           GOOS=darwin GOARCH=amd64 go build -o dist/gorkbot-darwin-amd64 ./cmd/gorkbot
-          GOOS=darwin GOARCH=amd64 go build -o dist/grokster-darwin-amd64 ./cmd/grokster
 
           # macOS ARM64
           GOOS=darwin GOARCH=arm64 go build -o dist/gorkbot-darwin-arm64 ./cmd/gorkbot
-          GOOS=darwin GOARCH=arm64 go build -o dist/grokster-darwin-arm64 ./cmd/grokster
 
           # Windows x86_64
           GOOS=windows GOARCH=amd64 go build -o dist/gorkbot-windows-amd64.exe ./cmd/gorkbot
-          GOOS=windows GOARCH=amd64 go build -o dist/grokster-windows-amd64.exe ./cmd/grokster
 
       - name: Create checksums
         run: |
@@ -152,7 +148,7 @@ jobs:
           tag_name: ${{ needs.release-please.outputs.tag_name }}
           files: |
             dist/gorkbot-*
-            dist/grokster-*
+            dist/gorkbot-*
             dist/SHA256SUMS
           draft: false
           prerelease: false

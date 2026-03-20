@@ -1,8 +1,8 @@
-# OAuth Client Setup for Grokster Maintainers
+# OAuth Client Setup for Gorkbot Maintainers
 
 ## 📝 For Project Maintainers Only
 
-This guide is for setting up the **official Grokster public OAuth client** that all users will use.
+This guide is for setting up the **official Gorkbot public OAuth client** that all users will use.
 
 ## 🎯 Goal
 
@@ -10,14 +10,14 @@ Create a public OAuth client that:
 - Allows users to sign in with "Sign in with Google"
 - Uses PKCE (no client secret needed)
 - Doesn't require users to create their own OAuth app
-- Is embedded in the Grokster codebase
+- Is embedded in the Gorkbot codebase
 
 ## 🔧 Setup Steps
 
 ### 1. Create Google Cloud Project
 
 1. Go to https://console.cloud.google.com
-2. Create a new project: **"Grokster Official"**
+2. Create a new project: **"Gorkbot Official"**
 3. Note the project ID
 
 ### 2. Enable API
@@ -35,10 +35,10 @@ Create a public OAuth client that:
    - Click **CREATE**
 
 3. **App Information:**
-   - App name: `Grokster`
+   - App name: `Gorkbot`
    - User support email: Your email
-   - App logo: Upload Grokster logo (optional)
-   - Application home page: `https://github.com/taeddings/grokster`
+   - App logo: Upload Gorkbot logo (optional)
+   - Application home page: `https://github.com/taeddings/gorkbot`
    - Privacy policy: Link to privacy policy (required for verification)
    - Terms of service: Link to terms (optional)
 
@@ -64,7 +64,7 @@ Create a public OAuth client that:
 
 3. **Application type:**
    - Select **Desktop app**
-   - Name: `Grokster CLI`
+   - Name: `Gorkbot CLI`
 
 4. **Configure Redirect URIs:**
 
@@ -95,7 +95,7 @@ Create a public OAuth client that:
 
 Note: The client secret is shown but won't be embedded in the code. PKCE provides security without it.
 
-### 6. Update Grokster Code
+### 6. Update Gorkbot Code
 
 Edit `pkg/auth/oauth.go`:
 
@@ -104,7 +104,7 @@ const (
     // Google OAuth scopes for Generative AI API
     GeminiScope = "https://www.googleapis.com/auth/generative-language"
 
-    // Public OAuth Client ID for Grokster
+    // Public OAuth Client ID for Gorkbot
     // Replace this with your actual client ID
     DefaultClientID = "YOUR_ACTUAL_CLIENT_ID.apps.googleusercontent.com"
 )
@@ -115,14 +115,14 @@ Replace `YOUR_ACTUAL_CLIENT_ID` with the Client ID from step 4.
 ### 7. Test the Flow
 
 ```bash
-# Build Grokster
+# Build Gorkbot
 make build
 
 # Test login (should use the new default client ID)
-./grokster.sh login
+./gorkbot.sh login
 
 # Verify it works
-./grokster.sh status
+./gorkbot.sh status
 ```
 
 ### 8. Commit and Push
@@ -245,7 +245,7 @@ Add the redirect URI to your OAuth client:
 ### "This app isn't verified"
 
 - Submit app for verification, or
-- Users can click "Advanced" → "Go to Grokster (unsafe)"
+- Users can click "Advanced" → "Go to Gorkbot (unsafe)"
 
 ## 📚 References
 
@@ -255,4 +255,4 @@ Add the redirect URI to your OAuth client:
 
 ---
 
-**After setup, users just run:** `./grokster.sh login` and sign in with their Google account!
+**After setup, users just run:** `./gorkbot.sh login` and sign in with their Google account!

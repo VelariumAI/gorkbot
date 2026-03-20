@@ -1,7 +1,7 @@
 # Technical Specification: Model Registry & Intelligent Router
 
 **Date:** February 16, 2026
-**Project:** Grokster CLI
+**Project:** Gorkbot CLI
 **Status:** Draft / Proposal
 
 ---
@@ -136,7 +136,7 @@ type Router interface {
 
 ### Phase 2: Build the Registry
 *   Create `pkg/registry`.
-*   Move hardcoded provider setup from `cmd/grokster/main.go` into a registry initialization function.
+*   Move hardcoded provider setup from `cmd/gorkbot/main.go` into a registry initialization function.
 
 ### Phase 3: Build the Router
 *   Create `pkg/router`.

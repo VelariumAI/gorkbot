@@ -2,7 +2,7 @@
 
 ## Overview
 
-Grokster now implements **robust conversation context management** that ensures Grok maintains full memory of the entire conversation across all prompts within a session.
+Gorkbot now implements **robust conversation context management** that ensures Grok maintains full memory of the entire conversation across all prompts within a session.
 
 ---
 
@@ -305,7 +305,7 @@ orchestrator.ClearHistory()
 ### Enable Watchdog Mode
 
 ```bash
-./grokster.sh -watchdog
+./gorkbot.sh -watchdog
 ```
 
 Shows:
@@ -324,7 +324,7 @@ Shows:
 ### Check Logs
 
 ```bash
-cat ~/.config/grokster/grokster.json | jq -r '. | select(.msg == "Executing AI turn")'
+cat ~/.config/gorkbot/gorkbot.json | jq -r '. | select(.msg == "Executing AI turn")'
 ```
 
 Shows turn-by-turn execution with message counts.
@@ -488,7 +488,7 @@ func TruncateToTokenLimit(maxTokens int) {
 
 ## 🎉 Summary
 
-Grokster now has **enterprise-grade conversation context management**:
+Gorkbot now has **enterprise-grade conversation context management**:
 
 - ✅ **Full memory** across entire session
 - ✅ **Automatic truncation** to fit context limits

@@ -28,7 +28,7 @@ When you merge commits to `main` branch, GitHub Actions automatically:
    - Pushes trigger the second phase
 
 3. **Binary Publishing**
-   - Builds gorkbot and grokster for 5 platforms
+   - Builds gorkbot and gorkbot for 5 platforms
    - Creates SHA256 checksums
    - Publishes GitHub Release with files and changelog
 
@@ -96,7 +96,7 @@ When commits are pushed to `main`:
 Once the release PR is merged:
 
 1. **Build Phase**
-   - Compiles gorkbot and grokster for 5 platforms:
+   - Compiles gorkbot and gorkbot for 5 platforms:
      - Linux x86_64
      - macOS x86_64
      - macOS ARM64 (Apple Silicon)
@@ -247,7 +247,7 @@ These are configured in `.github/workflows/release.yml`.
 
 ### Testing
 Before merging to main:
-1. Test locally: `go build -o ./bin/grokster ./cmd/grokster`
+1. Test locally: `go build -o ./bin/gorkbot ./cmd/gorkbot`
 2. Run tests: `go test ./...`
 3. Ensure no regressions
 

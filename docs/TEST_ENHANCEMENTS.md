@@ -4,7 +4,7 @@ Quick guide to test all 4 enhancements!
 
 ## ✅ Build Status
 ```bash
-go build ./cmd/grokster
+go build ./cmd/gorkbot
 # ✅ SUCCESS - All code compiles!
 ```
 
@@ -16,7 +16,7 @@ go build ./cmd/grokster
 
 **Commands:**
 ```bash
-./grokster.sh
+./gorkbot.sh
 ```
 
 **In TUI, try:**
@@ -86,7 +86,7 @@ You: "Find all Go files and count the lines in each"
 **Setup:**
 ```bash
 # Clear any existing permissions (optional)
-rm ~/.config/grokster/tool_permissions.json
+rm ~/.config/gorkbot/tool_permissions.json
 ```
 
 **Test Case A - First Time Bash:**
@@ -150,7 +150,7 @@ You: "Check git log"          # Uses git_log
 
 **Check Analytics:**
 ```bash
-cat ~/.config/grokster/tool_analytics.json | jq
+cat ~/.config/gorkbot/tool_analytics.json | jq
 ```
 
 **Expected Output:**
@@ -209,7 +209,7 @@ AI: I'll check the git status first.
 ✅ Tool: git_status
 On branch main
 Changes not staged for commit:
-  modified: cmd/grokster/main.go
+  modified: cmd/gorkbot/main.go
 ```
 
 **Turn 2:**
@@ -221,7 +221,7 @@ AI: I see main.go has changes. Let me show you the diff.
 **ToolBox appears:**
 ```
 ✅ Tool: git_diff
-diff --git a/cmd/grokster/main.go b/cmd/grokster/main.go
+diff --git a/cmd/gorkbot/main.go b/cmd/gorkbot/main.go
 ...changes shown...
 ```
 
@@ -275,7 +275,7 @@ go run test_tools.go
 
 **Expected:**
 ```
-🔧 Grokster Tool System Test
+🔧 Gorkbot Tool System Test
 
 📁 shell Tools (1):
    - bash [once] ...
@@ -288,7 +288,7 @@ go run test_tools.go
 
 🧪 Testing bash tool execution...
 ✅ Tool executed successfully!
-   Output: Hello from Grokster tools!
+   Output: Hello from Gorkbot tools!
 ```
 
 ---
@@ -315,14 +315,14 @@ ls -la internal/tui/permission.go
 **Check:**
 ```bash
 # Verify analytics file is created
-ls -la ~/.config/grokster/tool_analytics.json
+ls -la ~/.config/gorkbot/tool_analytics.json
 ```
 **Expected:** File exists after tool executions
 
 ### Issue: Tool execution fails
 **Check logs:**
 ```bash
-tail -f ~/.local/state/grokster/grokster.json | jq
+tail -f ~/.local/state/gorkbot/gorkbot.json | jq
 ```
 **Look for:** "Executing tool" entries with error messages
 
@@ -350,7 +350,7 @@ All enhancements working if:
 - Selections persist correctly
 
 ✅ **Analytics**
-- JSON file created in ~/.config/grokster/
+- JSON file created in ~/.config/gorkbot/
 - Execution counts increase
 - Success/failure tracked
 - Timestamps update
@@ -363,14 +363,14 @@ All enhancements working if:
 
 ```bash
 # 1. Build
-go build ./cmd/grokster
+go build ./cmd/gorkbot
 echo "✅ Build successful"
 
 # 2. Check tools
 go run test_tools.go | grep "Total tools"
 
 # 3. Start TUI
-./grokster.sh
+./gorkbot.sh
 ```
 
 **In TUI:**
@@ -394,10 +394,10 @@ You: "Check git status and show recent commits"
 **After TUI:**
 ```bash
 # 5. Check analytics
-cat ~/.config/grokster/tool_analytics.json | jq '.stats | keys'
+cat ~/.config/gorkbot/tool_analytics.json | jq '.stats | keys'
 
 # 6. Verify permissions
-cat ~/.config/grokster/tool_permissions.json | jq
+cat ~/.config/gorkbot/tool_permissions.json | jq
 
 echo "✅ All enhancements working!"
 ```

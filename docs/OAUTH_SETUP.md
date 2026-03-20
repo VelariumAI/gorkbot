@@ -1,6 +1,6 @@
 # Google OAuth Setup Guide
 
-This guide walks you through setting up Google OAuth for Grokster so you can authenticate with your Google account instead of using API keys.
+This guide walks you through setting up Google OAuth for Gorkbot so you can authenticate with your Google account instead of using API keys.
 
 ## 🎯 Overview
 
@@ -15,7 +15,7 @@ This guide walks you through setting up Google OAuth for Grokster so you can aut
 
 - A Google account
 - Access to [Google Cloud Console](https://console.cloud.google.com)
-- Grokster installed and built
+- Gorkbot installed and built
 
 ## 🔧 Step 1: Create OAuth Credentials
 
@@ -27,7 +27,7 @@ Visit: https://console.cloud.google.com
 
 - Click the project dropdown at the top
 - Click **"NEW PROJECT"**
-- Name it something like "Grokster" or "Personal AI CLI"
+- Name it something like "Gorkbot" or "Personal AI CLI"
 - Click **"CREATE"**
 
 ### 1.3 Enable the Generative Language API
@@ -48,7 +48,7 @@ Visit: https://console.cloud.google.com
    - Click **"CREATE"**
 
    Fill in the required fields:
-   - App name: **Grokster**
+   - App name: **Gorkbot**
    - User support email: *your email*
    - Developer contact: *your email*
    - Click **"SAVE AND CONTINUE"**
@@ -66,7 +66,7 @@ Visit: https://console.cloud.google.com
 
 5. **Create the OAuth Client:**
    - Application type: **Desktop app**
-   - Name: **Grokster CLI**
+   - Name: **Gorkbot CLI**
    - Click **"CREATE"**
 
 6. **Download Credentials:**
@@ -84,7 +84,7 @@ The OAuth flow uses `http://localhost:8085/callback` by default.
 3. Add: `http://localhost:8085/callback`
 4. Click **"SAVE"**
 
-## 🔐 Step 2: Configure Grokster
+## 🔐 Step 2: Configure Gorkbot
 
 ### 2.1 Add Credentials to .env
 
@@ -112,10 +112,10 @@ GOOGLE_CLIENT_SECRET=GOCSPX-AbCdEfGhIjKlMnOpQrStUvWx
 
 ### 2.2 Verify .env is Loaded
 
-The wrapper script `grokster.sh` automatically loads `.env`, so just use:
+The wrapper script `gorkbot.sh` automatically loads `.env`, so just use:
 
 ```bash
-./grokster.sh login
+./gorkbot.sh login
 ```
 
 Or, if running directly:
@@ -123,7 +123,7 @@ Or, if running directly:
 ```bash
 export GOOGLE_CLIENT_ID="your-client-id"
 export GOOGLE_CLIENT_SECRET="your-client-secret"
-./bin/grokster login
+./bin/gorkbot login
 ```
 
 ## 🚀 Step 3: Run OAuth Login
@@ -131,7 +131,7 @@ export GOOGLE_CLIENT_SECRET="your-client-secret"
 ### 3.1 Start the Login Flow
 
 ```bash
-./grokster.sh login
+./gorkbot.sh login
 ```
 
 You should see:
@@ -151,7 +151,7 @@ Waiting for authorization...
 Your browser should automatically open to Google's sign-in page:
 
 1. **Sign in** to your Google account
-2. **Review permissions** - Grokster is requesting access to Generative Language API
+2. **Review permissions** - Gorkbot is requesting access to Generative Language API
 3. Click **"Allow"** or **"Continue"**
 
 ### 3.3 Success!
@@ -167,9 +167,9 @@ And in your terminal:
 
 ```
 ✓ Authorization successful!
-✓ Token saved to ~/.config/grokster/gemini_token.json
+✓ Token saved to ~/.config/gorkbot/gemini_token.json
 
-You can now use Grokster with your Google account.
+You can now use Gorkbot with your Google account.
 ```
 
 ## 🔍 Step 4: Verify Authentication
@@ -177,7 +177,7 @@ You can now use Grokster with your Google account.
 Check your authentication status:
 
 ```bash
-./grokster.sh status
+./gorkbot.sh status
 ```
 
 You should see:
@@ -193,14 +193,14 @@ Authentication Status:
 
 ## 🎮 Step 5: Test It!
 
-Now run Grokster and it will use OAuth authentication:
+Now run Gorkbot and it will use OAuth authentication:
 
 ```bash
 # Interactive TUI
-./grokster.sh
+./gorkbot.sh
 
 # One-shot prompt
-./grokster.sh -p "Hello, Grokster!"
+./gorkbot.sh -p "Hello, Gorkbot!"
 ```
 
 The app will automatically use your OAuth token instead of the API key.
@@ -212,7 +212,7 @@ The app will automatically use your OAuth token instead of the API key.
 If port 8085 is already in use, specify a different port:
 
 ```bash
-./grokster.sh login --port 3000
+./gorkbot.sh login --port 3000
 ```
 
 **Important:** You must also add this redirect URI to your Google OAuth client:
@@ -223,7 +223,7 @@ If port 8085 is already in use, specify a different port:
 Increase timeout for slow connections:
 
 ```bash
-./grokster.sh login --timeout 10m
+./gorkbot.sh login --timeout 10m
 ```
 
 ### Refresh Token
@@ -232,12 +232,12 @@ OAuth tokens expire after 1 hour, but they auto-refresh automatically. If you ne
 
 ```bash
 # Check if token is expired
-./grokster.sh status
+./gorkbot.sh status
 
 # The app will auto-refresh on next use
 # Or force a new login:
-./grokster.sh logout
-./grokster.sh login
+./gorkbot.sh logout
+./gorkbot.sh login
 ```
 
 ## 🐛 Troubleshooting
@@ -260,13 +260,13 @@ GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 ```
 
-And that you're using `./grokster.sh` (which loads `.env`) or have exported the variables.
+And that you're using `./gorkbot.sh` (which loads `.env`) or have exported the variables.
 
 ### "Failed to start listener" Error
 
 Port 8085 is already in use. Try a different port:
 ```bash
-./grokster.sh login --port 9090
+./gorkbot.sh login --port 9090
 ```
 
 ### "Invalid redirect URI" Error
@@ -288,8 +288,8 @@ Your OAuth consent screen is not configured correctly:
 Tokens expire after 1 hour but should auto-refresh. If you get auth errors:
 
 ```bash
-./grokster.sh logout
-./grokster.sh login
+./gorkbot.sh logout
+./gorkbot.sh login
 ```
 
 ## 🔒 Security Notes
@@ -297,8 +297,8 @@ Tokens expire after 1 hour but should auto-refresh. If you get auth errors:
 ### Token Storage
 
 Tokens are stored at:
-- **Linux/Mac/Termux**: `~/.config/grokster/gemini_token.json`
-- **Windows**: `%APPDATA%/grokster/gemini_token.json`
+- **Linux/Mac/Termux**: `~/.config/gorkbot/gemini_token.json`
+- **Windows**: `%APPDATA%/gorkbot/gemini_token.json`
 
 File permissions are set to `0600` (owner read/write only).
 
@@ -312,14 +312,14 @@ The `.gitignore` already excludes:
 
 ### Revoking Access
 
-To revoke Grokster's access to your Google account:
+To revoke Gorkbot's access to your Google account:
 1. Go to https://myaccount.google.com/permissions
-2. Find "Grokster" in the list
+2. Find "Gorkbot" in the list
 3. Click "Remove Access"
 
 Then on your local machine:
 ```bash
-./grokster.sh logout
+./gorkbot.sh logout
 ```
 
 ## 📊 OAuth vs API Key
@@ -336,9 +336,9 @@ Then on your local machine:
 
 1. ✅ OAuth is configured
 2. ✅ Token is saved
-3. Run the TUI: `./grokster.sh`
+3. Run the TUI: `./gorkbot.sh`
 4. Try a complex query to see Gemini consultation
-5. Enjoy your authenticated Grokster experience!
+5. Enjoy your authenticated Gorkbot experience!
 
 ## 📚 Additional Resources
 
@@ -348,4 +348,4 @@ Then on your local machine:
 
 ---
 
-**Need help?** Open an issue at https://github.com/taeddings/grokster/issues
+**Need help?** Open an issue at https://github.com/taeddings/gorkbot/issues

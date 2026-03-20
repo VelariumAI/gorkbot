@@ -5,7 +5,7 @@
 Just run:
 
 ```bash
-./grokster.sh login
+./gorkbot.sh login
 ```
 
 That's it! Your browser will open and you'll sign in with your regular Google account.
@@ -15,20 +15,20 @@ That's it! Your browser will open and you'll sign in with your regular Google ac
 ### Step 1: Run Login Command
 
 ```bash
-./grokster.sh login
+./gorkbot.sh login
 ```
 
 You'll see:
 
 ```
-Using Grokster's public OAuth client
+Using Gorkbot's public OAuth client
 You'll be asked to sign in with your Google account
 
 🔐 Signing in to Google...
 
 Opening browser for authorization...
 👤 Sign in with your Google account
-✅ Grant access to Grokster
+✅ Grant access to Gorkbot
 ```
 
 ### Step 2: Sign In (Browser Opens Automatically)
@@ -36,7 +36,7 @@ Opening browser for authorization...
 Your browser opens to Google's sign-in page:
 
 1. **Sign in** with your Google account (the one with Gemini access)
-2. **Review permissions** - Grokster is requesting access to Generative Language API
+2. **Review permissions** - Gorkbot is requesting access to Generative Language API
 3. **Click "Continue"** or **"Allow"**
 
 ### Step 3: Success!
@@ -50,15 +50,15 @@ You can now close this window and return to the terminal.
 Terminal shows:
 ```
 ✓ Authorization successful!
-✓ Token saved to ~/.config/grokster/gemini_token.json
+✓ Token saved to ~/.config/gorkbot/gemini_token.json
 
-You can now use Grokster with your Google account.
+You can now use Gorkbot with your Google account.
 ```
 
-### Step 4: Start Using Grokster!
+### Step 4: Start Using Gorkbot!
 
 ```bash
-./grokster.sh
+./gorkbot.sh
 ```
 
 The TUI launches and automatically uses your Google account for Gemini API access!
@@ -67,7 +67,7 @@ The TUI launches and automatically uses your Google account for Gemini API acces
 
 ### PKCE OAuth Flow
 
-Grokster uses **PKCE (Proof Key for Code Exchange)** - a secure OAuth flow designed for public clients:
+Gorkbot uses **PKCE (Proof Key for Code Exchange)** - a secure OAuth flow designed for public clients:
 
 1. **No Client Secret** - Unlike traditional OAuth, PKCE doesn't require a secret embedded in the app
 2. **Code Verifier** - Generates a random string on your machine
@@ -107,16 +107,16 @@ Your Computer                  Google
 
 ```bash
 # Sign in with Google
-./grokster.sh login
+./gorkbot.sh login
 
 # Check authentication status
-./grokster.sh status
+./gorkbot.sh status
 
 # Sign out (remove token)
-./grokster.sh logout
+./gorkbot.sh logout
 
-# Use Grokster (uses Google account automatically)
-./grokster.sh
+# Use Gorkbot (uses Google account automatically)
+./gorkbot.sh
 ```
 
 ## 📊 Authentication Status
@@ -124,7 +124,7 @@ Your Computer                  Google
 After signing in, check your status:
 
 ```bash
-./grokster.sh status
+./gorkbot.sh status
 ```
 
 Output:
@@ -148,16 +148,16 @@ Tokens expire after 1 hour but **automatically refresh** when needed. You don't 
 If you want to force a new login:
 
 ```bash
-./grokster.sh logout
-./grokster.sh login
+./gorkbot.sh logout
+./gorkbot.sh login
 ```
 
 ### Token Location
 
 Your OAuth token is stored at:
-- **Linux/Termux**: `~/.config/grokster/gemini_token.json`
-- **macOS**: `~/Library/Application Support/grokster/gemini_token.json`
-- **Windows**: `%APPDATA%/grokster/gemini_token.json`
+- **Linux/Termux**: `~/.config/gorkbot/gemini_token.json`
+- **macOS**: `~/Library/Application Support/gorkbot/gemini_token.json`
+- **Windows**: `%APPDATA%/gorkbot/gemini_token.json`
 
 File permissions: `0600` (owner read/write only)
 
@@ -176,16 +176,16 @@ Free tier users have limited quota.
 Yes! Just logout and login with a different account:
 
 ```bash
-./grokster.sh logout
-./grokster.sh login  # Sign in with different account
+./gorkbot.sh logout
+./gorkbot.sh login  # Sign in with different account
 ```
 
 ### Does this share my Google data?
 
-No! Grokster only requests access to the **Generative Language API** scope:
+No! Gorkbot only requests access to the **Generative Language API** scope:
 - `https://www.googleapis.com/auth/generative-language`
 
-This allows Grokster to:
+This allows Gorkbot to:
 - ✅ Use Gemini API on your behalf
 - ✅ Use your account's quota
 
@@ -195,7 +195,7 @@ This does NOT give access to:
 - ❌ Calendar
 - ❌ Any other Google services
 
-### What if I don't trust Grokster's OAuth client?
+### What if I don't trust Gorkbot's OAuth client?
 
 You can create your own! See `OAUTH_SETUP.md` for instructions on using your own OAuth credentials.
 
@@ -209,12 +209,12 @@ GOOGLE_CLIENT_SECRET=your-secret  # Optional with PKCE
 
 Yes! Go to:
 - https://myaccount.google.com/permissions
-- Find "Grokster" in the list
+- Find "Gorkbot" in the list
 - Click "Remove Access"
 
 Then locally:
 ```bash
-./grokster.sh logout
+./gorkbot.sh logout
 ```
 
 ## 🐛 Troubleshooting
@@ -223,23 +223,23 @@ Then locally:
 
 Copy the URL from the terminal and paste it into your browser manually.
 
-### "Using Grokster's public OAuth client" but still asks for credentials?
+### "Using Gorkbot's public OAuth client" but still asks for credentials?
 
 The default client ID needs to be configured. For now, you may need to use your own OAuth credentials. See `OAUTH_SETUP.md`.
 
 ### Port already in use?
 
 ```bash
-./grokster.sh login --port 3000
+./gorkbot.sh login --port 3000
 ```
 
 ### "This app isn't verified"
 
 If you see this warning:
 1. Click "Advanced"
-2. Click "Go to Grokster (unsafe)"
+2. Click "Go to Gorkbot (unsafe)"
 
-This happens because Grokster is in development/testing mode. Once published, this warning won't appear.
+This happens because Gorkbot is in development/testing mode. Once published, this warning won't appear.
 
 ### "Access blocked: This app's request is invalid"
 
@@ -253,13 +253,13 @@ The OAuth client may not be configured correctly. Try:
 Three commands to remember:
 
 ```bash
-./grokster.sh login   # Sign in with Google
-./grokster.sh status  # Check status
-./grokster.sh         # Start using Grokster!
+./gorkbot.sh login   # Sign in with Google
+./gorkbot.sh status  # Check status
+./gorkbot.sh         # Start using Gorkbot!
 ```
 
 No configuration files, no API keys to manage - just sign in and go! 🚀
 
 ---
 
-**Note:** The default public OAuth client ID will be configured when Grokster is officially published. For now, you may need to use your own OAuth credentials. See `OAUTH_SETUP.md` for details.
+**Note:** The default public OAuth client ID will be configured when Gorkbot is officially published. For now, you may need to use your own OAuth credentials. See `OAUTH_SETUP.md` for details.

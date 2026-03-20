@@ -2,14 +2,14 @@
 
 ## 🎉 Status: Integrated & Ready
 
-The comprehensive tool system has been successfully integrated into Grokster's orchestrator and TUI! The AI agents (Grok and Gemini) now have access to **28 powerful tools** with a robust permission system.
+The comprehensive tool system has been successfully integrated into Gorkbot's orchestrator and TUI! The AI agents (Grok and Gemini) now have access to **28 powerful tools** with a robust permission system.
 
 ---
 
 ## ✅ What Was Completed
 
 ### 1. Tool Registry Initialization
-**Location:** `cmd/grokster/main.go`
+**Location:** `cmd/gorkbot/main.go`
 
 The tool system is now initialized at startup:
 ```go
@@ -30,7 +30,7 @@ logger.Info("Tool system initialized", "tool_count", len(registry.List()))
 ```
 
 **Features:**
-- Permission manager loads persistent permissions from `~/.config/grokster/tool_permissions.json`
+- Permission manager loads persistent permissions from `~/.config/gorkbot/tool_permissions.json`
 - Registry automatically registers all 28 default tools
 - Graceful fallback if permission storage fails
 - Logging confirms tool count on startup
@@ -276,7 +276,7 @@ There are no uncommitted changes.
 | **never** | Block permanently | Set once, permanent |
 
 ### Permission Storage
-- **File:** `~/.config/grokster/tool_permissions.json`
+- **File:** `~/.config/gorkbot/tool_permissions.json`
 - **Permissions:** 0600 (owner read/write only)
 - **Format:**
   ```json
@@ -423,14 +423,14 @@ func (r *Registry) LoadCustomTools(customDir string) error {
 
 ### Manual Testing Steps
 
-1. **Start Grokster:**
+1. **Start Gorkbot:**
    ```bash
-   ./grokster.sh
+   ./gorkbot.sh
    ```
 
 2. **Check tool initialization in logs:**
    ```bash
-   tail -f ~/.local/state/grokster/grokster.json | jq .
+   tail -f ~/.local/state/gorkbot/gorkbot.json | jq .
    # Should see: "Tool system initialized" with tool_count: 28
    ```
 
@@ -444,13 +444,13 @@ func (r *Registry) LoadCustomTools(customDir string) error {
 4. **Test permission system:**
    ```bash
    # Check default permissions
-   cat ~/.config/grokster/tool_permissions.json
+   cat ~/.config/gorkbot/tool_permissions.json
 
    # Modify a permission
    # ... (via future /tools command in TUI)
 
    # Verify persistence
-   # Restart grokster, permission should be remembered
+   # Restart gorkbot, permission should be remembered
    ```
 
 ---
@@ -462,7 +462,7 @@ func (r *Registry) LoadCustomTools(customDir string) error {
 - `TOOL_INTEGRATION.md` - This file
 
 ### Modified
-- `cmd/grokster/main.go` - Initialize tool system
+- `cmd/gorkbot/main.go` - Initialize tool system
 - `internal/engine/orchestrator.go` - Add tool execution methods
 - `internal/tui/model.go` - Add tool message support
 - `internal/tui/style.go` - Add ToolBox styling

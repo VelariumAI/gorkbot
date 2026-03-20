@@ -1,22 +1,22 @@
-# Grokster TUI Quick Start
+# Gorkbot TUI Quick Start
 
 ## ✨ What Changed
 
 The old REPL has been replaced with a **beautiful, modern TUI** built with Charm Bracelet tools!
 
-## 🚀 Running Grokster
+## 🚀 Running Gorkbot
 
 ```bash
 # Interactive TUI mode (new default!)
-./grokster.sh
+./gorkbot.sh
 
 # One-shot mode (unchanged)
-./grokster.sh -p "What is the meaning of life?"
+./gorkbot.sh -p "What is the meaning of life?"
 
 # OAuth commands
-./grokster.sh login
-./grokster.sh status
-./grokster.sh logout
+./gorkbot.sh login
+./gorkbot.sh status
+./gorkbot.sh logout
 ```
 
 ## 🎮 Controls
@@ -65,7 +65,7 @@ When Gemini is consulted (complex queries), responses appear in a **purple/pink 
 ### Status Bar
 Bottom status bar shows current state:
 ```
-[ Grokster v1.0 ] [ Model: Grok-3 ] [ Consult: Ready ]
+[ Gorkbot v1.0 ] [ Model: Grok-3 ] [ Consult: Ready ]
 ```
 
 - **Ready** - Consultant available
@@ -151,10 +151,10 @@ go mod tidy
 ### API Keys not working
 ```bash
 # Check authentication status
-./grokster.sh status
+./gorkbot.sh status
 
 # Try OAuth login
-./grokster.sh login
+./gorkbot.sh login
 ```
 
 ### Display issues
@@ -185,6 +185,6 @@ Future enhancements:
 
 - Full TUI documentation: `internal/tui/README.md`
 - Command details: See `/help` in the TUI
-- OAuth setup: Run `./grokster.sh login`
+- OAuth setup: Run `./gorkbot.sh login`
 
-Enjoy the new Grokster experience! 🚀
+Enjoy the new Gorkbot experience! 🚀

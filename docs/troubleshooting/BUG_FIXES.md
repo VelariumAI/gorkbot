@@ -2,14 +2,14 @@
 
 ## Summary
 
-Fixed 4 critical bugs in the Grokster TUI that were preventing normal operation.
+Fixed 4 critical bugs in the Gorkbot TUI that were preventing normal operation.
 
 ---
 
 ## Bug #1: `/settings` Command Shows Empty
 
 **Problem:**
-- The `/settings` command tried to open `~/.config/grokster/config.yaml` in an external editor
+- The `/settings` command tried to open `~/.config/gorkbot/config.yaml` in an external editor
 - The file didn't exist, so the editor showed an empty file
 - Using `exec.Command()` took over the terminal and broke the TUI
 - No way to change tool permissions or configure settings
@@ -95,7 +95,7 @@ Fixed 4 critical bugs in the Grokster TUI that were preventing normal operation.
 
 ✅ All fixes implemented
 ✅ Code compiles successfully
-✅ Binary created: `bin/grokster` (21MB)
+✅ Binary created: `bin/gorkbot` (21MB)
 ✅ Ready for testing
 
 ---
@@ -104,7 +104,7 @@ Fixed 4 critical bugs in the Grokster TUI that were preventing normal operation.
 
 ### Test Bug #1 Fix
 ```bash
-./grokster.sh
+./gorkbot.sh
 # In TUI:
 /settings
 ```
@@ -112,7 +112,7 @@ Fixed 4 critical bugs in the Grokster TUI that were preventing normal operation.
 
 ### Test Bug #2 Fix
 ```bash
-./grokster.sh
+./gorkbot.sh
 # In TUI:
 /tools
 ```
@@ -120,7 +120,7 @@ Fixed 4 critical bugs in the Grokster TUI that were preventing normal operation.
 
 ### Test Bug #3 Fix
 ```bash
-./grokster.sh
+./gorkbot.sh
 # In TUI:
 You: Test message 1
 # Wait for response
@@ -132,7 +132,7 @@ You: Test message 3
 
 ### Test Bug #4 Fix
 ```bash
-./grokster.sh
+./gorkbot.sh
 # In TUI:
 # Type normally and verify no random escape codes appear
 # Try pasting text

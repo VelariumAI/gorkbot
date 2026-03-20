@@ -1580,7 +1580,7 @@ func (r *Registry) listPermissions() (string, error) {
 	sb.WriteString("**Commands:**\n")
 	sb.WriteString("- `/permissions reset` - Reset all permissions\n")
 	sb.WriteString("- `/permissions reset <tool>` - Reset specific tool\n")
-	sb.WriteString("\n💡 **Tip:** Session permissions are cleared when you exit Grokster.\n")
+	sb.WriteString("\n💡 **Tip:** Session permissions are cleared when you exit Gorkbot.\n")
 
 	return sb.String(), nil
 }

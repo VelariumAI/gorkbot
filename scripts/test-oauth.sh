@@ -3,7 +3,7 @@
 
 set -e
 
-echo "🔍 Grokster OAuth Setup Verification"
+echo "🔍 Gorkbot OAuth Setup Verification"
 echo "===================================="
 echo ""
 
@@ -47,24 +47,24 @@ echo "📊 Current authentication status:"
 echo ""
 
 # Check if token already exists
-TOKEN_PATH="${HOME}/.config/grokster/gemini_token.json"
+TOKEN_PATH="${HOME}/.config/gorkbot/gemini_token.json"
 if [ -f "$TOKEN_PATH" ]; then
     echo "✅ OAuth token found at: $TOKEN_PATH"
     echo ""
-    echo "   Run './grokster.sh status' to check if it's still valid"
+    echo "   Run './gorkbot.sh status' to check if it's still valid"
 else
     echo "ℹ️  No OAuth token found (this is normal for first-time setup)"
     echo ""
-    echo "   Run './grokster.sh login' to authenticate"
+    echo "   Run './gorkbot.sh login' to authenticate"
 fi
 
 echo ""
 echo "🚀 Next steps:"
 echo ""
-echo "   1. Run: ./grokster.sh login"
+echo "   1. Run: ./gorkbot.sh login"
 echo "   2. Sign in with your Google account in the browser"
-echo "   3. Run: ./grokster.sh status (to verify)"
-echo "   4. Run: ./grokster.sh (to start the TUI)"
+echo "   3. Run: ./gorkbot.sh status (to verify)"
+echo "   4. Run: ./gorkbot.sh (to start the TUI)"
 echo ""
 echo "   See OAUTH_SETUP.md for detailed instructions"
 echo ""

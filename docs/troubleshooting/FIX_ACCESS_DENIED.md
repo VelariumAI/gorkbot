@@ -22,7 +22,7 @@ You MUST add your email as a test user:
 3. Click **"+ ADD USERS"**
 4. Enter your Google account email (the one you're trying to sign in with)
 5. Click **"SAVE"**
-6. Try logging in again: `./grokster.sh login`
+6. Try logging in again: `./gorkbot.sh login`
 
 ### 2. Cloud Platform Scope Requires Additional Setup
 
@@ -36,7 +36,7 @@ Let's use Generative AI specific scopes:
 
 ```bash
 export GOOGLE_OAUTH_SCOPE="https://www.googleapis.com/auth/generative-language"
-./grokster.sh login
+./gorkbot.sh login
 ```
 
 But first, make sure this scope is added to your OAuth consent screen:
@@ -49,7 +49,7 @@ But first, make sure this scope is added to your OAuth consent screen:
 
 If you accidentally clicked "Deny":
 
-1. Try logging in again: `./grokster.sh login`
+1. Try logging in again: `./gorkbot.sh login`
 2. When the browser opens, click **"Allow"** this time
 3. Grant all requested permissions
 
@@ -91,7 +91,7 @@ open https://console.cloud.google.com
 # 6. Click "SAVE"
 
 # 7. Try again
-./grokster.sh login
+./gorkbot.sh login
 ```
 
 ### Solution 2: Reduce Scope Requirements
@@ -109,7 +109,7 @@ defaultScopes := []string{
 Then rebuild and try:
 ```bash
 make build
-./grokster.sh login
+./gorkbot.sh login
 ```
 
 ### Solution 3: Publish the App
@@ -120,7 +120,7 @@ make build
 
 Users will see "This app isn't verified" but can continue with:
 - Click **"Advanced"**
-- Click **"Go to Grokster (unsafe)"**
+- Click **"Go to Gorkbot (unsafe)"**
 - Click **"Allow"**
 
 ## 🐛 Debugging Steps
@@ -151,7 +151,7 @@ OAuth consent screen should show:
 
 ```bash
 # Try with a different Google account
-./grokster.sh login
+./gorkbot.sh login
 
 # When browser opens, use a different Gmail account
 ```
@@ -178,7 +178,7 @@ Run through this checklist:
 2. **Create new OAuth client:**
    - CREATE CREDENTIALS → OAuth client ID
    - Type: Desktop app
-   - Name: Grokster v2
+   - Name: Gorkbot v2
 
 3. **Configure consent screen:**
    - Add yourself as test user
@@ -192,7 +192,7 @@ Run through this checklist:
 
 5. **Try again:**
    ```bash
-   ./grokster.sh login
+   ./gorkbot.sh login
    ```
 
 ## ✅ Expected Success Flow
@@ -202,7 +202,7 @@ When everything is working, you should see:
 ```
 1. Browser opens to Google sign-in
 2. You sign in with your Google account
-3. Page shows: "Grokster wants to access your Google Account"
+3. Page shows: "Gorkbot wants to access your Google Account"
 4. You click "Allow"
 5. Browser shows: "Authorization Successful!"
 6. Terminal shows: "✓ Token saved"
@@ -228,7 +228,7 @@ Check these:
 
 1. Go to OAuth consent screen
 2. Add your email as a **Test user**
-3. Try `./grokster.sh login` again
+3. Try `./gorkbot.sh login` again
 4. Click **"Allow"** when prompted
 
 That should do it! 🎉

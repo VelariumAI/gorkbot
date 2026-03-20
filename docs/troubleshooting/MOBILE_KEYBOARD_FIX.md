@@ -88,7 +88,7 @@ if !m.textarea.Focused() {
 ## Testing on Mobile
 
 ### Test Steps:
-1. Open Grokster in Termux on Android
+1. Open Gorkbot in Termux on Android
 2. Type a message and send it
 3. Hide the keyboard (back button or gesture)
 4. **Tap the input area** → Keyboard should appear ✅
@@ -140,7 +140,7 @@ If tapping doesn't work immediately:
 ## Build Status
 
 ```bash
-$ go build -o bin/grokster ./cmd/grokster
+$ go build -o bin/gorkbot ./cmd/gorkbot
 # Build successful
 ```
 
@@ -164,7 +164,7 @@ $ go build -o bin/grokster ./cmd/grokster
 
 ## Summary
 
-This fix makes Grokster fully usable on mobile Termux by implementing robust focus management with multiple recovery strategies. Users can now:
+This fix makes Gorkbot fully usable on mobile Termux by implementing robust focus management with multiple recovery strategies. Users can now:
 
 - Easily restore keyboard by tapping
 - Automatically get keyboard after AI responses

@@ -29,7 +29,7 @@ Google doesn't recognize the scope `https://www.googleapis.com/auth/generative-l
 
 5. **Test again:**
    ```bash
-   ./grokster.sh login
+   ./gorkbot.sh login
    ```
 
 ### Solution 2: Use Cloud Platform Scope (Temporary Workaround)
@@ -38,7 +38,7 @@ If the specific Gemini scope doesn't work, use a broader scope:
 
 ```bash
 export GOOGLE_OAUTH_SCOPE="https://www.googleapis.com/auth/cloud-platform"
-./grokster.sh login
+./gorkbot.sh login
 ```
 
 This requests full Google Cloud Platform access, which includes Gemini API.
@@ -72,9 +72,9 @@ If OAuth continues to have issues, use API keys:
    GEMINI_API_KEY=your_api_key_here
    ```
 
-3. **Run Grokster:**
+3. **Run Gorkbot:**
    ```bash
-   ./grokster.sh
+   ./gorkbot.sh
    ```
 
 ## Other Common OAuth Errors
@@ -96,7 +96,7 @@ If OAuth continues to have issues, use API keys:
 
 **Solution:**
 - Make sure you click "Allow" when authorizing
-- If you see "This app isn't verified", click "Advanced" → "Go to Grokster (unsafe)"
+- If you see "This app isn't verified", click "Advanced" → "Go to Gorkbot (unsafe)"
 - Make sure you added yourself as a test user (if app is not published)
 
 ### Error: "This app isn't verified"
@@ -107,7 +107,7 @@ If OAuth continues to have issues, use API keys:
 
 **Option 1: Continue anyway (for testing):**
 1. Click "Advanced"
-2. Click "Go to Grokster (unsafe)"
+2. Click "Go to Gorkbot (unsafe)"
 3. Grant permissions
 
 **Option 2: Add yourself as test user:**
@@ -159,7 +159,7 @@ Copy the URL from the terminal and paste into your browser.
 
 **Solution:**
 ```bash
-./grokster.sh login --port 3000
+./gorkbot.sh login --port 3000
 ```
 
 Then add `http://localhost:3000/callback` to your OAuth client redirect URIs.
@@ -172,8 +172,8 @@ Then add `http://localhost:3000/callback` to your OAuth client redirect URIs.
 
 Tokens auto-refresh, but if you get errors:
 ```bash
-./grokster.sh logout
-./grokster.sh login
+./gorkbot.sh logout
+./gorkbot.sh login
 ```
 
 ## Testing Your OAuth Setup
@@ -185,13 +185,13 @@ Tokens auto-refresh, but if you get errors:
 ./test-oauth.sh
 
 # Try login
-./grokster.sh login
+./gorkbot.sh login
 
 # Check status
-./grokster.sh status
+./gorkbot.sh status
 
 # Test API access
-./grokster.sh -p "Hello"
+./gorkbot.sh -p "Hello"
 ```
 
 ### Debug Mode
@@ -201,7 +201,7 @@ Enable verbose OAuth debugging:
 ```bash
 # Add to your shell
 export GOOGLE_OAUTH_DEBUG=true
-./grokster.sh login
+./gorkbot.sh login
 ```
 
 This will show:
@@ -222,7 +222,7 @@ This will show:
 
 | Type | Client Secret | Use Case |
 |------|--------------|----------|
-| **Desktop app** | Optional (PKCE) | ✅ CLI tools like Grokster |
+| **Desktop app** | Optional (PKCE) | ✅ CLI tools like Gorkbot |
 | Web application | Required | Web apps |
 | Mobile app | Not used (PKCE) | Mobile apps |
 | Service account | JSON key | Backend services |
@@ -242,10 +242,10 @@ export GOOGLE_CLIENT_SECRET="your-secret"
 export GOOGLE_OAUTH_SCOPE="https://www.googleapis.com/auth/cloud-platform"
 
 # Custom port
-./grokster.sh login --port 3000
+./gorkbot.sh login --port 3000
 
 # Timeout
-./grokster.sh login --timeout 10m
+./gorkbot.sh login --timeout 10m
 ```
 
 ## Still Having Issues?
@@ -273,7 +273,7 @@ If you're still stuck:
 
 1. **Check the full error message:**
    ```bash
-   ./grokster.sh login 2>&1 | tee oauth-error.log
+   ./gorkbot.sh login 2>&1 | tee oauth-error.log
    ```
 
 2. **Share the error log** (remove any secrets!)
@@ -281,7 +281,7 @@ If you're still stuck:
 3. **Try API key authentication:**
    ```bash
    export GEMINI_API_KEY="your-api-key"
-   ./grokster.sh
+   ./gorkbot.sh
    ```
 
 ## Success Checklist
@@ -289,18 +289,18 @@ If you're still stuck:
 When OAuth is working correctly, you should see:
 
 ```bash
-$ ./grokster.sh login
-Using Grokster's public OAuth client
+$ ./gorkbot.sh login
+Using Gorkbot's public OAuth client
 
 🔐 Signing in to Google...
 Opening browser for authorization...
 👤 Sign in with your Google account
-✅ Grant access to Grokster
+✅ Grant access to Gorkbot
 
 ✓ Authorization successful!
-✓ Token saved to ~/.config/grokster/gemini_token.json
+✓ Token saved to ~/.config/gorkbot/gemini_token.json
 
-$ ./grokster.sh status
+$ ./gorkbot.sh status
 Authentication Status:
 ─────────────────────
   Method: Google OAuth

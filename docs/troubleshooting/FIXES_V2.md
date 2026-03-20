@@ -93,7 +93,7 @@ Results: 6 passed, 0 failed
 
 ### Build Status
 ```bash
-$ go build -o bin/grokster ./cmd/grokster
+$ go build -o bin/gorkbot ./cmd/gorkbot
 # Build successful, no errors
 ```
 

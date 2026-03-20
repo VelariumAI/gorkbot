@@ -58,7 +58,7 @@ func PulseSpinner() spinner.Spinner {
 	}
 }
 
-// ClassicSpinner returns the default Grokster spinner (dot style)
+// ClassicSpinner returns the default Gorkbot spinner (dot style)
 // Available as fallback or for minimal visual distraction
 func ClassicSpinner() spinner.Spinner {
 	return spinner.Dot
