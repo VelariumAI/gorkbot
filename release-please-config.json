@@ -1,0 +1,97 @@
+{
+  "bootstrap-sha": "c9ff9e8c4a5c1a2b3c4d5e6f7a8b9c0d1e2f3a4",
+  "changelog-path": "CHANGELOG.md",
+  "changelog-type": "github",
+  "commit-parser": {
+    "conventional": {
+      "types": {
+        "feat": {
+          "type": "feature",
+          "section": "🎯 Features",
+          "hidden": false
+        },
+        "fix": {
+          "type": "fix",
+          "section": "🐛 Bug Fixes",
+          "hidden": false
+        },
+        "perf": {
+          "type": "performance",
+          "section": "⚡ Performance",
+          "hidden": false
+        },
+        "refactor": {
+          "type": "refactor",
+          "section": "🔧 Refactoring",
+          "hidden": false
+        },
+        "chore": {
+          "type": "chore",
+          "section": "📦 Chores",
+          "hidden": false
+        },
+        "docs": {
+          "type": "documentation",
+          "section": "📚 Documentation",
+          "hidden": false
+        },
+        "test": {
+          "type": "test",
+          "section": "✅ Tests",
+          "hidden": false
+        },
+        "enhancement": {
+          "type": "enhancement",
+          "section": "✨ Enhancements",
+          "hidden": false
+        }
+      }
+    }
+  },
+  "bump-minor-pre-major": false,
+  "bump-patch-for-minor-pre-major": false,
+  "always-link-local": false,
+  "extra-files": [],
+  "draft": false,
+  "draft-pull-request": false,
+  "include-v-in-tag": true,
+  "packages": {
+    ".": {
+      "bump-minor-pre-major": false,
+      "changelog-path": "CHANGELOG.md",
+      "release-as": null,
+      "skip-github-release": false,
+      "tag-separator": "v",
+      "component": null
+    }
+  },
+  "pull-request-title-pattern": "chore(release): Automatic Version Bump v${version}",
+  "release-notes": {
+    "sections": [
+      {
+        "type": "feature",
+        "section": "🎯 Features"
+      },
+      {
+        "type": "fix",
+        "section": "🐛 Bug Fixes"
+      },
+      {
+        "type": "performance",
+        "section": "⚡ Performance"
+      },
+      {
+        "type": "refactor",
+        "section": "🔧 Refactoring"
+      },
+      {
+        "type": "enhancement",
+        "section": "✨ Enhancements"
+      },
+      {
+        "type": "documentation",
+        "section": "📚 Documentation"
+      }
+    ]
+  }
+}

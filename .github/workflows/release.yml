@@ -1,0 +1,176 @@
+name: Release Automation
+
+on:
+  push:
+    branches: [main]
+    # Skip release creation if certain paths didn't change
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.gitignore'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # Step 1: Use Release Please to analyze commits and create release PR
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Release Please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          # Configuration
+          token: ${{ secrets.GITHUB_TOKEN }}
+          command: manifest
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Step 2: Update version constants in code (if release was created)
+  update-version-constants:
+    name: Update Version Constants
+    runs-on: ubuntu-latest
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Extract version components
+        id: extract
+        run: |
+          VERSION="${{ needs.release-please.outputs.version }}"
+          # Remove 'v' prefix if present
+          VERSION=${VERSION#v}
+
+          # Parse semantic version (major.minor.patch)
+          MAJOR=$(echo $VERSION | cut -d. -f1)
+          MINOR=$(echo $VERSION | cut -d. -f2)
+          PATCH=$(echo $VERSION | cut -d. -f3)
+
+          echo "MAJOR=$MAJOR" >> $GITHUB_OUTPUT
+          echo "MINOR=$MINOR" >> $GITHUB_OUTPUT
+          echo "PATCH=$PATCH" >> $GITHUB_OUTPUT
+          echo "FULL_VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update pkg/version/version.go
+        run: |
+          # Update internal version constant
+          sed -i 's/const InternalVersion = "[^"]*"/const InternalVersion = "${{ steps.extract.outputs.FULL_VERSION }}"/' pkg/version/version.go
+
+          # Verify the change
+          grep "const InternalVersion" pkg/version/version.go
+
+      - name: Update internal/platform/env.go
+        run: |
+          # Update Version constant
+          sed -i 's/const Version = "[^"]*"/const Version = "${{ steps.extract.outputs.FULL_VERSION }}"/' internal/platform/env.go
+
+          # Verify the change
+          grep "const Version" internal/platform/env.go
+
+      - name: Verify build with new version
+        run: |
+          go build -o ./bin/grokster-verify ./cmd/grokster/
+          echo "✅ Build successful with version ${{ steps.extract.outputs.FULL_VERSION }}"
+
+      - name: Commit version updates
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add pkg/version/version.go internal/platform/env.go
+
+          # Only commit if there are changes
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(release): bump version to ${{ steps.extract.outputs.FULL_VERSION }}"
+            git push origin main
+          fi
+
+  # Step 3: Create GitHub Release with changelogs (automatic via Release Please)
+  publish-release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    needs: [release-please, update-version-constants]
+    if: needs.release-please.outputs.release_created == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+
+      - name: Build release binaries
+        run: |
+          mkdir -p dist
+
+          # Linux x86_64
+          GOOS=linux GOARCH=amd64 go build -o dist/gorkbot-linux-amd64 ./cmd/gorkbot
+          GOOS=linux GOARCH=amd64 go build -o dist/grokster-linux-amd64 ./cmd/grokster
+
+          # macOS x86_64
+          GOOS=darwin GOARCH=amd64 go build -o dist/gorkbot-darwin-amd64 ./cmd/gorkbot
+          GOOS=darwin GOARCH=amd64 go build -o dist/grokster-darwin-amd64 ./cmd/grokster
+
+          # macOS ARM64
+          GOOS=darwin GOARCH=arm64 go build -o dist/gorkbot-darwin-arm64 ./cmd/gorkbot
+          GOOS=darwin GOARCH=arm64 go build -o dist/grokster-darwin-arm64 ./cmd/grokster
+
+          # Windows x86_64
+          GOOS=windows GOARCH=amd64 go build -o dist/gorkbot-windows-amd64.exe ./cmd/gorkbot
+          GOOS=windows GOARCH=amd64 go build -o dist/grokster-windows-amd64.exe ./cmd/grokster
+
+      - name: Create checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload binaries to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          files: |
+            dist/gorkbot-*
+            dist/grokster-*
+            dist/SHA256SUMS
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Step 4: Notify on release creation
+  notify-release:
+    name: Notify Release Creation
+    runs-on: ubuntu-latest
+    needs: [release-please, publish-release]
+    if: needs.release-please.outputs.release_created == 'true'
+    steps:
+      - name: Release Summary
+        run: |
+          echo "✅ Release Created Successfully!"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Tag: ${{ needs.release-please.outputs.tag_name }}"
+          echo "Version: ${{ needs.release-please.outputs.version }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
