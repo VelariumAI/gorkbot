@@ -12,8 +12,7 @@ gemini_token.json
 /gorkbot
 /gorkweb
 /gorkbot_test
-/bin/gorkbot
-/bin/gorkbot-llm
+/bin/gorkbot*
 /bin/gorkweb
 /cmd/gorkbot/gorkbot
 /debug-mcp
