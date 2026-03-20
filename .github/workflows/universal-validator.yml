@@ -1,0 +1,249 @@
+name: Universal Validator
+
+on:
+  push:
+    branches: [ main, master, dev ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  # Multi-platform build validation
+  cross-platform-build:
+    name: Build - ${{ matrix.os }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      matrix:
+        include:
+          # Linux x86_64 (primary build)
+          - os: linux
+            arch: amd64
+            runs-on: ubuntu-latest
+            go-version: '1.25.0'
+
+          # macOS x86_64
+          - os: darwin
+            arch: amd64
+            runs-on: macos-latest
+            go-version: '1.25.0'
+
+          # macOS ARM64 (Apple Silicon)
+          - os: darwin
+            arch: arm64
+            runs-on: macos-latest
+            go-version: '1.25.0'
+
+          # Windows x86_64
+          - os: windows
+            arch: amd64
+            runs-on: windows-latest
+            go-version: '1.25.0'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      - name: Display Go version
+        run: go version
+
+      - name: Verify go.mod and go.sum
+        run: |
+          go mod verify
+          go mod tidy --check
+
+      - name: Run go fmt check
+        run: |
+          go fmt ./...
+          git diff --exit-code
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Build gorkbot
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+        run: go build -v -o bin/gorkbot-${{ matrix.os }}-${{ matrix.arch }} ./cmd/gorkbot
+
+      - name: Build grokster
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+        run: go build -v -o bin/grokster-${{ matrix.os }}-${{ matrix.arch }} ./cmd/grokster
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.os }}-${{ matrix.arch }}
+          path: bin/gorkbot-${{ matrix.os }}-${{ matrix.arch }}
+          if-no-files-found: ignore
+
+      - name: Check binary size (Linux only)
+        if: matrix.os == 'linux' && matrix.arch == 'amd64'
+        run: |
+          ls -lh bin/gorkbot-linux-amd64 || true
+          echo "Binary generated successfully"
+
+  # Security scanning
+  security-scan:
+    name: Security Scan (CodeQL)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: 'go'
+          queries: security-and-quality
+
+      - name: Build for CodeQL
+        run: go build -v ./...
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:go"
+
+  # Dependency vulnerability check
+  dependency-check:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: true
+
+      - name: Run govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: '1.25.0'
+
+      - name: Check for outdated dependencies
+        run: |
+          go list -u -m all | grep -i 'deprecated' || echo "No deprecated modules found"
+
+  # Unit and integration tests
+  test:
+    name: Tests - ${{ matrix.os }}
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu
+            runs-on: ubuntu-latest
+          - os: macos
+            runs-on: macos-latest
+          - os: windows
+            runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: true
+
+      - name: Run tests with coverage
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.out
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+  # Platform-specific validation
+  platform-validation:
+    name: Platform Validation - ${{ matrix.platform }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform:
+          - 'linux/amd64'
+          - 'linux/arm64'
+          - 'darwin/amd64'
+          - 'darwin/arm64'
+          - 'windows/amd64'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: true
+
+      - name: Extract OS and Arch from platform
+        id: extract
+        run: |
+          echo "goos=$(echo ${{ matrix.platform }} | cut -d'/' -f1)" >> $GITHUB_OUTPUT
+          echo "goarch=$(echo ${{ matrix.platform }} | cut -d'/' -f2)" >> $GITHUB_OUTPUT
+
+      - name: Validate build for ${{ matrix.platform }}
+        env:
+          GOOS: ${{ steps.extract.outputs.goos }}
+          GOARCH: ${{ steps.extract.outputs.goarch }}
+        run: |
+          go build -v -x ./cmd/gorkbot
+          go build -v -x ./cmd/grokster
+          echo "✅ Build successful for ${{ matrix.platform }}"
+
+  # Summary status check
+  build-status:
+    name: Build Status
+    runs-on: ubuntu-latest
+    needs: [cross-platform-build, security-scan, test, platform-validation]
+    if: always()
+
+    steps:
+      - name: Check build success
+        if: |
+          needs.cross-platform-build.result == 'failure' ||
+          needs.security-scan.result == 'failure' ||
+          needs.test.result == 'failure' ||
+          needs.platform-validation.result == 'failure'
+        run: |
+          echo "❌ Build validation failed"
+          exit 1
+
+      - name: Report success
+        if: success()
+        run: |
+          echo "✅ All validations passed"
+          echo "  - Cross-platform builds: OK"
+          echo "  - Security scans: OK"
+          echo "  - Tests: OK"
+          echo "  - Platform validation: OK"

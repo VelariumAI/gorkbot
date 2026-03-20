@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 // SmartReadFileTool - Custom generated tool
@@ -14,11 +15,11 @@ type SmartReadFileTool struct {
 func NewSmartReadFileTool() *SmartReadFileTool {
 	return &SmartReadFileTool{
 		BaseTool: BaseTool{
-			name:              "smart_read_file",
-			description:       "Unified file reader with raw/MCP/hashed modes (pruned for efficiency).",
-			category:          CategoryFile,
+			name:               "smart_read_file",
+			description:        "Unified file reader with raw/MCP/hashed modes (pruned for efficiency).",
+			category:           CategoryFile,
 			requiresPermission: true,
-			defaultPermission: PermissionOnce,
+			defaultPermission:  PermissionOnce,
 		},
 	}
 }
@@ -45,7 +46,7 @@ func (t *SmartReadFileTool) Parameters() json.RawMessage {
 			},
 		},
 		"required": []string{"head", "tail", "path", "mode"},
-		}
+	}
 	data, _ := json.Marshal(schema)
 	return data
 }
@@ -71,8 +72,7 @@ func (t *SmartReadFileTool) Execute(ctx context.Context, params map[string]inter
 		path = p
 	}
 
-
-	command := "if [ "$mode" = "hashed" ]; then read_file_hashed "$path"; elif [ "$mode" = "mcp" ]; then mcp_filesystem_read_text_file "$path" head="$head" tail="$tail"; else read_file "$path"; fi"
+	command := "if [ \"" + mode + "\" = \"hashed\" ]; then read_file_hashed \"" + path + "\"; elif [ \"" + mode + "\" = \"mcp\" ]; then mcp_filesystem_read_text_file \"" + path + "\" head=\"" + strconv.Itoa(head) + "\" tail=\"" + strconv.Itoa(tail) + "\"; else read_file \"" + path + "\"; fi"
 
 	bashTool := NewBashTool()
 	return bashTool.Execute(ctx, map[string]interface{}{
