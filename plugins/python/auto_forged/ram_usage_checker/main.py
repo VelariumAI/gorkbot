@@ -1,6 +1,7 @@
 import sys
 import json
 import subprocess
+
 def main():
     try:
         input_data = sys.stdin.read().strip()
@@ -21,7 +22,7 @@ def main():
         swap_used_pct = 0
         if len(swap_parts) > 3 and int(swap_parts[1]) > 0:
             swap_used_pct = round((int(swap_parts[2]) / int(swap_parts[1])) * 100)
-        status = f"RAM: {used_pct}% used ({used/1024:.1f}G/{total/1024:.1f}G), {avail/1024:.1f}G available ({avail_pct}%)")
+        status = f"RAM: {used_pct}% used ({used/1024:.1f}G/{total/1024:.1f}G), {avail/1024:.1f}G available ({avail_pct}%)"
         status += f". Swap: {swap_used_pct}%"
         notification = ""
         if avail_pct < avail_threshold:
@@ -32,8 +33,9 @@ def main():
             notification += f"High swap usage ({swap_used_pct}% > {swap_threshold}% threshold)"
         if notification:
             status += f". NOTIFICATION: {notification}"
-        print(json.dumps({{"success": true, "output": "{status}", "error": ""}}))
+        print(json.dumps({"success": True, "output": status, "error": ""}))
     except Exception as e:
-        print(json.dumps({{"success": false, "output": "", "error": str(e)}}))
+        print(json.dumps({"success": False, "output": "", "error": str(e)}))
+
 if __name__ == "__main__":
     main()
