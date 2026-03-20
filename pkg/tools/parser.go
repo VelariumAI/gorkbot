@@ -12,6 +12,19 @@ import (
 // Some AI models emit this format instead of the expected markdown JSON block.
 var reBracketCall = regexp.MustCompile(`(?i)\[TOOL_CALL\]\s*([\s\S]*?)\s*\[/TOOL_CALL\]`)
 
+// StripToolCalls removes markdown code blocks and [TOOL_CALL] blocks from
+// a string, leaving only the conversational text.
+func StripToolCalls(response string) string {
+	// Remove ```json ... ``` and ``` ... ```
+	reMarkdown := regexp.MustCompile("(?s)```[\\s\\S]*?```")
+	result := reMarkdown.ReplaceAllString(response, "")
+
+	// Remove [TOOL_CALL] ... [/TOOL_CALL]
+	result = reBracketCall.ReplaceAllString(result, "")
+
+	return strings.TrimSpace(result)
+}
+
 // ParseToolRequests extracts tool requests from AI response
 func ParseToolRequests(response string) []ToolRequest {
 	var requests []ToolRequest

@@ -1,0 +1,13 @@
+{
+  "name": "resource_optimizer",
+  "description": "Generalized system resource optimizer that kills idle processes, flushes memory caches, compacts git repositories, profiles memory usage, and safely cleans large media files based on provided action parameters.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

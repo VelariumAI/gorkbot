@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/velariumai/gorkbot/internal/engine"
@@ -30,6 +31,7 @@ import (
 	"github.com/velariumai/gorkbot/pkg/commands"
 	"github.com/velariumai/gorkbot/pkg/process"
 	"github.com/velariumai/gorkbot/pkg/registry"
+	"github.com/velariumai/gorkbot/pkg/theme"
 	"github.com/velariumai/gorkbot/pkg/tools"
 	tui_style "github.com/velariumai/gorkbot/pkg/tui"
 )
@@ -127,12 +129,13 @@ type Model struct {
 	currentResponse strings.Builder
 	currentModel    string
 	theme           string
+	themeManager    *theme.Manager
 
 	// Scroll state - track if user is viewing older messages
 	userScrolledUp bool // true when user has scrolled up to read older content
 
-	// Live tool execution panel — names of tools currently running.
-	activeTools []string
+	// Live tool execution panel — tracks running/completed tools with elapsed times
+	livePanel *LiveToolsPanel
 
 	// Discovery: live cloud model sidebar + agent tree.
 	discoveredModels []discoveryModel      // latest snapshot from discovery manager
@@ -240,6 +243,17 @@ type Model struct {
 
 	// ── Tool timing: ToolName → start time (for elapsed display) ──────────
 	toolStartTimes map[string]time.Time
+
+	// ── Single authoritative status line (G ▶ ...) ─────────────────────────
+	// Updated via StatusUpdateMsg to show pipeline progress, SRE phases, and tokens.
+	// statusPhase is "pipeline" / "grounding" / "hypothesis" / "prune" / "converge" / "thinking".
+	// statusDescription is the full human-readable text (e.g. "Analyzing input...").
+	// statusTokens is the token count (0 = not shown).
+	// statusModel is the model ID suffix (empty = not shown).
+	statusPhase       string
+	statusDescription string
+	statusTokens      int
+	statusModel       string
 
 	// ── Dual-pane model selection (modelSelectView) ───────────────────────
 	modelSelect  modelSelectState
@@ -433,10 +447,12 @@ type Message struct {
 	NestLevel      int                    // Nesting depth for tool calls (0 = top level)
 	MessageType    string                 // "tool", "tool_call", "internal", "a2a", "normal"
 	Collapsed      bool                   // true = show 1-line summary; toggled with Ctrl+R
+	FullyExpanded  bool                   // true = show all lines without truncation
 	Elapsed        time.Duration          // tool execution duration (for display)
 	IntentCategory string                 // ARC category at time of user message
 	HookEntries    []HookEntry            // Claude Code-style hooks for this message
 	IsStructured   bool                   // true if the message is primarily structured/hook-driven
+	IsEphemeral    bool                   // true if the message is a temporary UI banner/alert not part of core history
 }
 
 // modelSelectState holds the dual-pane model selection view state.
@@ -512,9 +528,17 @@ func NewModel(orch *engine.Orchestrator, pm *process.Manager, modelName, consult
 	}
 	tt := NewTableModel(toolColumns, []table.Row{})
 
-	styles := NewStyles()
-	// Apply Dracula theme immediately
-	styles.UpdateForDraculaTheme()
+	// Create theme manager
+	env, _ := platform.GetEnvConfig()
+	configDir := ""
+	if env != nil {
+		configDir = env.ConfigDir
+	}
+	themeManager := theme.NewManager(configDir)
+	activeTheme := themeManager.Active()
+
+	// Create styles with the active theme
+	styles := NewStyles(activeTheme)
 
 	m := &Model{
 		viewport:            vp,
@@ -535,13 +559,15 @@ func NewModel(orch *engine.Orchestrator, pm *process.Manager, modelName, consult
 		isConsultant:        false,
 		messages:            []Message{},
 		currentModel:        modelName,
-		theme:               "dracula", // Default to Dracula
+		theme:               activeTheme.Name,
 		glamour:             r,
 		styles:              styles,
+		themeManager:        themeManager,
 		currentColorIdx:     0,
 		rendererWidth:       80,
 		streamChunkInterval: 8,
 		toolStartTimes:      make(map[string]time.Time),
+		livePanel:           NewLiveToolsPanel(),
 		authInput:           textinput.New(),
 	}
 	m.authInput.Placeholder = "Enter credential..."
@@ -623,8 +649,9 @@ func (m *Model) Init() tea.Cmd {
 
 func (m *Model) addSystemMessage(content string) {
 	m.messages = append(m.messages, Message{
-		Role:    "system",
-		Content: content,
+		Role:        "system",
+		Content:     content,
+		IsEphemeral: true,
 	})
 }
 
@@ -760,6 +787,32 @@ func (m *Model) addA2AMessage(content string, level int) {
 }
 
 // renderMessages renders all messages to markdown
+// renderWithGorkyPrefix adds the Gorky glyph (𝗚 ▸) to the first line of content,
+// and indents subsequent lines to align with the first line.
+func (m *Model) renderWithGorkyPrefix(content string) string {
+	glyph := m.styles.GorkyGlyphStyle.Render(GorkyGlyph)
+	lines := strings.Split(content, "\n")
+
+	if len(lines) == 0 {
+		return glyph + "  " + content
+	}
+
+	// First line: glyph + content (2 spaces after glyph for padding)
+	result := glyph + "  " + lines[0]
+
+	// Subsequent lines: indent to align with content start.
+	// The Gorky glyph (𝗚 ▸) renders as ~2 display columns + 2 spaces = 4 cols total.
+	// Use exactly 4 spaces to align continuation lines properly.
+	const glyphDisplayWidth = 4 // visual width: glyph (~2) + 2 spaces
+	indent := strings.Repeat(" ", glyphDisplayWidth)
+
+	for i := 1; i < len(lines); i++ {
+		result += "\n" + indent + lines[i]
+	}
+
+	return result
+}
+
 func (m *Model) renderMessages() string {
 	var output strings.Builder
 
@@ -769,7 +822,14 @@ func (m *Model) renderMessages() string {
 
 		switch msg.Role {
 		case "user":
-			userLine := m.styles.UserMessage.Render(fmt.Sprintf("You: %s", msg.Content))
+			// Wrap user message content to fit within viewport width
+			// Reserve space for "You: " prefix and some margin
+			wrapWidth := m.width - 9
+			if wrapWidth < 20 {
+				wrapWidth = 20
+			}
+			wrappedContent := wrapText(msg.Content, wrapWidth)
+			userLine := m.styles.UserMessage.Render(fmt.Sprintf("You: %s", wrappedContent))
 			if msg.IntentCategory != "" {
 				label := adaptive.CategoryLabel(adaptive.IntentCategory(msg.IntentCategory))
 				emoji := adaptive.CategoryEmoji(adaptive.IntentCategory(msg.IntentCategory))
@@ -798,12 +858,14 @@ func (m *Model) renderMessages() string {
 				cleanContent := m.cleanMarkdownContent(msg.Content)
 				rendered, err := m.glamour.Render(cleanContent)
 				if err != nil {
-					contentArea = m.styles.AIMessage.Render(cleanContent)
+					rendered = cleanContent
 				} else {
 					// Trim excessive leading spaces from rendered output
 					rendered = m.trimRenderedIndentation(rendered)
-					contentArea = m.styles.AIMessage.Render(rendered)
 				}
+				// Add Gorky identity glyph
+				contentWithGlyph := m.renderWithGorkyPrefix(rendered)
+				contentArea = m.styles.AIMessage.Render(contentWithGlyph)
 			}
 			output.WriteString(contentArea)
 			output.WriteString("\n")
@@ -881,11 +943,8 @@ func (m *Model) renderMessages() string {
 				}
 			}
 
-			callBoxStyle := lipgloss.NewStyle().
-				Border(lipgloss.NormalBorder()).
-				BorderForeground(lipgloss.Color(DraculaCyan)).
-				Padding(0, 1).
-				Width(boxWidth)
+			// A tool call is 'active' until the result arrives.
+			callBoxStyle := m.styles.ToolBoxActive.Copy().Width(boxWidth)
 			output.WriteString(callBoxStyle.Render(boxContent))
 			output.WriteString("\n")
 
@@ -954,7 +1013,7 @@ func (m *Model) renderMessages() string {
 						var rendered []string
 						limit := len(diffLines)
 						truncated := 0
-						if limit > maxDiffLines && !msg.Collapsed {
+						if limit > maxDiffLines && !msg.Collapsed && !msg.FullyExpanded {
 							truncated = limit - maxDiffLines
 							limit = maxDiffLines
 						}
@@ -968,7 +1027,7 @@ func (m *Model) renderMessages() string {
 							}
 						}
 						if truncated > 0 {
-							rendered = append(rendered, ctxStyle.Render(fmt.Sprintf("▶ %d more diff lines — ctrl+o", truncated)))
+							rendered = append(rendered, ctxStyle.Render(fmt.Sprintf("▶ %d more diff lines — ctrl+e to expand fully", truncated)))
 						}
 						outputContent = strings.Join(rendered, "\n")
 					}
@@ -984,13 +1043,29 @@ func (m *Model) renderMessages() string {
 							rawOutput = msg.ToolResult.Error
 						}
 					}
+					
+					// Apply context-aware structured formatting (Markdown/JSON) before truncation
+					trimmedRaw := strings.TrimSpace(rawOutput)
+					if len(trimmedRaw) > 2 && (strings.HasPrefix(trimmedRaw, "{") || strings.HasPrefix(trimmedRaw, "[")) && json.Valid([]byte(trimmedRaw)) {
+						mdFormatted := fmt.Sprintf("```json\n%s\n```", trimmedRaw)
+						if rendered, err := m.glamour.Render(mdFormatted); err == nil {
+							rawOutput = strings.TrimSpace(rendered)
+						}
+					} else if len(trimmedRaw) > 5 && msg.ToolName == "read_file" {
+						// Heuristically assume it's code/config for read_file
+						mdFormatted := fmt.Sprintf("```\n%s\n```", trimmedRaw)
+						if rendered, err := m.glamour.Render(mdFormatted); err == nil {
+							rawOutput = strings.TrimSpace(rendered)
+						}
+					}
+
 					lines := strings.Split(rawOutput, "\n")
-					const maxToolLines = 15
+					const maxToolLines = 10
 					var displayLines []string
-					if len(lines) > maxToolLines && !msg.Collapsed {
+					if len(lines) > maxToolLines && !msg.Collapsed && !msg.FullyExpanded {
 						displayLines = lines[:maxToolLines]
 						displayLines = append(displayLines,
-							fmt.Sprintf("[↓ %d more lines — ctrl+o]", len(lines)-maxToolLines))
+							fmt.Sprintf("[↓ %d more lines — ctrl+e to expand fully]", len(lines)-maxToolLines))
 					} else {
 						displayLines = lines
 					}
@@ -1197,6 +1272,124 @@ func toolActivityLabel(name string, params map[string]interface{}) (icon, label 
 	return "🔧", humanized
 }
 
+// SetTheme switches to a new theme and updates all TUI styles.
+// Called when the user selects a theme via /theme command.
+func (m *Model) SetTheme(themeName string) error {
+	// Update theme manager
+	if err := m.themeManager.Set(themeName); err != nil {
+		return err
+	}
+
+	// Get the new active theme
+	newTheme := m.themeManager.Active()
+
+	// Regenerate styles with new theme
+	m.styles.RemapForTheme(newTheme)
+
+	// Update theme name
+	m.theme = newTheme.Name
+
+	// Regenerate glamour renderer to reflect new code block colors
+	if newTheme != nil {
+		colors := newTheme.Colors
+		// Update glamour style based on new theme colors
+		glamourStyle := ansi.StyleConfig{}
+		glamourStyle.Document.BlockPrefix = "\n"
+		glamourStyle.Document.BlockSuffix = "\n"
+		glamourStyle.Document.Margin = uintPtr(0)
+		glamourStyle.CodeBlock.Margin = uintPtr(0)
+		glamourStyle.CodeBlock.StylePrimitive.BackgroundColor = stringPtr(colors.CodeBg)
+		glamourStyle.CodeBlock.StylePrimitive.Color = stringPtr(colors.CodeFg)
+		glamourStyle.Code.StylePrimitive.BackgroundColor = stringPtr(colors.InlineCodeBg)
+		glamourStyle.Code.StylePrimitive.Color = stringPtr(colors.InlineCodeFg)
+		glamourStyle.H1.Color = stringPtr(colors.Header1)
+		glamourStyle.H1.Bold = boolPtr(true)
+		glamourStyle.H1.BlockSuffix = "\n"
+		glamourStyle.H2.Color = stringPtr(colors.Header2)
+		glamourStyle.H2.Bold = boolPtr(true)
+		glamourStyle.H2.BlockSuffix = "\n"
+		glamourStyle.Text.Color = stringPtr(colors.Text)
+		glamourStyle.Link.Color = stringPtr(colors.Link)
+		glamourStyle.Link.Underline = boolPtr(true)
+
+		r, _ := glamour.NewTermRenderer(
+			glamour.WithStyles(glamourStyle),
+			glamour.WithWordWrap(80),
+		)
+		m.glamour = r
+	}
+
+	return nil
+}
+
+// wrapText wraps text to fit within maxWidth characters.
+// Respects word boundaries and handles multi-line input gracefully.
+func wrapText(text string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return text
+	}
+
+	lines := strings.Split(text, "\n")
+	var wrappedLines []string
+
+	for _, line := range lines {
+		wrapped := wrapLine(line, maxWidth)
+		wrappedLines = append(wrappedLines, wrapped...)
+	}
+
+	return strings.Join(wrappedLines, "\n")
+}
+
+// wrapLine wraps a single line of text to maxWidth characters.
+func wrapLine(line string, maxWidth int) []string {
+	if len(line) <= maxWidth {
+		return []string{line}
+	}
+
+	var result []string
+	words := strings.Fields(line)
+	var currentLine string
+
+	for _, word := range words {
+		if len(currentLine) == 0 {
+			// First word on the line
+			if len(word) > maxWidth {
+				// Word is longer than maxWidth, split it
+				for len(word) > maxWidth {
+					result = append(result, word[:maxWidth])
+					word = word[maxWidth:]
+				}
+				currentLine = word
+			} else {
+				currentLine = word
+			}
+		} else if len(currentLine)+1+len(word) <= maxWidth {
+			// Word fits on current line
+			currentLine += " " + word
+		} else {
+			// Word doesn't fit, start a new line
+			result = append(result, currentLine)
+
+			if len(word) > maxWidth {
+				// Word is longer than maxWidth, split it
+				for len(word) > maxWidth {
+					result = append(result, word[:maxWidth])
+					word = word[maxWidth:]
+				}
+				currentLine = word
+			} else {
+				currentLine = word
+			}
+		}
+	}
+
+	if len(currentLine) > 0 {
+		result = append(result, currentLine)
+	}
+
+	return result
+}
+
 // renderPlanningBox renders the live activity panel shown while the AI is generating.
 // Replaces the old "Planning..." box: shows actual actions and thinking progress.
 func (m *Model) renderPlanningBox() string {
@@ -1244,10 +1437,10 @@ func (m *Model) renderPlanningBox() string {
 	}
 
 	// ── Current action ────────────────────────────────────────────────────
+	// NOTE: Status for thinking/reasoning/grounding is now shown via the single
+	// authoritative "G ▶ " status line in renderLoadingIndicator().
+	// This activity panel only shows tool execution (phaseTool) and composition (phaseSynthesizing).
 	switch m.genPhase {
-	case phaseThinking:
-		toks := fmt.Sprintf("%d tokens", m.thinkingTokens)
-		lines = append(lines, "🤔 "+labelStyle.Render("Reasoning...")+" "+dimStyle.Render(toks))
 	case phaseTool:
 		if m.currentActivity != nil {
 			elapsed := time.Since(m.currentActivity.StartedAt)
@@ -1261,7 +1454,7 @@ func (m *Model) renderPlanningBox() string {
 	}
 
 	if len(lines) == 0 {
-		lines = append(lines, "💡 "+labelStyle.Render("Thinking..."))
+		lines = append(lines, "💡 "+labelStyle.Render("Ready"))
 	}
 
 	return panelStyle.Render(strings.Join(lines, "\n"))
@@ -1312,7 +1505,8 @@ func (m *Model) exportAsMarkdown() string {
 		case "consultant":
 			sb.WriteString(fmt.Sprintf("## Consultant\n\n%s\n\n---\n\n", msg.Content))
 		case "system":
-			sb.WriteString(fmt.Sprintf("> *System: %s*\n\n", strings.ReplaceAll(msg.Content, "\n", " ")))
+			// Skip internal UI/system messages to prevent bleed-through in exports
+			continue
 		case "tool_call":
 			sb.WriteString(fmt.Sprintf("**→ Tool call: `%s`**\n\n", msg.ToolName))
 		case "tool":
@@ -1713,34 +1907,12 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		return nil
 
 	case strings.HasPrefix(result, "THEME:"):
-		theme := strings.TrimPrefix(result, "THEME:")
-		m.theme = theme
-		switch theme {
-		case "light":
-			m.styles.UpdateForLightTheme()
-		case "arcane-blood", "arcane":
-			m.styles = NewArcaneBloodStyles()
-		default: // "dark", "dracula", etc.
-			m.styles.UpdateForDarkTheme()
-			if theme == "dracula" {
-				m.styles.UpdateForDraculaTheme()
-			}
+		themeName := strings.TrimPrefix(result, "THEME:")
+		if err := m.SetTheme(themeName); err != nil {
+			m.addSystemMessage(fmt.Sprintf("❌ Failed to switch theme: %v", err))
+		} else {
+			m.addSystemMessage(fmt.Sprintf("✅ Switched to **%s** theme", m.theme))
 		}
-
-		// Update markdown renderer style
-		style := "dark"
-		if theme == "light" {
-			style = "light"
-		}
-		renderer, err := glamour.NewTermRenderer(
-			glamour.WithStandardStyle(style),
-			glamour.WithWordWrap(m.width-10),
-		)
-		if err == nil {
-			m.glamour = renderer
-		}
-
-		m.addSystemMessage(fmt.Sprintf("Switched to **%s** theme", theme))
 		m.updateViewportContent()
 		return nil
 
@@ -1810,7 +1982,24 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		if m.commands != nil {
 			toolReg = m.commands.GetToolRegistry()
 		}
-		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn, providerSetter, m.integrationGetter, m.integrationSetter)
+		var sreEnabledSetter func(bool) error
+		var ensembleSetter func(bool) error
+		sreEnabled, ensembleEnabled := false, false
+		if m.commands != nil && m.commands.Orch != nil {
+			if m.commands.Orch.SetSREEnabled != nil {
+				sreEnabledSetter = m.commands.Orch.SetSREEnabled
+			}
+			if m.commands.Orch.SetEnsembleEnabled != nil {
+				ensembleSetter = m.commands.Orch.SetEnsembleEnabled
+			}
+			if m.commands.Orch.GetSREEnabled != nil {
+				sreEnabled = m.commands.Orch.GetSREEnabled()
+			}
+			if m.commands.Orch.GetEnsembleEnabled != nil {
+				ensembleEnabled = m.commands.Orch.GetEnsembleEnabled()
+			}
+		}
+		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn, providerSetter, m.integrationGetter, m.integrationSetter, sreEnabled, ensembleEnabled, sreEnabledSetter, ensembleSetter)
 		return nil
 
 	case strings.HasPrefix(result, "SAVE_SESSION_OK:"):
@@ -2462,6 +2651,20 @@ func (m *Model) callOrchestrator(prompt string) tea.Cmd {
 			}
 		}
 
+	// Wire status callback so the TUI can show the single authoritative status line.
+	// The closure captures prog to avoid races; sends StatusUpdateMsg on every update.
+	if m.orchestrator != nil {
+		m.orchestrator.StatusCallback = func(phase string, description string, tokens int, model string) {
+			if prog := m.getProgram(); prog != nil {
+				prog.Send(StatusUpdateMsg{
+					Phase:       phase,
+					Description: description,
+					Tokens:      tokens,
+					Model:       model,
+				})
+			}
+		}
+	}
 		// Call orchestrator with streaming support
 		err := m.orchestrator.ExecuteTaskWithStreaming(ctx, prompt, streamCallback, toolCallback, toolStartCallback, interventionCallback, nil)
 		if err != nil {

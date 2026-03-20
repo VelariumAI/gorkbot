@@ -61,6 +61,8 @@ func (o *Orchestrator) SetPrimary(ctx context.Context, providerName, modelID str
 	if o.Registry != nil {
 		o.Registry.SetAIProvider(prov)
 	}
+	// Keep compressor in sync: compression always uses the active primary.
+	o.SetCompressorGenerator(prov)
 	if o.Logger != nil {
 		o.Logger.Info("Primary provider switched", "provider", providerName, "model", modelID)
 	}

@@ -6,7 +6,7 @@
 
 **OAuth Client ID** - This is PUBLIC:
 ```
-YOUR_CLIENT_ID.apps.googleusercontent.com
+200519342786-tcu9hra6g91o73n7r1fcr3nqiqi0lc6d.apps.googleusercontent.com
 ```
 
 ✅ Safe to:
@@ -21,7 +21,7 @@ Why? The Client ID just **identifies** your app - it doesn't grant access.
 
 **OAuth Client Secret** - This is PRIVATE:
 ```
-GOCSPX-YOUR_CLIENT_SECRET_HERE  ⚠️ NEVER share this!
+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  ⚠️ NEVER share this!
 ```
 
 ❌ **NEVER:**
@@ -127,7 +127,7 @@ Your current setup is now **secure**:
 ```go
 // pkg/auth/oauth.go
 const (
-    DefaultClientID = "YOUR_CLIENT_ID.apps.googleusercontent.com"  // ✅ Public
+    DefaultClientID = "200519342786-...apps.googleusercontent.com"  // ✅ Public
     DefaultClientSecret = ""  // ✅ Empty (uses env var)
 )
 ```
@@ -135,8 +135,8 @@ const (
 ### Environment Variables (Private - NOT committed):
 ```bash
 # .env (in .gitignore)
-GOOGLE_CLIENT_ID=YOUR_CLIENT_ID.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=GOCSPX-YOUR_CLIENT_SECRET_HERE  # ⚠️ Private!
+GOOGLE_CLIENT_ID=200519342786-...apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=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  # ⚠️ Private!
 ```
 
 ## 🛡️ Defense in Depth

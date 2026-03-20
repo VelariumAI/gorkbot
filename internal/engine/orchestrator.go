@@ -12,7 +12,11 @@ import (
 	"time"
 
 	"github.com/velariumai/gorkbot/internal/platform"
+	"github.com/velariumai/gorkbot/internal/xskill"
 	"github.com/velariumai/gorkbot/pkg/adaptive"
+	"github.com/velariumai/gorkbot/pkg/cache"
+	"github.com/velariumai/gorkbot/pkg/spark"
+	"github.com/velariumai/gorkbot/pkg/sre"
 	"github.com/velariumai/gorkbot/pkg/ai"
 	"github.com/velariumai/gorkbot/pkg/billing"
 	"github.com/velariumai/gorkbot/pkg/collab"
@@ -90,6 +94,21 @@ type Orchestrator struct {
 	// The TUI sets this to route extended thinking to its dedicated panel.
 	ThinkingCallback StreamCallback
 
+	// ToolProgressCallback, when non-nil, is called for each tool execution
+	// with elapsed time updates every ~250ms while running, and once on completion.
+	// Signature: func(toolName string, elapsed time.Duration, done bool, success bool)
+	// The TUI uses this to update the live tools panel with per-tool timings.
+	ToolProgressCallback func(toolName string, elapsed time.Duration, done bool, success bool)
+
+	// StatusCallback, when non-nil, is called to update the single authoritative status line.
+	// Used to show pipeline progress, SRE phases, and token counts in the TUI.
+	// Signature: func(phase string, description string, tokens int, model string)
+	// The TUI sets this to update the "G ▶ " status line in real-time.
+	StatusCallback func(phase string, description string, tokens int, model string)
+
+	// ExecutionStats tracks historical tool execution times for progress estimation.
+	ExecutionStats *tools.ExecutionStats
+
 	// cancelMu guards cancelFunc.
 	cancelMu   sync.Mutex
 	cancelFunc context.CancelFunc // Set during generation; Interrupt() calls it.
@@ -114,6 +133,25 @@ type Orchestrator struct {
 	// Intelligence bundles the ARC Router and MEL learning system.
 	// Initialized after construction via InitIntelligence().
 	Intelligence *IntelligenceLayer
+
+	// ── Companion systems (augment, never replace) ────────────────────────────
+
+	// CacheAdvisor computes provider-appropriate caching hints before each LLM
+	// call. Initialized via InitCacheAdvisor(); nil = no caching augmentation.
+	CacheAdvisor *cache.Advisor
+
+	// IngressFilter prunes low-information content from prompts before they
+	// reach the ARC classifier and the LLM. Nil = pass-through.
+	IngressFilter *adaptive.IngressFilter
+
+	// IngressGuard validates semantic preservation after IngressFilter pruning
+	// to prevent ARC classifier evasion attacks. Nil = no guard.
+	IngressGuard *adaptive.IngressGuard
+
+	// MELValidator guards the VectorStore against poisoning attacks.
+	// Checked inside ObserveSuccess before heuristic persistence.
+	// Nil = no validation (degrades to old behaviour).
+	MELValidator *adaptive.MELValidator
 
 	// DebugMode — when true, raw AI responses (including tool JSON blocks) are
 	// returned to the TUI unstripped. Toggle via /debug command.
@@ -157,6 +195,26 @@ type Orchestrator struct {
 	// Wired in main.go after persistStore and Compressor are ready.
 	CompressionPipe *CompressionPipe
 
+	// TieredCompactor enforces context limits before every LLM call using a
+	// two-stage strategy: truncate large tool results first, then SENSE-compress.
+	// Initialized by InitEnhancements; nil means compaction is managed only by
+	// CompressionPipe's async 95% trigger.
+	TieredCompactor *TieredCompactor
+
+	// ConfigWatcher polls GORKBOT.md files for live changes and re-injects
+	// updated instructions into the conversation without restarting.
+	// Initialized by InitEnhancements; nil when config watching is disabled.
+	ConfigWatcher *config.ConfigWatcher
+
+	// PromptBuilder assembles the system prompt from named layers (Identity,
+	// Soul, Bootstrap, Runtime, ChannelHint). Nil means the legacy flat
+	// system prompt construction is used.
+	PromptBuilder *PromptBuilder
+
+	// RoutingTable provides regex-based source-to-agent routing that sits in
+	// front of the ARC Router as a zero-learning reliable fallback.
+	RoutingTable *adaptive.RoutingTable
+
 	// VectorStore indexes conversation turns for semantic search (RAG).
 	VectorStore *vectorstore.VectorStore
 
@@ -191,6 +249,50 @@ type Orchestrator struct {
 	// injection before injecting them into the system prompt.
 	// Wired by main.go via SetInputSanitizer().
 	InputSanitizer *sense.InputSanitizer
+
+	// ── XSKILL continual-learning system ─────────────────────────────────────
+	// XSkillKB is the XSKILL Knowledge Base (Phase 1 accumulation target).
+	// Nil until InitXSkill succeeds (requires an available embedder).
+	XSkillKB *xskill.KnowledgeBase
+
+	// XSkillEngine drives Phase 2 context enrichment before each LLM call.
+	// Nil until InitXSkill succeeds.
+	XSkillEngine *xskill.InferenceEngine
+
+	// xskillProvider is the hot-swappable LLM+embed adapter.
+	// Swap the embedder via UpgradeXSkillEmbedder().
+	xskillProvider *mutableProvider
+
+	// xskillMu guards the per-task trajectory fields below.
+	xskillMu sync.Mutex
+
+	// xskillSteps accumulates TrajectoryStep records during a single task.
+	xskillSteps []xskill.TrajectoryStep
+
+	// xskillPrompt holds the task prompt for Phase 1 accumulation.
+	xskillPrompt string
+
+	// xskillSkillName is the classified domain label for the current task.
+	xskillSkillName string
+
+	// xskillTaskStart records when the current task execution began.
+	xskillTaskStart time.Time
+
+	// SPARK autonomous reasoning daemon.
+	// Nil until InitSPARK succeeds.
+	SPARK *spark.SPARK
+
+	// SRE — Step-wise Reasoning Engine
+	SRE *sre.Coordinator
+
+	// CascadeOrder overrides the default provider failover sequence.
+	// nil or empty means use the hardcoded providerPriority default in fallback.go.
+	// Set from AppState.CascadeOrder in main.go after AppState restore.
+	CascadeOrder []string
+
+	// sandboxSanitizer stores the InputSanitizer when the sandbox is bypassed
+	// so it can be restored by ToggleSandbox(). Nil when sandbox is active.
+	sandboxSanitizer *sense.InputSanitizer
 }
 
 // NewOrchestrator initializes the orchestration engine with SENSE components.
@@ -220,9 +322,11 @@ func NewOrchestrator(primary, consultant ai.AIProvider, registry *tools.Registry
 	}
 	o.Stabilizer = sense.NewStabilizer(stabGen)
 
-	// Compressor uses Consultant to drive the 4-stage pipeline.
-	if consultant != nil {
-		o.Compressor = sense.NewCompressor(consultant)
+	// Compressor uses Primary as the generator so compression works even when
+	// the Consultant is unavailable. SetCompressorGenerator() hot-swaps this
+	// whenever the Primary is changed via SetPrimary().
+	if primary != nil {
+		o.Compressor = sense.NewCompressor(primary)
 	}
 
 	// Dispatcher for concurrent tool execution.
@@ -239,29 +343,10 @@ func NewOrchestrator(primary, consultant ai.AIProvider, registry *tools.Registry
 	// Background agent manager (oh-my-opencode inspired, 4 max concurrent).
 	o.BackgroundAgents = NewBackgroundAgentManager(4, "", nil)
 
-	// Context manager — fires auto-compaction at 95% full.
-	o.ContextMgr = NewContextManager(131072, func() {
-		logger.Info("Context window 95%+ full — triggering auto-compaction")
-		// Compaction runs asynchronously to avoid blocking.
-		go func() {
-			if o.Compressor != nil && o.ConversationHistory != nil {
-				ctx := context.Background()
-				msgs := o.ConversationHistory.GetMessages()
-				senseMsgs := make([]sense.ConversationMessage, 0, len(msgs))
-				for _, m := range msgs {
-					senseMsgs = append(senseMsgs, sense.ConversationMessage{
-						Role:    m.Role,
-						Content: m.Content,
-					})
-				}
-				if _, err := o.Compressor.Compress(ctx, senseMsgs); err != nil {
-					logger.Warn("Auto-compaction failed", "error", err)
-				} else {
-					logger.Info("Auto-compaction complete")
-				}
-			}
-		}()
-	})
+	// Context manager — tracks token usage; no async callback needed.
+	// Compaction is handled synchronously by TieredCompactor.Check() before
+	// every LLM call in streaming.go — no async goroutine required.
+	o.ContextMgr = NewContextManager(131072, nil)
 
 	cwd, _ := os.Getwd()
 	o.Workspace = session.NewWorkspaceManager(cwd)
@@ -287,9 +372,49 @@ func (o *Orchestrator) InitEnhancements(configDir, cwd string) {
 	// Initialize CCI — three-tier project memory (Hot/Specialist/Cold).
 	o.InitCCI(configDir, cwd)
 
+	// ── TieredCompactor: pre-send token enforcement ───────────────────────
+	// CompressionPipe may be nil here (wired later by main.go); TieredCompactor
+	// accepts nil and will skip Stage-2 until it is set.
+	o.TieredCompactor = NewTieredCompactor(o.ContextMgr, o.CompressionPipe, o.Logger)
+
+	// ── ConfigWatcher: hot-reload GORKBOT.md hierarchy ────────────────────
+	o.ConfigWatcher = config.NewWatcher(o.ConfigLoader, 2*time.Second)
+	o.ConfigWatcher.OnChange(func(path string, event config.ChangeEvent) {
+		o.Logger.Info("config file changed — refreshing project instructions",
+			"path", path, "event", event.String())
+		newInstructions := o.ConfigLoader.LoadInstructions()
+		if newInstructions != "" {
+			tag := "__gorkbot_project_instructions__"
+			o.ConversationHistory.UpsertSystemMessage(tag,
+				"### PROJECT INSTRUCTIONS (hot-reloaded)\n\n"+newInstructions)
+		}
+	})
+
+	// ── RoutingTable: pattern-based agent routing fallback ────────────────
+	o.RoutingTable = adaptive.NewRoutingTable()
+
+	// ── PromptBuilder: structured five-layer prompt assembly ─────────────
+	o.PromptBuilder = NewPromptBuilder()
+
 	o.Logger.Info("Enhanced systems initialized",
 		"hooks_dir", o.Hooks.HooksDir(),
 		"config_files", o.ConfigLoader.ActiveFiles())
+}
+
+// GetRoutingTable returns the RoutingTable used for source-to-agent dispatch.
+// Returns nil when no routing table has been initialized.
+func (o *Orchestrator) GetRoutingTable() *adaptive.RoutingTable { return o.RoutingTable }
+
+// StartConfigWatcher begins polling GORKBOT.md files for changes and
+// hot-reloading updated project instructions into the conversation.
+// ctx should be the application-lifetime context (cancel to stop watching).
+// Call after InitEnhancements; no-op if ConfigWatcher is nil.
+func (o *Orchestrator) StartConfigWatcher(ctx context.Context) {
+	if o.ConfigWatcher == nil {
+		return
+	}
+	go o.ConfigWatcher.Start(ctx)
+	o.Logger.Info("config watcher started (polling every 2s)")
 }
 
 // InitIntelligence initializes the ARC Router + MEL learning stack.
@@ -305,6 +430,57 @@ func (o *Orchestrator) InitIntelligence(configDir string) {
 	o.Logger.Info("Intelligence layer ready",
 		"platform", il.Router.PlatformName(),
 		"mel_heuristics", il.Store.Len())
+}
+
+// InitCompanions initialises all companion augmentation systems:
+//   - CacheAdvisor  (prompt caching across all providers)
+//   - IngressFilter (token pruning before ARC routing)
+//   - IngressGuard  (ARC classifier evasion protection)
+//   - MELValidator  (VectorStore poisoning protection)
+//
+// configDir is the gorkbot config directory. geminiKey and geminiModel are
+// optional — Gemini explicit caching is skipped when either is empty.
+func (o *Orchestrator) InitCompanions(configDir, geminiKey, geminiModel string) {
+	// CacheAdvisor.
+	advisor, err := cache.NewAdvisor(geminiKey, geminiModel, configDir)
+	if err != nil {
+		o.Logger.Warn("CacheAdvisor init failed (running without it)", "error", err)
+	} else {
+		o.CacheAdvisor = advisor
+
+		// Wire Grok conv-id into the GrokProvider if it is the primary.
+		if grokProv, ok := o.Primary.(interface{ SetConvID(string) }); ok {
+			hints := advisor.Advise("grok", "", "", nil)
+			if hints.GrokConvID != "" {
+				grokProv.SetConvID(hints.GrokConvID)
+			}
+		}
+		o.Logger.Info("CacheAdvisor ready")
+	}
+
+	// IngressFilter + IngressGuard.
+	o.IngressFilter = adaptive.NewIngressFilter(0) // 0 = use default 32k rune cap
+	o.IngressGuard = adaptive.NewIngressGuard()
+	o.Logger.Info("IngressFilter + IngressGuard ready")
+
+	// MELValidator.
+	o.MELValidator = adaptive.NewMELValidator()
+	o.Logger.Info("MELValidator ready")
+}
+
+// buildSystemPrompt returns the full composed system prompt for the current
+// conversation by concatenating all "system" role messages in order.
+// This is used by the CacheAdvisor to detect system-prompt changes between
+// turns, and by any other component that needs the assembled system context.
+func (o *Orchestrator) buildSystemPrompt() string {
+	msgs := o.ConversationHistory.GetMessages()
+	parts := make([]string, 0, 4)
+	for _, m := range msgs {
+		if m.Role == "system" && m.Content != "" {
+			parts = append(parts, m.Content)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // SetTraceLogger attaches a trace logger (enabled via --trace flag).
@@ -336,6 +512,28 @@ func (o *Orchestrator) writeMemoryLog(summary string) {
 	fmt.Fprintf(f, "\n## Compaction at %s\n\n%s\n", time.Now().Format(time.RFC3339), summary)
 }
 
+// SetCompressorGenerator hot-swaps the TextGenerator backing the Compressor
+// and CompressionPipe. Called from SetPrimary() so compression always uses
+// the active primary provider — no dependency on the Consultant being available.
+func (o *Orchestrator) SetCompressorGenerator(gen sense.TextGenerator) {
+	newComp := sense.NewCompressor(gen)
+	o.Compressor = newComp
+	if o.CompressionPipe != nil {
+		o.CompressionPipe.SetCompressor(newComp)
+	}
+}
+
+// SetCascadeOrder updates the provider failover order at runtime.
+// Pass nil to restore the default hardcoded order.
+func (o *Orchestrator) SetCascadeOrder(order []string) {
+	o.CascadeOrder = order
+}
+
+// GetCascadeOrder returns the current effective cascade order.
+func (o *Orchestrator) GetCascadeOrder() []string {
+	return o.effectiveCascade()
+}
+
 // ToggleDebug flips the DebugMode flag and returns the new value.
 // When DebugMode is true, raw AI responses (including tool JSON blocks) are
 // sent to the TUI without stripping.
@@ -343,6 +541,34 @@ func (o *Orchestrator) ToggleDebug() bool {
 	o.DebugMode = !o.DebugMode
 	o.Logger.Info("Debug mode toggled", "debug_mode", o.DebugMode)
 	return o.DebugMode
+}
+
+// ToggleSandbox enables or disables the SENSE input sanitizer in the tool registry.
+// Returns true when the sandbox is now enabled, false when disabled.
+func (o *Orchestrator) ToggleSandbox() bool {
+	if o.Registry == nil {
+		return true // no registry → treat as enabled (safe default)
+	}
+	if o.Registry.HasSanitizer() {
+		// Sandbox is ON → turn it OFF: stash the sanitizer and bypass.
+		if s, ok := o.Registry.GetSanitizer().(*sense.InputSanitizer); ok {
+			o.sandboxSanitizer = s
+		}
+		o.Registry.BypassSanitizer()
+		o.Logger.Warn("SENSE input sanitizer bypassed — sandbox disabled")
+		return false
+	}
+	// Sandbox is OFF → turn it ON: restore stashed sanitizer (or no-op if none).
+	if o.sandboxSanitizer != nil {
+		o.Registry.RestoreSanitizer(o.sandboxSanitizer)
+		o.Logger.Info("SENSE input sanitizer restored — sandbox enabled")
+	}
+	return true
+}
+
+// SandboxEnabled returns true when the SENSE input sanitizer is currently active.
+func (o *Orchestrator) SandboxEnabled() bool {
+	return o.Registry != nil && o.Registry.HasSanitizer()
 }
 
 // Interrupt cancels the current in-progress generation without crashing the app.
@@ -727,6 +953,17 @@ func (o *Orchestrator) AnalyzeAgency(ctx context.Context, lastResponse string) (
 
 	o.Logger.Info("Running SENSE Agency Reflection...")
 
+	// ── 0. Empty/Lazy Response Check ─────────────────────────────────────────
+	trimmed := strings.TrimSpace(lastResponse)
+	// Only enforce length if the history has more than 2 messages (not a simple greeting)
+	// and if the response is actually empty or a single word.
+	if len(trimmed) < 5 && o.ConversationHistory.Count() > 2 {
+		o.Logger.Warn("Empty or near-empty response detected", "length", len(trimmed))
+		advice := "Your last response was empty. If you are still working, please provide a status update to the user. If you are finished, provide the final answer."
+		o.ConversationHistory.AddSystemMessage("\n[SENSE AUTO-INTERVENTION]: " + advice)
+		return true, nil
+	}
+
 	// ── 1. LIE Evaluation ────────────────────────────────────────────────────
 	if o.LIE != nil {
 		metrics, inject := o.LIE.Evaluate(lastResponse)
@@ -1051,6 +1288,20 @@ func (o *Orchestrator) ExecuteTaskWithTools(ctx context.Context, prompt string, 
 				if o.Billing != nil {
 					o.Billing.TrackTurn(provID, modelID, u.PromptTokens, u.CompletionTokens)
 				}
+			}
+		}
+
+		// ── Pre-send: tiered context enforcement ─────────────────────────────
+		// Truncate oversized tool results (Stage 1) and, if still over the
+		// hard threshold, synchronously SENSE-compress (Stage 2) before the
+		// token budget is handed to the provider.
+		if o.TieredCompactor != nil {
+			// Keep CompressionPipe in sync in case it was wired after InitEnhancements.
+			if o.TieredCompactor.pipe == nil && o.CompressionPipe != nil {
+				o.TieredCompactor.pipe = o.CompressionPipe
+			}
+			if err := o.TieredCompactor.Check(ctx, o.ConversationHistory); err != nil {
+				o.Logger.Warn("tiered compaction error (non-fatal)", "err", err)
 			}
 		}
 
@@ -1408,6 +1659,11 @@ use ` + "`structured_bash`" + ` instead of ` + "`bash`" + `. It auto-parses stdo
 (` + "`data_type`" + `: json/tabular/keyvalue/raw) with a 5 MB memory cap. Use ` + "`bash`" + ` for
 fire-and-forget commands; use ` + "`structured_bash`" + ` when the result feeds into reasoning.
 
+**USE SENSE EFFICIENTLY**: Always call ` + "`sense_discovery`" + ` with ` + "`compact=true`" + ` for routine
+tool lookup — this omits full JSON schemas and keeps output ~1.5k tokens. Use
+` + "`compact=false, category=X`" + ` only when you need the full parameter schema for a specific
+category. Calling ` + "`sense_discovery`" + ` without ` + "`compact=true`" + ` adds ~22,000 tokens to context unnecessarily.
+
 `)
 
 	if useNative {
@@ -1625,6 +1881,11 @@ func (o *Orchestrator) ExecuteTool(ctx context.Context, req tools.ToolRequest) (
 	result, err := o.Registry.Execute(ctxWithOrchestrator, &req)
 	toolElapsed := time.Since(toolStart)
 
+	// ── Record execution statistics for progress estimation ──────────────────
+	if o.ExecutionStats != nil {
+		o.ExecutionStats.RecordExecution(req.ToolName, toolElapsed)
+	}
+
 	// ── Enrich failed results with structured recovery hints ─────────────────
 	if result != nil && !result.Success {
 		tools.EnrichResult(result, req.ToolName)
@@ -1668,7 +1929,17 @@ func (o *Orchestrator) ExecuteTool(ctx context.Context, req tools.ToolRequest) (
 						ContextTags: []string{req.ToolName, "reliability", "low_success"},
 						Confidence:  0.5 + (0.5 - successRate), // higher confidence for lower rates
 					}
-					o.Intelligence.Store.Add(h)
+					// MELValidator: screen for contamination before persisting.
+					safe := true
+					if o.MELValidator != nil {
+						if res := o.MELValidator.Validate(h.Text()); !res.OK {
+							o.Logger.Warn("MEL heuristic blocked", "reason", res.Reason, "tool", req.ToolName)
+							safe = false
+						}
+					}
+					if safe {
+						o.Intelligence.Store.Add(h)
+					}
 				}
 			}
 		}

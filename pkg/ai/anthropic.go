@@ -100,38 +100,78 @@ type anthropicModelListResponse struct {
 	} `json:"data"`
 }
 
-// injectCacheControl adds cache_control breakpoints to the system prompt and
-// last 3 user messages, enabling Anthropic's prompt caching feature.
-// Strategy: mark system prompt + up to 3 recent user messages as cacheable.
-// Deep-copies the messages slice before modifying to avoid mutating callers.
-// Only applied when len(msgs) >= 2.
-func injectCacheControl(systemMsg string, msgs []anthropicMessage) (interface{}, []anthropicMessage) {
-	// Build system as block array with cache_control on last block
-	sysBlock := []anthropicBlockWithCache{{
-		Type: "text",
-		Text: systemMsg,
-		CacheControl: &anthropicCacheControl{Type: "ephemeral"},
-	}}
+// anthropicCacheFloor returns the minimum token count a content block must
+// reach before Anthropic will honour a cache_control breakpoint on it.
+// Values per Anthropic prompt-caching docs (2026). Marking content below
+// the floor wastes the API round-trip with no cache benefit.
+func anthropicCacheFloor(model string) int {
+	m := strings.ToLower(model)
+	switch {
+	case strings.Contains(m, "sonnet-4-6"), strings.Contains(m, "sonnet-4.6"):
+		return 2048
+	case strings.Contains(m, "opus-4"):
+		return 4096
+	case strings.Contains(m, "haiku-4-5"), strings.Contains(m, "haiku-4.5"):
+		return 4096
+	case strings.Contains(m, "haiku-3"):
+		return 2048
+	default:
+		return 1024
+	}
+}
 
-	// Deep copy messages
+// injectCacheControl adds cache_control breakpoints to the system prompt and
+// up to 2 recent user messages, enabling Anthropic's prompt caching feature.
+//
+// Improvements over the original implementation:
+//   - model-aware token floor: only marks content that clears the minimum
+//     cacheable length for the active Claude model.
+//   - MiniMax-compatible cap: never emits more than 4 breakpoints total
+//     (MiniMax's Anthropic-compatible API enforces this limit).
+//   - beta header: the prompt-caching-2024-07-31 beta header is still sent
+//     for compatibility but is no longer required by the standard API.
+//
+// Deep-copies the messages slice before modifying to avoid mutating callers.
+func injectCacheControl(model, systemMsg string, msgs []anthropicMessage) (interface{}, []anthropicMessage) {
+	floor := anthropicCacheFloor(model)
+	// ~4 chars per token (rough but fast estimate).
+	meetsFloor := func(s string) bool { return len(s)/4 >= floor }
+
+	var sysBlock interface{}
+	breakpointsUsed := 0
+
+	if meetsFloor(systemMsg) {
+		sysBlock = []anthropicBlockWithCache{{
+			Type:         "text",
+			Text:         systemMsg,
+			CacheControl: &anthropicCacheControl{Type: "ephemeral"},
+		}}
+		breakpointsUsed++
+	} else {
+		sysBlock = systemMsg
+	}
+
+	// Deep copy messages.
 	newMsgs := make([]anthropicMessage, len(msgs))
 	copy(newMsgs, msgs)
 
-	// Mark last 3 user messages with cache_control
+	// Mark up to 2 recent user messages that clear the floor (cap: 4 total).
 	marked := 0
-	for i := len(newMsgs) - 1; i >= 0 && marked < 3; i-- {
-		if newMsgs[i].Role == "user" {
-			// Convert string content to block array with cache_control
-			content, ok := newMsgs[i].Content.(string)
-			if ok && content != "" {
-				newMsgs[i].Content = []anthropicBlockWithCache{{
-					Type: "text",
-					Text: content,
-					CacheControl: &anthropicCacheControl{Type: "ephemeral"},
-				}}
-				marked++
-			}
+	for i := len(newMsgs) - 1; i >= 0 && marked < 2 && breakpointsUsed < 4; i-- {
+		if newMsgs[i].Role != "user" {
+			continue
 		}
+		content, ok := newMsgs[i].Content.(string)
+		if !ok || !meetsFloor(content) {
+			continue
+		}
+		newMsgs[i].Content = []anthropicBlockWithCache{{
+			Type:         "text",
+			Text:         content,
+			CacheControl: &anthropicCacheControl{Type: "ephemeral"},
+		}}
+		marked++
+		breakpointsUsed++
 	}
 
 	return sysBlock, newMsgs
@@ -290,7 +330,7 @@ func (a *AnthropicProvider) StreamWithHistory(ctx context.Context, history *Conv
 	var cachedSystem interface{} = systemMsg
 	cachedMsgs := msgs
 	if len(msgs) >= 2 && systemMsg != "" {
-		cachedSystem, cachedMsgs = injectCacheControl(systemMsg, msgs)
+		cachedSystem, cachedMsgs = injectCacheControl(a.Model, systemMsg, msgs)
 	}
 
 	thinkingEnabled := a.supportsThinking && a.ThinkingBudget > 0

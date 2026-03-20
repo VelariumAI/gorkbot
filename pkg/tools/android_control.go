@@ -298,8 +298,10 @@ type ScreenshotTool struct{ BaseTool }
 
 func NewScreenshotTool() *ScreenshotTool {
 	return &ScreenshotTool{BaseTool: BaseTool{
-		name:               "screenshot",
-		description:        "Capture device screenshot via termux-screenshot with configurable path and quality.",
+		name: "screenshot",
+		description: "Capture device screenshot via termux-screenshot. " +
+			"Output is always PNG. Default path: $HOME/gorkbot_screen.png. " +
+			"Requires Termux:API app + package installed.",
 		category:           CategoryAndroid,
 		requiresPermission: true,
 		defaultPermission:  PermissionOnce,
@@ -312,14 +314,10 @@ func (t *ScreenshotTool) Parameters() json.RawMessage {
 		"properties": map[string]interface{}{
 			"path": map[string]interface{}{
 				"type":        "string",
-				"description": "Output file path (e.g. /sdcard/shot.jpg)",
-			},
-			"quality": map[string]interface{}{
-				"type":        "integer",
-				"description": "JPEG quality 1-100 (default 90)",
+				"description": "Output PNG file path (default: $HOME/gorkbot_screen.png)",
 			},
 		},
-		"required": []string{"path"},
+		"required": []string{},
 	})
 	return s
 }
@@ -327,15 +325,26 @@ func (t *ScreenshotTool) Parameters() json.RawMessage {
 func (t *ScreenshotTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
 	path, _ := params["path"].(string)
 	if path == "" {
-		return &ToolResult{Success: false, Error: "path is required"}, nil
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, "gorkbot_screen.png")
 	}
-	quality := 90
-	if q, ok := params["quality"].(float64); ok && q > 0 {
-		quality = int(q)
+	cmd := fmt.Sprintf("termux-screenshot -f %s && echo 'Saved: %s'",
+		shellescape(path), shellescape(path))
+	result, err := NewBashTool().Execute(ctx, map[string]interface{}{"command": cmd})
+	if err != nil {
+		return result, err
 	}
-	cmd := fmt.Sprintf("termux-screenshot -p %s -q %d && echo 'Saved: %s'",
-		shellescape(path), quality, shellescape(path))
-	return NewBashTool().Execute(ctx, map[string]interface{}{"command": cmd})
+	// Verify the file actually exists — termux-screenshot can exit 0 without writing
+	if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+		return &ToolResult{
+			Success: false,
+			Error: fmt.Sprintf(
+				"termux-screenshot ran but output file not found at %s — "+
+					"check that Termux:API app is installed and permission is granted",
+				path),
+		}, nil
+	}
+	return result, nil
 }
 
 // ScreenrecordTool records the device screen to a video file.

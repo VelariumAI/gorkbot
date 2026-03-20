@@ -10,6 +10,12 @@ import (
 	"strings"
 )
 
+// pluginsDir returns the absolute path to the project's Python plugins directory.
+// Uses the correct repo name ("gorky") rather than the old name ("gorkbot").
+func pluginsDir() string {
+	return filepath.Join(os.Getenv("HOME"), "project", "gorky", "plugins", "python")
+}
+
 // ScraplingFetchTool - Fast HTTP fetching with Scrapling
 type ScraplingFetchTool struct {
 	BaseTool
@@ -83,7 +89,7 @@ func (t *ScraplingFetchTool) Execute(ctx context.Context, params map[string]inte
 	}
 
 	// Use Python plugin instead
-	pluginPath := filepath.Join(os.Getenv("HOME"), "project/gorkbot/plugins/python/scrapling_fetch/tool.py")
+	pluginPath := filepath.Join(pluginsDir(), "scrapling_fetch", "tool.py")
 
 	// Check if plugin exists
 	if _, err := os.Stat(pluginPath); err == nil {
@@ -102,14 +108,8 @@ func (t *ScraplingFetchTool) executePlugin(ctx context.Context, pluginPath strin
 	}
 	inputJSON, _ := json.Marshal(input)
 
-	cmd := exec.CommandContext(ctx, "python3", pluginPath)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), "GORKBOT_PLUGIN=1")
-
-	// Run via the plugin bridge
-	bridgePath := filepath.Join(os.Getenv("HOME"), "project/gorkbot/plugins/python/gorkbot_bridge.py")
+	// Run via the plugin bridge (pluginPath is unused here; bridge dispatches internally)
+	bridgePath := filepath.Join(pluginsDir(), "gorkbot_bridge.py")
 	cmd2 := exec.CommandContext(ctx, "python3", bridgePath)
 	cmd2.Stdin = strings.NewReader(string(inputJSON))
 
@@ -127,7 +127,12 @@ func (t *ScraplingFetchTool) executePlugin(ctx context.Context, pluginPath strin
 		Error   string `json:"error"`
 	}
 	if err := json.Unmarshal(output, &result); err != nil {
-		return &ToolResult{Success: false, Error: "Failed to parse result"}, err
+		// Return raw output if JSON parsing fails (may be HTML or plain text)
+		return &ToolResult{
+			Success: true,
+			Output:  string(output),
+			Error:   "",
+		}, nil
 	}
 
 	return &ToolResult{
@@ -574,7 +579,7 @@ func (t *ScraplingSearchTool) Execute(ctx context.Context, params map[string]int
 	}
 
 	// Execute via Python plugin
-	pluginPath := filepath.Join(os.Getenv("HOME"), "project/gorkbot/plugins/python/scrapling_search/tool.py")
+	pluginPath := filepath.Join(pluginsDir(), "scrapling_search", "tool.py")
 
 	// Check if plugin exists
 	if _, err := os.Stat(pluginPath); err == nil {
@@ -594,7 +599,7 @@ func (t *ScraplingSearchTool) executePlugin(ctx context.Context, pluginPath stri
 	inputJSON, _ := json.Marshal(input)
 
 	// Use the gorkbot bridge
-	bridgePath := filepath.Join(os.Getenv("HOME"), "project/gorkbot/plugins/python/gorkbot_bridge.py")
+	bridgePath := filepath.Join(pluginsDir(), "gorkbot_bridge.py")
 	cmd := exec.CommandContext(ctx, "python3", bridgePath)
 	cmd.Stdin = strings.NewReader(string(inputJSON))
 	cmd.Env = append(os.Environ(), "GORKBOT_PLUGIN=1")
@@ -613,7 +618,12 @@ func (t *ScraplingSearchTool) executePlugin(ctx context.Context, pluginPath stri
 		Error   string `json:"error"`
 	}
 	if err := json.Unmarshal(output, &result); err != nil {
-		return &ToolResult{Success: false, Error: "Failed to parse result"}, err
+		// Return raw output if JSON parsing fails (may be HTML or plain text)
+		return &ToolResult{
+			Success: true,
+			Output:  string(output),
+			Error:   "",
+		}, nil
 	}
 
 	return &ToolResult{

@@ -136,6 +136,23 @@ type GrokProvider struct {
 	Client           *http.Client
 	supportsThinking bool // true when the active model accepts reasoning_effort
 	lastUsage        GrokUsage
+	// ConvID, when non-empty, is sent as the x-grok-conv-id header on every
+	// request. xAI routes requests with the same ConvID to the same backend
+	// server, significantly increasing automatic prompt-cache hit rates for
+	// multi-turn sessions. Set once via SetConvID(); never changes mid-session.
+	ConvID string
+}
+
+// SetConvID sets the conversation ID used for xAI prompt-cache sticky routing.
+// Should be called once at session start with a stable UUID4 string.
+func (g *GrokProvider) SetConvID(id string) { g.ConvID = id }
+
+// injectGrokCacheHeader adds the x-grok-conv-id header to req when ConvID is
+// set. Safe to call unconditionally; no-op when ConvID is empty.
+func (g *GrokProvider) injectGrokCacheHeader(req *http.Request) {
+	if g.ConvID != "" {
+		req.Header.Set("x-grok-conv-id", g.ConvID)
+	}
 }
 
 // LastUsage returns the token usage from the most recent API call.
@@ -229,6 +246,7 @@ func (g *GrokProvider) Generate(ctx context.Context, prompt string) (string, err
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+g.APIKey)
+	g.injectGrokCacheHeader(req)
 
 	resp, err := g.Client.Do(req)
 	if err != nil {
@@ -283,6 +301,7 @@ func (g *GrokProvider) GenerateWithHistory(ctx context.Context, history *Convers
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+g.APIKey)
+	g.injectGrokCacheHeader(req)
 
 	resp, err := g.Client.Do(req)
 	if err != nil {
@@ -336,6 +355,7 @@ func (g *GrokProvider) Stream(ctx context.Context, prompt string, out io.Writer)
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+g.APIKey)
+	g.injectGrokCacheHeader(req)
 
 	// Use a client with no timeout for streaming, or long timeout
 	streamClient := NewRetryClient()
@@ -418,6 +438,7 @@ func (g *GrokProvider) StreamWithHistory(ctx context.Context, history *Conversat
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+g.APIKey)
+	g.injectGrokCacheHeader(req)
 
 	// Use a client with no timeout for streaming, or long timeout
 	streamClient := NewRetryClient()
@@ -574,6 +595,7 @@ func (g *GrokProvider) GenerateWithTools(ctx context.Context, history *Conversat
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+g.APIKey)
+	g.injectGrokCacheHeader(req)
 
 	resp, err := g.Client.Do(req)
 	if err != nil {
@@ -653,6 +675,7 @@ func (g *GrokProvider) Ping(ctx context.Context) error {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+g.APIKey)
+	g.injectGrokCacheHeader(req)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := NewPingClient().Do(req)

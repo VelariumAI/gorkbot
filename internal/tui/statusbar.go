@@ -121,10 +121,11 @@ func (s *StatusBar) View() string {
 	textStyle := s.styles.StatusBarKey
 	metaStyle := s.styles.StatusBarValue
 
-	// ── Left: Spinner + Status ───────────────────────────────────────────────
-	left := " ✓  Ready"
+	// ── Left: Gorky identity + Status ────────────────────────────────────────
+	gorkyGlyph := s.styles.GorkyGlyphStyle.Render(GorkyGlyph)
+	left := fmt.Sprintf(" %s  Ready", gorkyGlyph)
 	if time.Since(s.statusTime) < 5*time.Second && s.statusMessage != "" {
-		left = fmt.Sprintf(" ⣿  %s %s", s.spinner.View(), s.statusMessage)
+		left = fmt.Sprintf(" %s  %s %s", gorkyGlyph, s.spinner.View(), s.statusMessage)
 	}
 
 	// ── Center: Processes + Active tools ────────────────────────────────────

@@ -3,14 +3,18 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
+	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/velariumai/gorkbot/pkg/adaptive"
 	"github.com/velariumai/gorkbot/pkg/ai"
 	"github.com/velariumai/gorkbot/pkg/collab"
 	"github.com/velariumai/gorkbot/pkg/hooks"
 	"github.com/velariumai/gorkbot/pkg/router"
+	"github.com/velariumai/gorkbot/pkg/sre"
 	"github.com/velariumai/gorkbot/pkg/tools"
 )
 
@@ -22,6 +26,65 @@ type AdviceCallback func(advice string)
 
 // InterventionCallback is called when the watchdog needs human input
 type InterventionCallback func(severity WatchdogSeverity, context string) InterventionResponse
+
+// shouldSuppressToolOutput checks if tool outputs should be hidden based on the original prompt.
+// Returns true for simple queries that shouldn't include diagnostic/status output.
+func shouldSuppressToolOutput(prompt string) bool {
+	// Keywords that signal a user wants diagnostic/status info
+	diagnosticKeywords := []string{
+		"status", "monitor", "diagnostic", "health", "stats", "cpu", "memory",
+		"system info", "show state", "gorkbot status", "what are you", "how are you",
+		"list tools", "list all", "capabilities", "what can", "brain", "rules",
+	}
+
+	lowerPrompt := strings.ToLower(prompt)
+	for _, keyword := range diagnosticKeywords {
+		if strings.Contains(lowerPrompt, keyword) {
+			return false // User asked for diagnostics; show the output
+		}
+	}
+
+	// Default: suppress tool output for normal queries
+	return true
+}
+
+// stripToolOutputPatterns removes raw tool output blocks from AI responses.
+// Strips patterns like "Verified Status:", "Actionable Commands:", system tables, etc.
+func stripToolOutputPatterns(response string) string {
+	lines := strings.Split(response, "\n")
+	var result []string
+	skipUntilEmptyLine := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Skip tool output blocks
+		if strings.HasPrefix(trimmed, "Verified Status:") ||
+			strings.HasPrefix(trimmed, "Actionable Commands:") ||
+			strings.HasPrefix(trimmed, "**Verified Status") ||
+			strings.HasPrefix(trimmed, "**Actionable Commands") ||
+			strings.HasPrefix(trimmed, "System Status:") ||
+			strings.HasPrefix(trimmed, "Tool Execution") {
+			skipUntilEmptyLine = true
+			continue
+		}
+
+		// Stop skipping at blank lines
+		if skipUntilEmptyLine && trimmed == "" {
+			skipUntilEmptyLine = false
+			continue
+		}
+
+		// Skip lines while we're in a suppressed block
+		if skipUntilEmptyLine {
+			continue
+		}
+
+		result = append(result, line)
+	}
+
+	return strings.TrimSpace(strings.Join(result, "\n"))
+}
 
 // ExecuteTaskWithStreaming handles a user prompt with real-time streaming output.
 // toolStartCallback (may be nil) is invoked just before each tool execution begins,
@@ -118,6 +181,19 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 
 	// Add system message with tool context (only on first message if history is empty)
 	if o.ConversationHistory.Count() == 0 {
+		// Layer 0: PromptBuilder preamble (identity, soul, bootstrap, runtime, channel hint).
+		var pbPreamble string
+		if o.PromptBuilder != nil {
+			cwd, _ := os.Getwd()
+			pbPreamble = o.PromptBuilder.Build(BuildContext{
+				WorkDir:   cwd,
+				SessionID: o.SessionID,
+				Model:     o.primaryModelName,
+				Platform:  fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
+				Channel:   "tui",
+			})
+		}
+
 		toolContext := ""
 		if o.Registry != nil {
 			toolContext = o.GetToolContext()
@@ -161,6 +237,15 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 						},
 					})
 				}
+			}
+		}
+
+		// Prepend PromptBuilder preamble as layer-0 of the system prompt.
+		if pbPreamble != "" {
+			if toolContext != "" {
+				toolContext = pbPreamble + "\n\n" + toolContext
+			} else {
+				toolContext = pbPreamble
 			}
 		}
 
@@ -230,8 +315,52 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		userMessage = fmt.Sprintf("EXPERT CONSULTANT ADVICE:\n%s\n\nUSER REQUEST:\n%s", consultationAdvice, prompt)
 	}
 
+	// ── XSKILL Phase 2: inject task-relevant experiences and skill ──────────
+	o.prepareXSkillContext(prompt)
+	// ── SPARK Phase 2: inject TII/IDL/MotivationalCore context ─────────────
+	o.prepareSPARKContext()
+
 	// Add user message to history
 	o.ConversationHistory.AddUserMessage(userMessage)
+
+	// ── CacheAdvisor: compute and apply provider-specific caching hints ──────
+	if o.CacheAdvisor != nil && o.Primary != nil {
+		systemPrompt := o.buildSystemPrompt()
+		msgs := o.ConversationHistory.GetMessages()
+		providerID := string(o.Primary.ID())
+		model := o.Primary.GetMetadata().ID
+		hints := o.CacheAdvisor.Advise(providerID, model, systemPrompt, msgs)
+
+		// Apply Gemini cached content name to the GeminiProvider.
+		if hints.GeminiCachedContentName != "" {
+			if gp, ok := o.Primary.(interface{ SetCachedContent(string) }); ok {
+				gp.SetCachedContent(hints.GeminiCachedContentName)
+			}
+		} else if hints.SystemPromptChanged {
+			// System prompt changed — create a new Gemini cache entry async.
+			gc := o.CacheAdvisor.GeminiCacheClient()
+			if gc != nil {
+				go func(sp string) {
+					name, err := gc.Create(context.Background(), sp)
+					if err != nil {
+						o.Logger.Warn("Gemini cache create failed", "error", err)
+						return
+					}
+					if name != "" {
+						o.CacheAdvisor.RecordGeminiCacheName(name)
+						if gp, ok := o.Primary.(interface{ SetCachedContent(string) }); ok {
+							gp.SetCachedContent(name)
+						}
+					}
+				}(systemPrompt)
+			}
+		}
+
+		// Refresh Gemini TTL proactively.
+		if gc := o.CacheAdvisor.GeminiCacheClient(); gc != nil {
+			gc.RefreshIfNeeded(context.Background())
+		}
+	}
 
 	// Persist user turn (fire-and-forget — never blocks the streaming path).
 	if o.PersistStore != nil {
@@ -240,14 +369,15 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		}(prompt) // persist original prompt, not the consultant-augmented form
 	}
 
-	// Ensure history doesn't exceed context limit
-	maxContextTokens := 100000
-	o.ConversationHistory.TruncateToTokenLimit(maxContextTokens)
-
-	// ── Context compression: summarise old messages when history is large ─────
-	if o.CompressionPipe != nil {
-		_ = o.CompressionPipe.MaybeCompress(ctx, o.ConversationHistory)
+	// ── Context enforcement: compress first, then safety-truncate ───────────
+	// Correct order: compaction reduces tokens before we hard-truncate, which
+	// avoids dropping messages that could have been summarised.
+	maxContextTokens := o.safeContextLimit()
+	if o.TieredCompactor != nil {
+		_ = o.TieredCompactor.Check(ctx, o.ConversationHistory) // trim + SENSE-compress
 	}
+	o.ConversationHistory.TruncateToTokenLimit(maxContextTokens) // safety brake
+	o.ConversationHistory.RepairOrphanedPairs()                  // fix dangling tool calls
 
 	// Capture current provider ID for cascade detection.
 	currentProviderID := ""
@@ -255,30 +385,92 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		currentProviderID = string(o.Primary.ID())
 	}
 
-	// ── ARC: classify prompt and compute platform-aware resource budget ──────
-	maxTurns := 10 // default: prevent infinite loops
-	if o.Intelligence != nil {
-		arcDecision := o.Intelligence.Route(prompt)
-		o.Logger.Info("ARC routing decision (streaming)",
-			"workflow", arcDecision.Classification.String(),
-			"max_tool_calls", arcDecision.Budget.MaxToolCalls,
-			"temperature", arcDecision.Budget.Temperature,
-		)
-		if arcDecision.Budget.MaxToolCalls > 0 {
-			maxTurns = arcDecision.Budget.MaxToolCalls
+	// ── SRE Phase 0: Grounding — must run before any LLM call ────────────────
+	// Extracts semantic facts from the prompt before any planning or tool use begins.
+	if o.SRE != nil && o.SRE.Enabled() {
+		// Emit status: grounding extraction
+		if o.StatusCallback != nil {
+			o.StatusCallback("grounding", "Grounding task and extracting anchors...", 0, "")
+		}
+		_ = o.prepareGrounding(ctx, prompt)
+	} else {
+		// Emit status: pipeline analysis
+		if o.StatusCallback != nil {
+			o.StatusCallback("pipeline", "Analyzing input...", 0, "")
 		}
 	}
 
+	// ── IngressFilter: prune low-information content from the prompt ─────────
+	// The pruned prompt goes to the LLM; the guard decides which version ARC sees.
+	arcPrompt := prompt // ARC sees this; may be raw if guard raises evasion risk
+	if o.IngressFilter != nil {
+		pruned, stats := o.IngressFilter.Prune(prompt)
+		if stats.SavedRunes > 0 {
+			o.Logger.Debug("IngressFilter savings",
+				"saved_runes", stats.SavedRunes,
+				"saved_pct", fmt.Sprintf("%.1f%%", stats.SavedPct),
+			)
+		}
+		// IngressGuard: if pruning strips too much semantic signal, use raw
+		// prompt for ARC routing to prevent classifier evasion.
+		if o.IngressGuard != nil {
+			gr := o.IngressGuard.Validate(prompt, pruned)
+			if gr.EvasionRisk {
+				o.Logger.Warn("IngressGuard: evasion risk detected — routing ARC with raw prompt",
+					"similarity", fmt.Sprintf("%.2f", gr.Similarity))
+				// ARC gets raw; LLM still gets pruned (saves tokens, keeps routing safe).
+			} else {
+				arcPrompt = pruned
+			}
+		} else {
+			arcPrompt = pruned
+		}
+		// The user message added to history uses the pruned version.
+		prompt = pruned
+	}
+
+	// ── ARC: classify prompt and compute platform-aware resource budget ──────
+	maxTurns := 15 // Increased from 10 to allow more complex research
+	var arcRoute adaptive.RouteDecision
+	if o.Intelligence != nil {
+		arcRoute = o.Intelligence.Route(arcPrompt)
+		o.Logger.Info("ARC routing decision (streaming)",
+			"workflow", arcRoute.Classification.String(),
+			"max_tool_calls", arcRoute.Budget.MaxToolCalls,
+			"temperature", arcRoute.Budget.Temperature,
+		)
+		if arcRoute.Budget.MaxToolCalls > 0 {
+			maxTurns = arcRoute.Budget.MaxToolCalls
+		}
+	}
+
+	// ── SRE: Reset phase engine + anchor state for this task ────────────────
+	// Run ensemble for Analytical/Agentic workflows.
+	if o.SRE != nil {
+		o.SRE.Reset()
+		// Multi-trajectory ensemble (Analytical/Agentic only)
+		o.runEnsembleIfNeeded(ctx, arcRoute)
+	}
+
 	// Multi-turn tool execution loop
-	const maxSENSEInjections = 2 // cap runaway SENSE chains per query
+	const maxSENSEInjections = 3 // Increased from 2
 	senseInjections := 0
+	turnsWithOnlyTools := 0
 	var fullResponse strings.Builder
+	taskCompleted := false // set to true on any normal break; false = hit maxTurns
 
 	for turn := 0; turn < maxTurns; turn++ {
 		o.Logger.Info("Executing AI turn", "turn", turn+1, "max_turns", maxTurns)
 
 		if o.EnableWatchdog {
 			o.printWatchdogState(fmt.Sprintf("Turn %d", turn+1), fmt.Sprintf("History messages: %d", o.ConversationHistory.Count()))
+		}
+
+		// Inject progress enforcement if the AI has been silent for too long
+		if turnsWithOnlyTools >= 3 {
+			o.Logger.Warn("Silent tool loop detected — injecting progress request")
+			o.ConversationHistory.AddSystemMessage("SYSTEM: You have been executing tools for 3 turns without providing any text output to the user. Please provide a brief status update on your progress before continuing with more tools.")
+			turnsWithOnlyTools = 0 // reset after injection
 		}
 
 		// Create a writer that calls the stream callback
@@ -295,6 +487,7 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 			interventionCallback: interventionCallback,
 			relay:                o.Relay,
 			thinkingCallback:     o.ThinkingCallback,
+			statusUpdateFreq:     10, // emit status every 10 tokens
 		}
 
 		// Apply thinking budget to provider if supported.
@@ -304,6 +497,22 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 				clone := *ap
 				clone.ThinkingBudget = o.ThinkingBudget
 				primaryForTurn = &clone
+			}
+		}
+
+		// ── SRE: inject CoS phase role + working memory block ────────────────
+		if o.SRE != nil {
+			o.prepareSREContext(turn)
+
+			// Emit status update for current SRE phase
+			phase := o.SRE.CurrentPhase()
+			phaseStr := phase.String() // "HYPOTHESIS" / "PRUNE" / "CONVERGE"
+			label := fmt.Sprintf("[SRE: %s]", phaseStr)
+			description := o.SRE.CurrentDescriptiveLabel()
+
+			if o.StatusCallback != nil && description != "" {
+				// Emit status with SRE phase label and descriptive text
+				o.StatusCallback("sre_"+strings.ToLower(phaseStr), label+" "+description, 0, "")
 			}
 		}
 
@@ -354,6 +563,11 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		// Without this, an interrupted response is silently dropped and the model
 		// starts the next turn with no recollection of what it was doing.
 		response := fullResponse.String()
+		// Apply output filter: strip raw tool outputs on normal queries
+		if shouldSuppressToolOutput(userMessage) {
+			response = stripToolOutputPatterns(response)
+		}
+
 		if response != "" {
 			marker := ""
 			if streamErr != nil {
@@ -367,6 +581,11 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 				}
 			}
 			o.ConversationHistory.AddAssistantMessage(response + marker)
+			o.ConversationHistory.RepairOrphanedPairs() // fix dangling tool calls after interruption
+			// SPARK: observe completed response for MotivationalCore EWMA.
+			if o.SPARK != nil && response != "" {
+				o.SPARK.ObserveResponse(response)
+			}
 
 			// Persist assistant turn (fire-and-forget).
 			if o.PersistStore != nil {
@@ -394,6 +613,7 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 			if isProviderOutage(streamErr) && turn == 0 && currentProviderID != "" {
 				retryable, msg := o.RunProviderCascade(ctx, currentProviderID)
 				if streamCallback != nil {
+					streamCallback("[__GORKBOT_STREAM_RETRY__]")
 					streamCallback(fmt.Sprintf("\n\n[%s]\n\n", msg))
 				}
 				if retryable {
@@ -412,6 +632,12 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		// Parse tool requests
 		toolRequests := tools.ParseToolRequests(response)
 
+		// ── SRE: correction check (Phase 2+ only) ─────────────────────────────
+		// Detect response deviations from working memory anchors and backtrack if needed.
+		if o.SRE != nil && o.SRE.CurrentPhase() > sre.SREPhaseHypothesis {
+			o.appendSRECorrectionCheck(response)
+		}
+
 		if len(toolRequests) == 0 {
 			// Safety net: if the response contained [TOOL_CALL] blocks but the
 			// parser extracted nothing from them (malformed names etc.), inject a
@@ -424,7 +650,15 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 					"```json\n{\"tool\": \"tool_name\", \"parameters\": {\"key\": \"value\"}}\n```\n" +
 					"Please retry with the correct format."
 				o.ConversationHistory.AddUserMessage(formatMsg)
+				if o.TieredCompactor != nil {
+					_ = o.TieredCompactor.Check(ctx, o.ConversationHistory)
+				}
 				o.ConversationHistory.TruncateToTokenLimit(maxContextTokens)
+				o.ConversationHistory.RepairOrphanedPairs()
+				if streamCallback != nil {
+					streamCallback("[__GORKBOT_STREAM_RETRY__]")
+					streamCallback("\n\n_[System: Detected unsupported tool call format, retrying...]_ \n\n")
+				}
 				fullResponse.Reset()
 				continue
 			}
@@ -457,9 +691,13 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 				senseInjections++
 				if senseInjections > maxSENSEInjections {
 					o.Logger.Info("SENSE injection cap reached, stopping early", "cap", maxSENSEInjections)
+					taskCompleted = true
 					break
 				}
 				o.Logger.Info("SENSE intervention triggered, continuing streaming execution loop", "injection", senseInjections)
+				if streamCallback != nil {
+					streamCallback("[__GORKBOT_STREAM_RETRY__]")
+				}
 				fullResponse.Reset()
 				continue
 			}
@@ -470,10 +708,18 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 				go o.VectorStore.IndexTurn(context.Background(), o.SessionID, "assistant", response)
 			}
 
+			taskCompleted = true
 			break
 		}
 
 		o.Logger.Info("Found tool requests", "count", len(toolRequests), "turn", turn+1)
+
+		// Update silent turn counter
+		if len(strings.TrimSpace(tools.StripToolCalls(response))) < 5 {
+			turnsWithOnlyTools++
+		} else {
+			turnsWithOnlyTools = 0
+		}
 
 		// Execute tools — in parallel when more than one is requested.
 		// Results are collected into a slice pre-sized to match request order
@@ -490,7 +736,11 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 			if o.Relay != nil {
 				o.Relay.SendToolStart(req.ToolName)
 			}
+			xskillStart := time.Now()
 			result, err := o.ExecuteTool(ctx, req)
+			o.appendXSkillStep(req, result, err, xskillStart)
+			o.appendSPARKToolEvent(req, result, err, xskillStart)
+			o.anchorToolResult(req.ToolName, result.Output, result.Success)
 			if err != nil {
 				o.Logger.Error("Tool execution error", "tool", req.ToolName, "error", err)
 				result = &tools.ToolResult{Success: false, Error: err.Error()}
@@ -528,7 +778,11 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 					if o.Relay != nil {
 						o.Relay.SendToolStart(req.ToolName)
 					}
+					xskillStart := time.Now()
 					result, err := o.ExecuteTool(ctx, req)
+					o.appendXSkillStep(req, result, err, xskillStart)
+					o.appendSPARKToolEvent(req, result, err, xskillStart)
+					o.anchorToolResult(req.ToolName, result.Output, result.Success)
 					if err != nil {
 						o.Logger.Error("Tool execution error", "tool", req.ToolName, "error", err)
 						result = &tools.ToolResult{Success: false, Error: err.Error()}
@@ -570,8 +824,12 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		// Add tool results as user message
 		o.ConversationHistory.AddUserMessage(toolResultsMessage)
 
-		// Ensure we don't exceed context limits after adding tool results
+		// Enforce context limits after adding tool results: compress first, then truncate.
+		if o.TieredCompactor != nil {
+			_ = o.TieredCompactor.Check(ctx, o.ConversationHistory)
+		}
 		o.ConversationHistory.TruncateToTokenLimit(maxContextTokens)
+		o.ConversationHistory.RepairOrphanedPairs()
 
 		// ── Ralph Loop: check if we should trigger a retry ─────────────────
 		// After each tool-execution turn, evaluate whether failure thresholds
@@ -611,10 +869,15 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 			// user message so the AI gets fresh guidance on the next turn.
 			fullResponse.Reset()
 			o.ConversationHistory.AddUserMessage(retryPrompt)
+			if o.TieredCompactor != nil {
+				_ = o.TieredCompactor.Check(ctx, o.ConversationHistory)
+			}
 			o.ConversationHistory.TruncateToTokenLimit(maxContextTokens)
+			o.ConversationHistory.RepairOrphanedPairs()
 
 			// Stream a visible indicator to the user.
 			if streamCallback != nil {
+				streamCallback("[__GORKBOT_STREAM_RETRY__]")
 				streamCallback(fmt.Sprintf("\n\n_[Ralph Loop: retrying with fresh strategy (attempt %d/%d)]_\n\n",
 					o.RalphLoop.IterationsUsed(), o.RalphLoop.MaxIterations()))
 			}
@@ -625,10 +888,34 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		fullResponse.Reset()
 	}
 
+	// ── Final Summary Enforcement ───────────────────────────────────────────
+	// Only runs when we exhausted maxTurns without a successful task break.
+	// Normal task completion sets taskCompleted=true and skips this block.
+	if !taskCompleted {
+		o.Logger.Warn("Max turns reached without task completion — forcing final summary")
+		summaryPrompt := "SYSTEM: You have reached the maximum turn limit for this task. Please provide a concise final summary of everything you have accomplished so far and the current status of the user's request. Do not attempt to use any more tools."
+		o.ConversationHistory.AddUserMessage(summaryPrompt)
+
+		// Create a non-looping final generation attempt
+		finalResponse, finalErr := o.Primary.GenerateWithHistory(ctx, o.ConversationHistory)
+		if finalErr == nil && finalResponse != "" {
+			if streamCallback != nil {
+				streamCallback("\n\n**[Max Turns Reached — Final Summary]**\n\n")
+				streamCallback(finalResponse)
+			}
+			o.ConversationHistory.AddAssistantMessage(finalResponse)
+		}
+	}
+
 	// Commit Ralph Loop state at end of execution.
 	if o.RalphLoop != nil {
 		o.RalphLoop.Commit()
 	}
+
+	// ── XSKILL Phase 1: learn from this task's trajectory asynchronously ────
+	o.launchXSkillAccumulation()
+	// ── SPARK Phase 1: trigger improvement cycle ──────────────────────────
+	o.launchSPARKIntrospection()
 
 	// Trigger ToolForge checks asynchronously
 	if o.Crystallizer != nil {
@@ -636,6 +923,16 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 	}
 
 	return nil
+}
+
+// safeContextLimit returns 90% of the orchestrator's context window so that
+// TruncateToTokenLimit has a small safety margin before hitting the hard limit.
+// Falls back to 115200 (90% of 128k) when ContextMgr is not wired.
+func (o *Orchestrator) safeContextLimit() int {
+	if o.ContextMgr != nil && o.ContextMgr.MaxTokens() > 0 {
+		return (o.ContextMgr.MaxTokens() * 9) / 10
+	}
+	return 115200
 }
 
 // containsMalformedToolCall returns true when a response contains tool-call
@@ -662,6 +959,13 @@ type streamCallbackWriter struct {
 	thinkingCallback StreamCallback  // nil = no thinking panel wired
 	inThinking       bool            // true while between \x02 and \x03
 	thinkingBuf      strings.Builder // accumulates partial thinking text within one Write call
+
+	// token counting and status updates for the TUI status line
+	tokenCount        int       // tracks tokens received from LLM
+	firstTokenTime    time.Time // tracks when first token arrived
+	modelID           string    // model being used (e.g. "grok-4-fast-")
+	statusUpdateFreq  int       // throttle status updates: emit every N tokens (default 10)
+	lastStatusTokens  int       // tokens at last status update
 }
 
 func (w *streamCallbackWriter) Write(p []byte) (n int, err error) {
@@ -777,6 +1081,32 @@ func (w *streamCallbackWriter) Write(p []byte) (n int, err error) {
 	// Call the stream callback with the token
 	if w.callback != nil {
 		w.callback(s)
+	}
+
+	// ── Token counting and status updates ──────────────────────────────────────
+	// Track token count and emit status updates to the TUI's authoritative status line.
+	// On first token, emit "Thinking..." and set the modelID.
+	// On subsequent tokens, emit status updates every N tokens with token count.
+	w.tokenCount++
+
+	if w.tokenCount == 1 && w.firstTokenTime.IsZero() {
+		// First token received — emit "Thinking..." status
+		w.firstTokenTime = time.Now()
+
+		// Get model ID from orchestrator if available
+		if w.orchestrator != nil && w.orchestrator.Primary != nil {
+			w.modelID = w.orchestrator.Primary.GetMetadata().ID
+		}
+
+		if w.orchestrator != nil && w.orchestrator.StatusCallback != nil {
+			w.orchestrator.StatusCallback("thinking", "Thinking...", 0, "")
+		}
+	} else if w.tokenCount > w.lastStatusTokens+w.statusUpdateFreq {
+		// Emit status update with token count every N tokens
+		if w.orchestrator != nil && w.orchestrator.StatusCallback != nil {
+			w.orchestrator.StatusCallback("thinking", "Thinking...", w.tokenCount, w.modelID)
+			w.lastStatusTokens = w.tokenCount
+		}
 	}
 
 	// Broadcast to remote observers if session sharing is active.

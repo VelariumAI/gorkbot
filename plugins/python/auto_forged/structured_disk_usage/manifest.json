@@ -1,0 +1,13 @@
+{
+  "name": "structured_disk_usage",
+  "description": "Generalized reusable tool for disk diagnostics and usage analysis. Accepts JSON params for path, depth, action (df/scan), runs safe commands like df -h or du -sh, and returns structured output.",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

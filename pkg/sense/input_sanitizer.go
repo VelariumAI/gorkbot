@@ -69,6 +69,11 @@ type InputSanitizer struct {
 	// cwd is the resolved, symlink-free working directory used as the sandbox
 	// anchor for all path parameters.  Immutable after construction.
 	cwd string
+	// allowedPrefixes are additional directory prefixes permitted beyond CWD.
+	// These cover standard system temp directories, the user home directory,
+	// and Android/Termux-specific storage paths that AI tools legitimately
+	// need to write to (screenshots, downloads, temp files).
+	allowedPrefixes []string
 	// counters uses atomic operations so the hot path (SanitizeParams) never
 	// acquires a mutex.
 	counters sanitizerCounters
@@ -109,7 +114,49 @@ func NewInputSanitizer() (*InputSanitizer, error) {
 	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
 		cwd = resolved
 	}
-	return &InputSanitizer{cwd: cwd}, nil
+
+	// Build the allowlist of standard system paths that AI tools legitimately
+	// need to access outside the CWD.  All entries are resolved through
+	// EvalSymlinks so symlink-based escapes are still blocked.
+	allowed := []string{
+		"/tmp",          // POSIX standard temp dir
+		"/var/tmp",      // persistent temp dir
+		"/sdcard",       // Android external storage (symlink to /storage/emulated/0)
+		"/storage",      // Android storage root (all volumes)
+		"/data/local/tmp", // Android ADB temp dir
+	}
+
+	// Add the user home directory — the most common legitimate write target.
+	if home, err := os.UserHomeDir(); err == nil {
+		// Resolve symlinks in home dir too.
+		if resolved, err := filepath.EvalSymlinks(home); err == nil {
+			allowed = append(allowed, resolved)
+		} else {
+			allowed = append(allowed, home)
+		}
+	}
+
+	// Resolve each allowlist entry through EvalSymlinks where possible so that
+	// path-prefix matching works on the canonical forms.
+	resolved := make([]string, 0, len(allowed))
+	for _, p := range allowed {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			resolved = append(resolved, r)
+		} else {
+			resolved = append(resolved, filepath.Clean(p))
+		}
+	}
+
+	// Also include $TMPDIR if set (e.g. on macOS or some Termux builds).
+	if tmpdir := os.Getenv("TMPDIR"); tmpdir != "" {
+		if r, err := filepath.EvalSymlinks(tmpdir); err == nil {
+			resolved = append(resolved, r)
+		} else {
+			resolved = append(resolved, filepath.Clean(tmpdir))
+		}
+	}
+
+	return &InputSanitizer{cwd: cwd, allowedPrefixes: resolved}, nil
 }
 
 // SanitizeParams validates every value in params before tool execution.
@@ -266,6 +313,23 @@ func (s *InputSanitizer) sandboxPath(field, path string) error {
 
 	// Allow the CWD directory itself exactly, or anything inside it.
 	inSandbox := checkResolved == cwdAnchor || strings.HasPrefix(checkResolved, cwdAnchor)
+
+	// Also allow any path within the explicitly permitted prefixes (home dir,
+	// /tmp, /sdcard, /storage, etc.).  Each prefix is checked with a trailing
+	// separator to prevent prefix-confusion attacks (e.g. /tmp2 vs /tmp).
+	if !inSandbox {
+		for _, prefix := range s.allowedPrefixes {
+			pfxAnchor := prefix
+			if !strings.HasSuffix(pfxAnchor, string(filepath.Separator)) {
+				pfxAnchor += string(filepath.Separator)
+			}
+			if checkResolved == pfxAnchor || strings.HasPrefix(checkResolved, pfxAnchor) {
+				inSandbox = true
+				break
+			}
+		}
+	}
+
 	if !inSandbox {
 		s.counters.pathEscapeHits.Add(1)
 		return SanitizerViolation{

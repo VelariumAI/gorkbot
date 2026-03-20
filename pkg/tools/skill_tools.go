@@ -37,13 +37,50 @@ func NewSkillTools(loader *skills.Loader) *SkillTools {
 	return &SkillTools{loader: loader}
 }
 
-// Register registers all four skill tools into reg.
+// Register registers all five skill tools into reg.
 func (st *SkillTools) Register(reg *Registry) {
+	_ = reg.Register(st.newSkillListTool())
 	_ = reg.Register(st.newSkillCreateTool())
 	_ = reg.Register(st.newSkillPatchTool())
 	_ = reg.Register(st.newSkillDeleteTool())
 	_ = reg.Register(st.newSkillViewTool())
 }
+
+// ── skills_list ───────────────────────────────────────────────────────────────
+
+type skillListTool struct {
+	BaseTool
+	loader *skills.Loader
+}
+
+func (st *SkillTools) newSkillListTool() *skillListTool {
+	return &skillListTool{
+		BaseTool: NewBaseTool(
+			"skills_list",
+			"List all installed skill definitions (built-in and user-defined). "+
+				"Shows name, aliases, description, model override, and source file. "+
+				"Call this before starting any complex task to find applicable skills.",
+			CategoryMeta,
+			false,
+			PermissionAlways,
+		),
+		loader: st.loader,
+	}
+}
+
+func (t *skillListTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{}}`)
+}
+
+func (t *skillListTool) Execute(_ context.Context, _ map[string]interface{}) (*ToolResult, error) {
+	return &ToolResult{
+		Success:      true,
+		Output:       t.loader.Format(),
+		OutputFormat: FormatText,
+	}, nil
+}
+
+func (t *skillListTool) OutputFormat() OutputFormat { return FormatText }
 
 // ── skill_create ──────────────────────────────────────────────────────────────
 

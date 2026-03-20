@@ -1,0 +1,13 @@
+{
+  "name": "no_op_plugin",
+  "description": "Performs no operation because no bash commands were provided to analyze or generalize",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

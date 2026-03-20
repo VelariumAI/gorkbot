@@ -197,6 +197,34 @@ func (r *Registry) SetInputSanitizer(s inputSanitizerIface) {
 	r.inputSanitizer = s
 }
 
+// HasSanitizer returns true when an input sanitizer is currently active.
+func (r *Registry) HasSanitizer() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.inputSanitizer != nil
+}
+
+// GetSanitizer returns the current input sanitizer (may be nil).
+func (r *Registry) GetSanitizer() inputSanitizerIface {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.inputSanitizer
+}
+
+// BypassSanitizer removes the active sanitizer (sandbox off).
+func (r *Registry) BypassSanitizer() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.inputSanitizer = nil
+}
+
+// RestoreSanitizer re-installs a previously removed sanitizer (sandbox on).
+func (r *Registry) RestoreSanitizer(s inputSanitizerIface) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.inputSanitizer = s
+}
+
 // SetEnvSnapshot wires the environment snapshot reader into the registry for
 // capability pre-flight checks.  Tools that implement CapabilityRequirer will
 // have their binary/package requirements validated before execution.
@@ -379,6 +407,12 @@ func (r *Registry) SetColonyRunner(fn func(ctx context.Context, sys, prompt stri
 }
 
 // Register adds a tool to the registry
+// registryAware is implemented by tools that need a direct reference to the
+// Registry at registration time (e.g. to fall back when context doesn't carry it).
+type registryAware interface {
+	setRegistry(reg *Registry)
+}
+
 func (r *Registry) Register(tool Tool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -388,6 +422,11 @@ func (r *Registry) Register(tool Tool) error {
 	}
 
 	r.tools[tool.Name()] = tool
+	// Give registry-aware tools a direct back-reference so they work even when
+	// the context does not carry the registry (e.g. subagent/pipeline calls).
+	if ra, ok := tool.(registryAware); ok {
+		ra.setRegistry(r)
+	}
 	return nil
 }
 

@@ -25,7 +25,6 @@ package tui
 
 import (
 	"fmt"
-	"math/rand"
 	"sort"
 	"strings"
 	"time"
@@ -167,18 +166,16 @@ func (m *Model) renderAnalyticsView() string {
 	sl := NewSparkline(halfWidth-4, 3)
 	if len(m.analytics.TokenRateHistory) > 0 {
 		sl.SetData(m.analytics.TokenRateHistory)
-	} else {
-		// Demo data while empty.
-		for i := 0; i < 20; i++ {
-			sl.Add(rand.Float64() * 50)
-		}
 	}
 	lastRate := sl.Last()
+	rateStr := fmt.Sprintf("idle  |  %d total tokens", m.analytics.TotalTokens)
+	if lastRate > 0 {
+		rateStr = fmt.Sprintf("%.1f tok/s  |  %d total tokens", lastRate, m.analytics.TotalTokens)
+	}
 	sparkWidget := lipgloss.JoinVertical(lipgloss.Left,
 		sectionTitle.Render("Token Generation Rate"),
 		RenderSparklineWithAxes(sl, GrokBlue),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).
-			Render(fmt.Sprintf("%.1f tok/s now  |  %d total tokens", lastRate, m.analytics.TotalTokens)),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Render(rateStr),
 	)
 	sparkBox := borderStyle.Width(halfWidth).Render(sparkWidget)
 
@@ -197,7 +194,12 @@ func (m *Model) renderAnalyticsView() string {
 	for k, v := range m.analytics.ToolCounts {
 		sorted = append(sorted, kv{k, v})
 	}
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].v > sorted[j].v })
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].v != sorted[j].v {
+			return sorted[i].v > sorted[j].v
+		}
+		return sorted[i].k < sorted[j].k // alphabetical tiebreak = stable color assignment
+	})
 
 	maxTools := 8
 	for i, item := range sorted {

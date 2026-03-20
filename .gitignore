@@ -106,32 +106,3 @@ test_mcp_json.go
 for_claude.txt
 for_claude.md
 glm-work_handoff.txt
-
-# Personal / dev-only files — never commit
-sms_summary.txt
-android_trends_2023_summary.txt
-*-for-MM.txt
-bash_demo/
-grokster-tui
-]*
-
-# Root-level dev scratch files
-/main.go
-/test_cast.go
-/test_main.go
-/test_tiktoken.go
-/test_tui_context.go
-/test_wrapped.go
-
-# Internal debug commands — not for public
-/cmd/debug-mcp/
-/cmd/test-mcp-json/
-
-# Local dev components (node_modules etc.)
-/components/
-
-# IDE / Claude local settings
-.claude/
-
-# Large dev research dirs
-OnnxStream_investigation/

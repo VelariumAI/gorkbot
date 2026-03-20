@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"time"
 )
 
 // CronManagerTool manages cron jobs.
@@ -117,20 +118,23 @@ func (t *BackupRestoreTool) Execute(ctx context.Context, args map[string]interfa
 	return &ToolResult{Success: true, Output: "Backup complete. " + string(out)}, nil
 }
 
-// SystemMonitorTool (htop-like query).
+// SystemMonitorTool - Get system resource usage with SEVERE cooldown enforcement.
+// CRITICAL: User reported "spamming notifications" — 30-MINUTE MINIMUM between executions.
 type SystemMonitorTool struct {
 	BaseTool
+	lastExecution time.Time
 }
 
 func NewSystemMonitorTool() *SystemMonitorTool {
 	return &SystemMonitorTool{
 		BaseTool: BaseTool{
 			name:               "system_monitor",
-			description:        "Get system resource usage snapshot (CPU, Mem, Disk).",
+			description:        "Get system resource usage snapshot (CPU, Mem, Disk). SEVERE COOLDOWN: 30 minutes minimum between executions to prevent notification spam.",
 			category:           CategorySystem,
 			requiresPermission: true,
 			defaultPermission:  PermissionSession,
 		},
+		lastExecution: time.Now().Add(-30 * time.Minute), // Allow first execution
 	}
 }
 
@@ -144,6 +148,25 @@ func (t *SystemMonitorTool) Parameters() json.RawMessage {
 }
 
 func (t *SystemMonitorTool) Execute(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	// SEVERE COOLDOWN: 30 minutes (1800 seconds) minimum between executions
+	const cooldownSeconds = 30 * 60 // 30 minutes
+
+	now := time.Now()
+	elapsed := now.Sub(t.lastExecution)
+
+	// Enforce cooldown
+	if elapsed < time.Duration(cooldownSeconds)*time.Second {
+		nextAllowed := t.lastExecution.Add(time.Duration(cooldownSeconds) * time.Second)
+		waitSecs := nextAllowed.Sub(now).Seconds()
+		return &ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("COOLDOWN ACTIVE: system_monitor was last executed %d seconds ago. Next execution allowed in %.0f seconds (30-minute minimum enforced to prevent notification spam).", int(elapsed.Seconds()), waitSecs),
+		}, nil
+	}
+
+	// Update last execution time
+	t.lastExecution = now
+
 	cmd := exec.CommandContext(ctx, "bash", "-c", "echo '--- MEMORY ---'; free -h; echo '\n--- DISK ---'; df -h; echo '\n--- TOP ---'; top -b -n 1 | head -20")
 	out, err := cmd.CombinedOutput()
 	if err != nil {

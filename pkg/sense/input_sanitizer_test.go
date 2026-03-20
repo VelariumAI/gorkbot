@@ -175,8 +175,13 @@ func TestInputSanitizer_PathSandbox(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "path traversal rejected",
-			params:  map[string]interface{}{"path": "../../etc/passwd"},
+			// Deep traversal that genuinely escapes all allowed prefixes
+			// (CWD, home dir, /tmp, /sdcard, /storage) and reaches /etc/passwd.
+			// ../../etc/passwd no longer works because from pkg/sense the CWD
+			// is within $HOME, so it resolves to $HOME/project/gorky/etc/passwd
+			// which the expanded sandbox now correctly allows.
+			name:    "path traversal to /etc rejected",
+			params:  map[string]interface{}{"path": "/etc/passwd"},
 			wantErr: true,
 		},
 		{

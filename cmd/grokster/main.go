@@ -20,6 +20,8 @@ import (
 	"github.com/velariumai/gorkbot/internal/tui"
 	"github.com/velariumai/gorkbot/pkg/ai"
 	"github.com/velariumai/gorkbot/pkg/commands"
+	"github.com/velariumai/gorkbot/pkg/config"
+	"github.com/velariumai/gorkbot/pkg/sre"
 	"github.com/velariumai/gorkbot/pkg/memory"
 	"github.com/velariumai/gorkbot/pkg/process"
 	"github.com/velariumai/gorkbot/pkg/providers"
@@ -126,6 +128,9 @@ func main() {
 	timeoutFlag := flag.Duration("timeout", 60*time.Second, "Timeout for the operation")
 	verboseThoughts := flag.Bool("verbose-thoughts", false, "Enable verbose output of consultant thinking")
 	watchdogFlag := flag.Bool("watchdog", false, "Enable orchestrator watchdog for state debugging")
+	enableSRE := flag.Bool("sre", false, "Enable Step-wise Reasoning Engine")
+	enableEnsemble := flag.Bool("ensemble", false, "Enable multi-trajectory ensemble")
+	disableSRE := flag.Bool("no-sre", false, "Disable Step-wise Reasoning Engine")
 	flag.Parse()
 
 	// 4. Provider Setup & Dynamic Routing
@@ -272,6 +277,34 @@ func main() {
 		logger.Info("SENSE AgeMem initialised", "data_dir", env.ConfigDir)
 	}
 
+	// 6.2 AppState — load saved preferences and apply CLI overrides
+	appState := config.NewAppStateManager(env.ConfigDir)
+	if *enableSRE {
+		appState.SetSREEnabled(true)
+	}
+	if *disableSRE {
+		appState.SetSREEnabled(false)
+	}
+	if *enableEnsemble {
+		appState.SetEnsembleEnabled(true)
+	}
+
+	// 6.3 Initialize enhancements
+	orch.InitEnhancements(env.ConfigDir, ".")
+
+	// 6.4 Initialize SRE
+	appStateSnapshot := appState.Get()
+	sreEnabled := appStateSnapshot.SREEnabled == nil || *appStateSnapshot.SREEnabled
+	ensEnabled := appStateSnapshot.EnsembleEnabled != nil && *appStateSnapshot.EnsembleEnabled
+	orch.InitSRE(sre.SREConfig{
+		EnsembleEnabled:  ensEnabled,
+		CoSEnabled:       sreEnabled,
+		GroundingEnabled: sreEnabled,
+		HypothesisTurns:  3,
+		PruneTurns:       6,
+		CorrectionThresh: 0.30,
+	})
+
 	// Sync memory session history into orchestrator if available.
 	if memMgr != nil {
 		logger.Info("Memory manager active", "sessions_dir", env.ConfigDir)
@@ -287,7 +320,7 @@ func main() {
 		runTask(ctx, orch, *promptFlag)
 	} else {
 		// TUI Mode (replaces old REPL)
-		runTUI(orch, reg, primaryModelName, consultantModelName, sysConfig, env)
+		runTUI(orch, reg, primaryModelName, consultantModelName, sysConfig, env, appState)
 	}
 
 	// ── Post-session: handle any tools that need a Go rebuild ────────────────
@@ -357,7 +390,7 @@ func runTask(ctx context.Context, orch *engine.Orchestrator, prompt string) {
 	fmt.Println(resp)
 }
 
-func runTUI(orch *engine.Orchestrator, reg *registry.ModelRegistry, modelName, consultantName string, sysConfig *router.SystemConfiguration, env *platform.EnvConfig) {
+func runTUI(orch *engine.Orchestrator, reg *registry.ModelRegistry, modelName, consultantName string, sysConfig *router.SystemConfiguration, env *platform.EnvConfig, appState *config.AppStateManager) {
 	// Create TUI model
 	pm := process.NewManager() // Need process manager
 	cmdReg := commands.NewRegistry()
@@ -365,6 +398,27 @@ func runTUI(orch *engine.Orchestrator, reg *registry.ModelRegistry, modelName, c
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating TUI: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Wire up SRE and Ensemble settings callbacks if Orch adapter is available
+	if cmdReg.Orch == nil {
+		cmdReg.Orch = &commands.OrchestratorAdapter{}
+	}
+	if appState != nil {
+		cmdReg.Orch.GetSREEnabled = func() bool {
+			st := appState.Get()
+			return st.SREEnabled == nil || *st.SREEnabled
+		}
+		cmdReg.Orch.SetSREEnabled = func(enabled bool) error {
+			return appState.SetSREEnabled(enabled)
+		}
+		cmdReg.Orch.GetEnsembleEnabled = func() bool {
+			st := appState.Get()
+			return st.EnsembleEnabled != nil && *st.EnsembleEnabled
+		}
+		cmdReg.Orch.SetEnsembleEnabled = func(enabled bool) error {
+			return appState.SetEnsembleEnabled(enabled)
+		}
 	}
 
 	// Wire up live model registry so /model can display and switch real models.

@@ -13,7 +13,7 @@ import (
 	"github.com/velariumai/gorkbot/pkg/providers"
 )
 
-// providerPriority is the canonical failover order for the cascade.
+// providerPriority is the default failover order used when CascadeOrder is not set.
 var providerPriority = []string{
 	providers.ProviderXAI,
 	providers.ProviderGoogle,
@@ -21,6 +21,17 @@ var providerPriority = []string{
 	providers.ProviderMiniMax,
 	providers.ProviderOpenAI,
 	providers.ProviderOpenRouter,
+	providers.ProviderMoonshot,
+}
+
+// effectiveCascade returns the cascade order to use for provider failover.
+// If the orchestrator has a custom CascadeOrder set, it is used; otherwise
+// the hardcoded providerPriority default is returned.
+func (o *Orchestrator) effectiveCascade() []string {
+	if len(o.CascadeOrder) > 0 {
+		return o.CascadeOrder
+	}
+	return providerPriority
 }
 
 // isProviderOutage returns true for errors that warrant trying another provider.
@@ -222,16 +233,17 @@ func (o *Orchestrator) RunProviderCascade(ctx context.Context, failedID string) 
 	}
 
 	// 2. Build probe order: start one position after failedID, wrap around.
+	cascade := o.effectiveCascade()
 	startIdx := 0
-	for i, id := range providerPriority {
+	for i, id := range cascade {
 		if id == failedID {
 			startIdx = i + 1
 			break
 		}
 	}
-	probeOrder := make([]string, 0, len(providerPriority))
-	for i := 0; i < len(providerPriority); i++ {
-		probeOrder = append(probeOrder, providerPriority[(startIdx+i)%len(providerPriority)])
+	probeOrder := make([]string, 0, len(cascade))
+	for i := 0; i < len(cascade); i++ {
+		probeOrder = append(probeOrder, cascade[(startIdx+i)%len(cascade)])
 	}
 
 	// 3. Race all candidate providers in parallel; first ping wins.

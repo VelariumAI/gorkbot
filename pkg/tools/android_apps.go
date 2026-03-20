@@ -131,6 +131,63 @@ func (t *SqliteExplorerTool) Execute(ctx context.Context, args map[string]interf
 	return &ToolResult{Success: true, Output: string(out)}, nil
 }
 
+// SmsSendTool sends SMS messages via Termux:API (simple, user-friendly wrapper).
+type SmsSendTool struct {
+	BaseTool
+}
+
+func NewSmsSendTool() *SmsSendTool {
+	return &SmsSendTool{
+		BaseTool: BaseTool{
+			name:               "sms_send",
+			description:        "Send an SMS message via Termux:API. Requires Termux:API app installed with SMS permission enabled.",
+			category:           CategorySystem,
+			requiresPermission: true,
+			defaultPermission:  PermissionOnce,
+		},
+	}
+}
+
+func (t *SmsSendTool) Parameters() json.RawMessage {
+	schema := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"phone_number": map[string]interface{}{
+				"type":        "string",
+				"description": "Recipient phone number (e.g., '8707164465')",
+			},
+			"message": map[string]interface{}{
+				"type":        "string",
+				"description": "SMS message text (no length limit enforced here; carrier limits apply)",
+			},
+		},
+		"required": []string{"phone_number", "message"},
+	}
+	data, _ := json.Marshal(schema)
+	return data
+}
+
+func (t *SmsSendTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
+	phoneNumber, ok := params["phone_number"].(string)
+	if !ok {
+		return &ToolResult{Success: false, Error: "phone_number required"}, nil
+	}
+
+	message, ok := params["message"].(string)
+	if !ok {
+		return &ToolResult{Success: false, Error: "message required"}, nil
+	}
+
+	// Use termux-sms-send with -n flag
+	cmd := exec.CommandContext(ctx, "termux-sms-send", "-n", phoneNumber, message)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("SMS send failed: %v\nOutput: %s", err, string(out))}, nil
+	}
+
+	return &ToolResult{Success: true, Output: fmt.Sprintf("SMS sent to %s", phoneNumber)}, nil
+}
+
 // TermuxApiBridgeTool exposes common Termux:API functionality.
 type TermuxApiBridgeTool struct {
 	BaseTool
@@ -184,10 +241,34 @@ func (t *TermuxApiBridgeTool) Execute(ctx context.Context, args map[string]inter
 		}
 		cmdArgs = strings.Fields(apiArgs)
 	case "sms-send":
+		// Special handling for SMS to preserve quoted message text
+		// Format: phone_number message
+		// or: -n phone_number message
 		cmdName = "termux-sms-send"
-		// usage: termux-sms-send -n number text
-		// Here we assume simple args handling, might need robust parsing.
-		cmdArgs = strings.Fields(apiArgs)
+
+		// Parse phone number and message carefully
+		parts := strings.SplitN(apiArgs, " ", 2)
+		if len(parts) < 2 {
+			return &ToolResult{Success: false, Error: "SMS requires phone number and message. Format: 'phone_number message' or '-n phone_number message'"}, nil
+		}
+
+		phoneNumber := parts[0]
+		message := parts[1]
+
+		// Handle -n flag if present
+		if phoneNumber == "-n" {
+			// Format: -n phone_number message
+			msgParts := strings.SplitN(message, " ", 2)
+			if len(msgParts) < 2 {
+				return &ToolResult{Success: false, Error: "SMS with -n flag requires: '-n phone_number message'"}, nil
+			}
+			phoneNumber = msgParts[0]
+			message = msgParts[1]
+			cmdArgs = []string{"-n", phoneNumber, message}
+		} else {
+			// Direct format without -n flag
+			cmdArgs = []string{"-n", phoneNumber, message}
+		}
 	case "contact-list":
 		cmdName = "termux-contact-list"
 	case "location":
@@ -211,7 +292,7 @@ func (t *TermuxApiBridgeTool) Execute(ctx context.Context, args map[string]inter
 	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return &ToolResult{Success: false, Error: fmt.Sprintf("Termux API call failed (is package 'termux-api' installed?): %v\nOutput: %s", err, string(out))}, nil
+		return &ToolResult{Success: false, Error: fmt.Sprintf("Termux API call failed: %v\nOutput: %s", err, string(out))}, nil
 	}
 
 	return &ToolResult{Success: true, Output: string(out)}, nil

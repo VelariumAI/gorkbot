@@ -76,7 +76,12 @@ func (m *Model) renderSidePanel() string {
 		for k, v := range m.analytics.ToolCounts {
 			sorted = append(sorted, kv{k, v})
 		}
-		sort.Slice(sorted, func(i, j int) bool { return sorted[i].v > sorted[j].v })
+		sort.Slice(sorted, func(i, j int) bool {
+			if sorted[i].v != sorted[j].v {
+				return sorted[i].v > sorted[j].v
+			}
+			return sorted[i].k < sorted[j].k // alphabetical tiebreak = stable color assignment
+		})
 
 		top := sorted
 		if len(top) > 5 {

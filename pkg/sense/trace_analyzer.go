@@ -52,6 +52,8 @@ const (
 	CatSanitizerReject FailureCategory = "SanitizerReject"
 	// CatProviderError — transient AI provider outage or rate limit.
 	CatProviderError FailureCategory = "ProviderError"
+	// CatPhaseDeviation — SRE reasoning phase deviation recorded by CorrectionEngine.
+	CatPhaseDeviation FailureCategory = "PhaseDeviation"
 )
 
 // FailureEvent is a single classified failure extracted from the trace log.

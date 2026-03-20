@@ -3,6 +3,7 @@ package tui
 import (
 	"github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/velariumai/gorkbot/pkg/theme"
 )
 
 // CustomGlamourStyle returns a custom glamour style with light red code blocks
@@ -46,6 +47,11 @@ func CustomGlamourStyle() ansi.StyleConfig {
 func stringPtr(s string) *string { return &s }
 func boolPtr(b bool) *bool       { return &b }
 func uintPtr(u uint) *uint       { return &u }
+
+// Gorky identity
+const (
+	GorkyGlyph = "𝗚 ▸"
+)
 
 // Color palette
 const (
@@ -154,7 +160,8 @@ type Styles struct {
 	CommandOutput lipgloss.Style
 
 	// Tool execution box
-	ToolBox lipgloss.Style
+	ToolBox       lipgloss.Style
+	ToolBoxActive lipgloss.Style
 
 	// Tabs
 	Tab       lipgloss.Style
@@ -163,78 +170,109 @@ type Styles struct {
 
 	// Notifications
 	Toast lipgloss.Style
+
+	// Gorky identity glyph styling (𝗚 ▸)
+	GorkyGlyphStyle lipgloss.Style
 }
 
-// NewStyles creates a new Styles instance with default dark theme
-func NewStyles() *Styles {
+// NewStyles creates a new Styles instance with the given theme.
+// If theme is nil, uses Dracula as default.
+func NewStyles(t *theme.Theme) *Styles {
 	s := &Styles{}
 
-	// Hook defaults (Dracula-ish)
-	s.Hook.Bullet = lipgloss.NewStyle().Foreground(lipgloss.Color(GrokBlue)).Bold(true)
-	s.Hook.Task = lipgloss.NewStyle().Foreground(lipgloss.Color(DraculaFg)).Bold(true)
-	s.Hook.Meta = lipgloss.NewStyle().Foreground(lipgloss.Color(DraculaComment)).Italic(true)
-	s.Hook.Hook = lipgloss.NewStyle().Foreground(lipgloss.Color(BorderGray))
-	s.Hook.Pulse = lipgloss.NewStyle().Foreground(lipgloss.Color(GrokBlue)).Blink(true)
-	s.Hook.FoldIcon = "▶"
-	s.Hook.Particle = lipgloss.NewStyle().Foreground(lipgloss.Color(DraculaComment))
+	// Use provided theme or fall back to defaults
+	var colors theme.Colors
+	if t != nil {
+		colors = t.Colors
+	} else {
+		// Default Dracula colors if no theme provided
+		colors = theme.Colors{
+			Primary:      GrokBlue,
+			Secondary:    GeminiPurple,
+			Border:       BorderGray,
+			Text:         DraculaFg,
+			TextDim:      DraculaComment,
+			Success:      SuccessGreen,
+			Error:        ErrorRed,
+			Warning:      WarningYellow,
+			CodeBg:       "#1E0A0A",
+			CodeFg:       "#E6E6E6",
+			InlineCodeBg: "#2D1212",
+			InlineCodeFg: "#FF8080",
+			Header1:      DraculaRed,
+			Header2:      DraculaPurple,
+			Link:         DraculaCyan,
+			StatusBg:     DraculaBg,
+			StatusFg:     DraculaFg,
+		}
+	}
 
-	// HITL approval overlay (default: amber border)
+	// Hook styles using theme colors
+	s.Hook.Bullet = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.Primary)).Bold(true)
+	s.Hook.Task = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.Text)).Bold(true)
+	s.Hook.Meta = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.TextDim)).Italic(true)
+	s.Hook.Hook = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.Border))
+	s.Hook.Pulse = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.Primary)).Blink(true)
+	s.Hook.FoldIcon = "▶"
+	s.Hook.Particle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.TextDim))
+
+	// HITL approval overlay - uses theme warning color
 	s.HITL = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#FF8800")).
+		BorderForeground(lipgloss.Color(colors.Warning)).
 		Padding(1, 2)
 
-	// Consultant Box - Purple/Pink gradient border for Gemini advice
+	// Consultant Box - Uses theme secondary color for Gemini advice
 	s.ConsultantBox = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(GeminiPurple)).
+		BorderForeground(lipgloss.Color(colors.Secondary)).
 		Padding(1, 2).
 		MarginTop(1).
 		MarginBottom(1)
 
-	// User message - subtle, left-aligned
+	// User message - uses theme primary color
 	s.UserMessage = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(GrokBlue)).
+		Foreground(lipgloss.Color(colors.Primary)).
 		Bold(true).
 		MarginBottom(1)
 
-	// AI message - standard response
+	// AI message - uses theme text color
 	s.AIMessage = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(TextWhite)).
+		Foreground(lipgloss.Color(colors.Text)).
 		MarginBottom(1)
 
-	// Status bar components
+	// Status bar components - uses theme status colors
 	s.StatusBar = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(TextGray)).
-		Background(lipgloss.Color(BgDarkAlt)).
+		Foreground(lipgloss.Color(colors.StatusFg)).
+		Background(lipgloss.Color(colors.StatusBg)).
 		Padding(0, 1)
 
 	s.StatusBarKey = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(TextGray)).
+		Foreground(lipgloss.Color(colors.TextDim)).
 		Bold(true)
 
 	s.StatusBarValue = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(GrokBlue))
+		Foreground(lipgloss.Color(colors.Primary))
 
-	// Spinner styling
+	// Spinner styling - uses theme primary color
 	s.Spinner = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(GrokBlue))
+		Foreground(lipgloss.Color(colors.Primary))
 
-	// Loading phrase
+	// Loading phrase - uses theme text dim color
 	s.Phrase = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(TextGray)).
+		Foreground(lipgloss.Color(colors.TextDim)).
 		Italic(true).
 		MarginLeft(1)
 
-	// Error message
+	// Error message - uses theme error color
 	s.Error = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(ErrorRed)).
+		Foreground(lipgloss.Color(colors.Error)).
 		Bold(true).
 		Padding(0, 1)
 
-	// Help text
+	// Help text - uses theme text dim color
 	s.Help = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(TextGray)).
+		Foreground(lipgloss.Color(colors.TextDim)).
 		Italic(true).
 		Padding(1, 0)
 
@@ -248,127 +286,64 @@ func NewStyles() *Styles {
 	// Input area - minimal styling
 	s.InputArea = lipgloss.NewStyle()
 
-	// Command output
+	// Command output - uses theme success color
 	s.CommandOutput = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(SuccessGreen)).
+		Foreground(lipgloss.Color(colors.Success)).
 		Padding(0, 1)
 
-	// Tool execution box - Green border for successful tool executions
+	// Tool execution box - Success border for successful tool executions
 	s.ToolBox = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(SuccessGreen)).
+		BorderForeground(lipgloss.Color(colors.Success)).
 		Padding(1, 2).
 		MarginTop(1).
 		MarginBottom(1)
 
+	s.ToolBoxActive = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(colors.Primary)).
+		Padding(1, 2).
+		MarginTop(1).
+		MarginBottom(1).
+		Blink(true)
+
 	// Tabs
 	s.Tab = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(TextGray)).
+		Foreground(lipgloss.Color(colors.TextDim)).
 		Padding(0, 1)
 
 	s.ActiveTab = s.Tab.Copy().
-		Foreground(lipgloss.Color(GrokBlue)).
+		Foreground(lipgloss.Color(colors.Primary)).
 		Bold(true).
 		Border(lipgloss.NormalBorder(), false, false, true, false).
-		BorderForeground(lipgloss.Color(GrokBlue))
+		BorderForeground(lipgloss.Color(colors.Primary))
 
 	s.TabGap = lipgloss.NewStyle().
 		Width(1).
-		Foreground(lipgloss.Color(BorderGray)).
+		Foreground(lipgloss.Color(colors.Border)).
 		SetString("|")
 
-	// Notification Toast
+	// Notification Toast - uses theme primary color
 	s.Toast = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(GrokBlue)).
+		BorderForeground(lipgloss.Color(colors.Primary)).
 		Padding(0, 1).
-		Foreground(lipgloss.Color(TextWhite))
+		Foreground(lipgloss.Color(colors.Text))
+
+	// Gorky glyph - uses theme primary color
+	s.GorkyGlyphStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(colors.Primary)).
+		Bold(true)
 
 	return s
 }
 
-// UpdateForLightTheme updates styles for light theme
-func (s *Styles) UpdateForLightTheme() {
-	s.ConsultantBox = s.ConsultantBox.
-		BorderForeground(lipgloss.Color(GeminiPurple))
-
-	s.UserMessage = s.UserMessage.
-		Foreground(lipgloss.Color("#0066CC"))
-
-	s.AIMessage = s.AIMessage.
-		Foreground(lipgloss.Color("#000000"))
-
-	s.StatusBar = s.StatusBar.
-		Foreground(lipgloss.Color("#555555")).
-		Background(lipgloss.Color("#F0F0F0"))
-
-	s.Spinner = s.Spinner.
-		Foreground(lipgloss.Color("#0066CC"))
-
-	s.Phrase = s.Phrase.
-		Foreground(lipgloss.Color("#666666"))
-
-	s.Error = s.Error.
-		Foreground(lipgloss.Color("#CC0000"))
-
-	s.Viewport = s.Viewport.
-		BorderForeground(lipgloss.Color("#CCCCCC"))
-
-	s.InputArea = s.InputArea.
-		BorderForeground(lipgloss.Color("#CCCCCC"))
-}
-
-// UpdateForDarkTheme updates styles for dark theme
-func (s *Styles) UpdateForDarkTheme() {
-	*s = *NewStyles() // Reset to default dark theme
-}
-
-// UpdateForDraculaTheme updates styles for Dracula theme
-func (s *Styles) UpdateForDraculaTheme() {
-	s.ConsultantBox = s.ConsultantBox.
-		BorderForeground(lipgloss.Color(DraculaPurple))
-
-	s.UserMessage = s.UserMessage.
-		Foreground(lipgloss.Color(DraculaCyan))
-
-	s.AIMessage = s.AIMessage.
-		Foreground(lipgloss.Color(DraculaFg))
-
-	s.StatusBar = s.StatusBar.
-		Foreground(lipgloss.Color(DraculaComment)).
-		Background(lipgloss.Color(DraculaSelection))
-
-	s.Spinner = s.Spinner.
-		Foreground(lipgloss.Color(DraculaPurple))
-
-	s.Phrase = s.Phrase.
-		Foreground(lipgloss.Color(DraculaComment))
-
-	s.Error = s.Error.
-		Foreground(lipgloss.Color(DraculaRed))
-
-	s.Viewport = s.Viewport.
-		BorderForeground(lipgloss.Color(DraculaComment))
-
-	s.InputArea = s.InputArea.
-		BorderForeground(lipgloss.Color(DraculaComment))
-
-	s.CommandOutput = s.CommandOutput.
-		Foreground(lipgloss.Color(DraculaGreen))
-
-	s.ToolBox = s.ToolBox.
-		BorderForeground(lipgloss.Color(DraculaRed)) // Changed from Orange to Red for horror theme
-
-	s.Tab = s.Tab.
-		Foreground(lipgloss.Color(DraculaComment))
-
-	s.ActiveTab = s.ActiveTab.
-		Foreground(lipgloss.Color(DraculaCyan)).
-		BorderForeground(lipgloss.Color(DraculaPink))
-
-	s.Toast = s.Toast.
-		BorderForeground(lipgloss.Color(DraculaPurple)).
-		Foreground(lipgloss.Color(DraculaFg))
+// RemapForTheme updates styles for a new theme.
+// Called when the user switches themes to refresh TUI styles without restarting.
+func (s *Styles) RemapForTheme(t *theme.Theme) {
+	// Simply replace the receiver with fresh styles from new theme
+	newStyles := NewStyles(t)
+	*s = *newStyles
 }
 
 // NewArcaneBloodStyles creates a brand-new Styles instance with the full
@@ -456,6 +431,14 @@ func NewArcaneBloodStyles() *Styles {
 		MarginTop(1).
 		MarginBottom(1)
 
+	s.ToolBoxActive = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(ArcaneEmber)).
+		Padding(1, 2).
+		MarginTop(1).
+		MarginBottom(1).
+		Blink(true)
+
 	s.Tab = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(ArcaneSubtext)).
 		Padding(0, 1)
@@ -476,6 +459,11 @@ func NewArcaneBloodStyles() *Styles {
 		BorderForeground(lipgloss.Color(ArcanePrimary)).
 		Padding(0, 1).
 		Foreground(lipgloss.Color(ArcaneText))
+
+	// Gorky glyph - Arcane Blood theme uses gold
+	s.GorkyGlyphStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ArcaneGold)).
+		Bold(true)
 
 	return s
 }

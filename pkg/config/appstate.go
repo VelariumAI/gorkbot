@@ -21,6 +21,23 @@ type AppState struct {
 
 	// Providers disabled by the user (persist across sessions).
 	DisabledProviders []string `json:"disabled_providers,omitempty"`
+
+	// CascadeOrder controls the provider failover sequence.
+	// nil or empty means use the hardcoded default order.
+	CascadeOrder []string `json:"cascade_order,omitempty"`
+
+	// CompressionProvider pins a specific provider ID for compression.
+	// "" means use the primary provider (default, recommended).
+	CompressionProvider string `json:"compression_provider,omitempty"`
+
+	// SandboxEnabled controls the SENSE input sanitizer. nil = default (true/enabled).
+	SandboxEnabled *bool `json:"sandbox_enabled,omitempty"`
+
+	// SREEnabled controls the Step-wise Reasoning Engine. nil = default (true/enabled).
+	SREEnabled *bool `json:"sre_enabled,omitempty"`
+
+	// EnsembleEnabled controls the multi-trajectory ensemble reasoning.
+	EnsembleEnabled *bool `json:"ensemble_enabled,omitempty"`
 }
 
 // AppStateManager loads and saves AppState to a JSON file in the config directory.
@@ -92,10 +109,60 @@ func (m *AppStateManager) SetDisabledCategories(cats []string) error {
 	return m.save()
 }
 
+// SetCascadeOrder persists a custom provider failover order.
+// Pass nil to restore the default hardcoded order.
+func (m *AppStateManager) SetCascadeOrder(order []string) error {
+	m.mu.Lock()
+	m.st.CascadeOrder = order
+	m.mu.Unlock()
+	return m.save()
+}
+
+// SetCompressionProvider persists a pinned compression provider.
+// Pass "" to use the primary provider (recommended default).
+func (m *AppStateManager) SetCompressionProvider(providerID string) error {
+	m.mu.Lock()
+	m.st.CompressionProvider = providerID
+	m.mu.Unlock()
+	return m.save()
+}
+
+// IsSandboxEnabled returns true when the SENSE input sanitizer should be active.
+// Returns true by default (nil means enabled).
+func (m *AppStateManager) IsSandboxEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.st.SandboxEnabled == nil || *m.st.SandboxEnabled
+}
+
+// SetSandboxEnabled persists the sandbox enabled/disabled preference.
+func (m *AppStateManager) SetSandboxEnabled(v bool) error {
+	m.mu.Lock()
+	m.st.SandboxEnabled = &v
+	m.mu.Unlock()
+	return m.save()
+}
+
 // SetDisabledProviders persists the list of session-disabled provider IDs.
 func (m *AppStateManager) SetDisabledProviders(ids []string) error {
 	m.mu.Lock()
 	m.st.DisabledProviders = ids
+	m.mu.Unlock()
+	return m.save()
+}
+
+// SetSREEnabled persists the SRE enabled/disabled preference.
+func (m *AppStateManager) SetSREEnabled(v bool) error {
+	m.mu.Lock()
+	m.st.SREEnabled = &v
+	m.mu.Unlock()
+	return m.save()
+}
+
+// SetEnsembleEnabled persists the ensemble enabled/disabled preference.
+func (m *AppStateManager) SetEnsembleEnabled(v bool) error {
+	m.mu.Lock()
+	m.st.EnsembleEnabled = &v
 	m.mu.Unlock()
 	return m.save()
 }

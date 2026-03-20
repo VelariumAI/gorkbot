@@ -177,11 +177,17 @@ def run():
     Main entry point for Gorkbot communication.
     Reads JSON from stdin, executes the requested tool, writes JSON to stdout.
     """
+    import io
+    from contextlib import redirect_stdout
+
+    # Keep a reference to the real stdout
+    real_stdout = sys.stdout
+
     try:
         # Read input from stdin
         input_data = sys.stdin.read()
         if not input_data.strip():
-            print(json.dumps({
+            real_stdout.write(json.dumps({
                 "success": False,
                 "error": "No input received"
             }))
@@ -195,7 +201,7 @@ def run():
 
         if action == "list":
             # Return list of available tools
-            print(json.dumps({
+            real_stdout.write(json.dumps({
                 "success": True,
                 "tools": list_tools()
             }))
@@ -203,7 +209,7 @@ def run():
 
         if action == "execute":
             if not tool_name:
-                print(json.dumps({
+                real_stdout.write(json.dumps({
                     "success": False,
                     "error": "No tool specified"
                 }))
@@ -211,30 +217,34 @@ def run():
 
             t = get_tool(tool_name)
             if not t:
-                print(json.dumps({
+                real_stdout.write(json.dumps({
                     "success": False,
                     "error": f"Tool not found: {tool_name}"
                 }))
                 sys.exit(1)
 
-            result = t.execute(params)
-            print(json.dumps(result.to_dict()))
+            # Redirect all stdout from the tool to stderr during execution
+            # this prevents print statements in tools from corrupting the JSON output
+            with redirect_stdout(sys.stderr):
+                result = t.execute(params)
+            
+            real_stdout.write(json.dumps(result.to_dict()))
             return
 
-        print(json.dumps({
+        real_stdout.write(json.dumps({
             "success": False,
             "error": f"Unknown action: {action}"
         }))
 
     except json.JSONDecodeError as e:
-        print(json.dumps({
+        real_stdout.write(json.dumps({
             "success": False,
             "error": f"Invalid JSON: {e}"
         }))
         sys.exit(1)
 
     except Exception as e:
-        print(json.dumps({
+        real_stdout.write(json.dumps({
             "success": False,
             "error": f"Execution error: {e}"
         }))

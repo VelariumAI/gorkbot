@@ -45,6 +45,9 @@ type Channel struct {
 	messages       []Message
 	pendingReplies map[string]chan Message
 	mu             sync.RWMutex
+	// journal, when non-nil, durably persists outbound messages so they
+	// survive a crash and can be re-dispatched on the next startup.
+	journal *PendingJournal
 }
 
 // NewChannel creates a new A2A communication channel
@@ -55,6 +58,44 @@ func NewChannel(grok, gemini ai.AIProvider) *Channel {
 		messages:       make([]Message, 0),
 		pendingReplies: make(map[string]chan Message),
 	}
+}
+
+// NewChannelWithJournal creates a Channel that durably journals every
+// outbound message to pendingDir before delivery, enabling crash recovery
+// via RecoverAndRedispatch.
+func NewChannelWithJournal(grok, gemini ai.AIProvider, pendingDir string) (*Channel, error) {
+	j, err := NewPendingJournal(pendingDir)
+	if err != nil {
+		return nil, err
+	}
+	return &Channel{
+		grokProvider:   grok,
+		geminiProvider: gemini,
+		messages:       make([]Message, 0),
+		pendingReplies: make(map[string]chan Message),
+		journal:        j,
+	}, nil
+}
+
+// RecoverAndRedispatch re-sends any messages that were journaled but not yet
+// delivered (e.g. due to a crash). Call once on startup before accepting new
+// messages. The provided dispatch function is responsible for actual delivery;
+// a nil error return deletes the pending record.
+func (c *Channel) RecoverAndRedispatch(dispatch func(msg Message) error) error {
+	if c.journal == nil {
+		return nil
+	}
+	msgs, err := c.journal.RecoverPending()
+	if err != nil {
+		// Log but don't abort — partial recovery is better than none.
+		_ = err
+	}
+	for _, msg := range msgs {
+		if deliverErr := dispatch(msg); deliverErr == nil {
+			_ = c.journal.DeletePending(msg.ID)
+		}
+	}
+	return nil
 }
 
 // SendQuery sends a query from one agent to another and waits for response
@@ -69,7 +110,13 @@ func (c *Channel) SendQuery(ctx context.Context, from, to, content string, conte
 		Timestamp: time.Now(),
 	}
 
-	// Store message
+	// Durably journal the outbound message before attempting delivery so it
+	// can be recovered if the process crashes mid-flight.
+	if c.journal != nil {
+		_ = c.journal.WritePending(msg) // best-effort; non-fatal
+	}
+
+	// Store message in-memory.
 	c.mu.Lock()
 	c.messages = append(c.messages, msg)
 	c.mu.Unlock()
@@ -88,7 +135,14 @@ func (c *Channel) SendQuery(ctx context.Context, from, to, content string, conte
 	// Send to AI provider
 	response, err := provider.Generate(ctx, fullQuery)
 	if err != nil {
+		// Leave the pending journal entry intact — RecoverAndRedispatch will
+		// retry it on next startup.
 		return "", fmt.Errorf("failed to get response from %s: %w", to, err)
+	}
+
+	// Delivery confirmed — remove pending record.
+	if c.journal != nil {
+		_ = c.journal.DeletePending(msg.ID)
 	}
 
 	// Store response

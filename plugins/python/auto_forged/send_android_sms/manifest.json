@@ -1,0 +1,13 @@
+{
+  "name": "send_android_sms",
+  "description": "Launches an Android SMS composer intent using the 'am' command in Termux to pre-fill a recipient and message body. Requires Termux and Termux:API app installed. Opens the SMS app for user confirmation (does not auto-send).",
+  "author": "ToolForge",
+  "version": "1.0.0",
+  "entry_point": "main.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+       "args": { "type": "string", "description": "Arguments for the tool" }
+    }
+  }
+}

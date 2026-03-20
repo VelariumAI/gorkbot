@@ -37,10 +37,17 @@ func NewCompressionPipe(compressor *sense.Compressor, store *persist.Store, sess
 	}
 }
 
+// SetCompressor hot-swaps the underlying compressor. Called by
+// Orchestrator.SetCompressorGenerator() when the primary provider changes.
+func (cp *CompressionPipe) SetCompressor(c *sense.Compressor) {
+	cp.compressor = c
+}
+
 // MaybeCompress compresses history when token count exceeds ThresholdToks.
-// It is a no-op when the threshold has not been reached.
-func (cp *CompressionPipe) MaybeCompress(ctx context.Context, history *ai.ConversationHistory) error {
-	if history.EstimateTokens() < cp.ThresholdToks {
+// When force is true the threshold check is skipped (used by TieredCompactor
+// Stage 2 to guarantee compression at the hard limit).
+func (cp *CompressionPipe) MaybeCompress(ctx context.Context, history *ai.ConversationHistory, force bool) error {
+	if !force && history.EstimateTokens() < cp.ThresholdToks {
 		return nil
 	}
 
@@ -64,7 +71,9 @@ func (cp *CompressionPipe) MaybeCompress(ctx context.Context, history *ai.Conver
 		})
 	}
 
-	snapshot, err := cp.compressor.Compress(ctx, senseMessages)
+	// CompressFast: single LLM call — fast enough for the auto-compression path.
+	// The full 4-stage Compress() is used only for explicit /compress commands.
+	snapshot, err := cp.compressor.CompressFast(ctx, senseMessages)
 	if err != nil {
 		cp.logger.Warn("compression failed, keeping history unchanged", "err", err)
 		return nil // non-fatal
@@ -78,6 +87,8 @@ func (cp *CompressionPipe) MaybeCompress(ctx context.Context, history *ai.Conver
 	}
 
 	// Rebuild history: clear → add summary system message → re-add recency.
+	// Preserves native tool-call and tool-result message types so the history
+	// remains valid for providers that enforce role ordering (e.g. Anthropic).
 	history.Clear()
 	if snapshot.Summary != "" {
 		history.AddSystemMessage("## Compressed Context\n" + snapshot.Summary)
@@ -87,7 +98,13 @@ func (cp *CompressionPipe) MaybeCompress(ctx context.Context, history *ai.Conver
 		case "user":
 			history.AddUserMessage(m.Content)
 		case "assistant":
-			history.AddAssistantMessage(m.Content)
+			if len(m.ToolCalls) > 0 {
+				history.AddToolCallMessage(m.ToolCalls)
+			} else {
+				history.AddAssistantMessage(m.Content)
+			}
+		case "tool":
+			history.AddToolResultMessage(m.ToolCallID, m.ToolName, m.Content)
 		default:
 			history.AddSystemMessage(m.Content)
 		}

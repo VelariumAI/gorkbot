@@ -398,7 +398,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.commands != nil {
 				orchAdapter = m.commands.Orch
 			}
-			m.activeOverlay = NewSettingsOverlay(m.width, m.height, orchAdapter, toolReg, appStateSetter, debugOn, providerSetter, m.integrationGetter, m.integrationSetter)
+			var sreEnabledSetter func(bool) error
+			var ensembleSetter func(bool) error
+			sreEnabled, ensembleEnabled := false, false
+			if m.commands != nil && m.commands.Orch != nil {
+				if m.commands.Orch.SetSREEnabled != nil {
+					sreEnabledSetter = m.commands.Orch.SetSREEnabled
+				}
+				if m.commands.Orch.SetEnsembleEnabled != nil {
+					ensembleSetter = m.commands.Orch.SetEnsembleEnabled
+				}
+				if m.commands.Orch.GetSREEnabled != nil {
+					sreEnabled = m.commands.Orch.GetSREEnabled()
+				}
+				if m.commands.Orch.GetEnsembleEnabled != nil {
+					ensembleEnabled = m.commands.Orch.GetEnsembleEnabled()
+				}
+			}
+			m.activeOverlay = NewSettingsOverlay(m.width, m.height, orchAdapter, toolReg, appStateSetter, debugOn, providerSetter, m.integrationGetter, m.integrationSetter, sreEnabled, ensembleEnabled, sreEnabledSetter, ensembleSetter)
 			return m, nil
 		case hotkeys.CmdModelsSelect:
 			m.state = modelListView
@@ -445,40 +462,65 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case hotkeys.CmdExpandDetails:
-			// Toggle collapse state of the most recent tool/tool_call/internal/a2a message.
-			for i := len(m.messages) - 1; i >= 0; i-- {
-				role := m.messages[i].Role
-				if role == "tool" || role == "tool_call" || role == "internal" || role == "a2a" {
-					m.messages[i].Collapsed = !m.messages[i].Collapsed
-					m.updateViewportContent()
-					// Scroll to show the newly expanded content.
-					if !m.messages[i].Collapsed {
-						m.userScrolledUp = false
-						m.viewport.GotoBottom()
-					}
-					break
-				}
-			}
-			return m, nil
-
-		case hotkeys.CmdExpandAll:
-			// Toggle ALL collapsible messages: if any are expanded → collapse all;
-			// if all are collapsed → expand all.
-			hasExpanded := false
+			// Toggle partial expand for ALL boxes (up to 10 lines)
+			hasCollapsed := false
 			for _, msg := range m.messages {
 				role := msg.Role
-				if (role == "tool" || role == "tool_call" || role == "internal" || role == "a2a") && !msg.Collapsed {
-					hasExpanded = true
+				if (role == "tool" || role == "tool_call" || role == "internal" || role == "a2a") && msg.Collapsed {
+					hasCollapsed = true
 					break
 				}
 			}
 			for i, msg := range m.messages {
 				role := msg.Role
 				if role == "tool" || role == "tool_call" || role == "internal" || role == "a2a" {
-					m.messages[i].Collapsed = hasExpanded // collapse if any open, else expand
+					if hasCollapsed {
+						m.messages[i].Collapsed = false
+						m.messages[i].FullyExpanded = false
+					} else {
+						m.messages[i].Collapsed = true
+						m.messages[i].FullyExpanded = false
+					}
 				}
 			}
 			m.updateViewportContent()
+			if !hasCollapsed {
+				// We just collapsed things, scroll might jump, so no explicit scroll
+			} else {
+				m.userScrolledUp = false
+				m.viewport.GotoBottom()
+			}
+			return m, nil
+
+		case hotkeys.CmdExpandAll:
+			// Toggle full expand for ALL boxes
+			hasNotFullyExpanded := false
+			for _, msg := range m.messages {
+				role := msg.Role
+				if (role == "tool" || role == "tool_call" || role == "internal" || role == "a2a") && (!msg.FullyExpanded || msg.Collapsed) {
+					hasNotFullyExpanded = true
+					break
+				}
+			}
+			for i, msg := range m.messages {
+				role := msg.Role
+				if role == "tool" || role == "tool_call" || role == "internal" || role == "a2a" {
+					if hasNotFullyExpanded {
+						m.messages[i].Collapsed = false
+						m.messages[i].FullyExpanded = true
+					} else {
+						m.messages[i].Collapsed = true
+						m.messages[i].FullyExpanded = false
+					}
+				}
+			}
+			m.updateViewportContent()
+			if !hasNotFullyExpanded {
+				// Collapsed
+			} else {
+				m.userScrolledUp = false
+				m.viewport.GotoBottom()
+			}
 			return m, nil
 
 		case hotkeys.CmdOmniSearch:
@@ -574,6 +616,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_, cmd = m.handleStreamComplete(msg)
 		cmds = append(cmds, cmd)
 
+	case StatusUpdateMsg:
+		// Update the single authoritative status line.
+		m.statusPhase = msg.Phase
+		m.statusDescription = msg.Description
+		m.statusTokens = msg.Tokens
+		m.statusModel = msg.Model
+
 	case ToolCallMsg:
 		// Render the outgoing tool call request box before the result arrives.
 		m.addToolCallMessage(msg.ToolName, msg.Params)
@@ -608,6 +657,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.hookTickActive = true
 			cmds = append(cmds, hookTick())
 		}
+		// Start tool in live panel
+		m.livePanel.StartTool(msg.ToolName, msg.Params)
 		m.recalcViewportHeight()
 		m.updateViewportContent()
 		if !m.userScrolledUp {
@@ -617,6 +668,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ToolExecutionMsg:
 		_, cmd = m.handleToolExecution(msg)
 		cmds = append(cmds, cmd)
+
+	case ToolElapsedMsg:
+		// Update elapsed time in live panel
+		m.livePanel.UpdateElapsed(msg.ToolName, msg.Elapsed)
+		if msg.Done {
+			// Tool is complete; update panel with success/failure
+			result := &tools.ToolResult{Success: msg.Success}
+			m.livePanel.CompleteTool(msg.ToolName, result, msg.Elapsed)
+		}
+
+	case LivePanelClearMsg:
+		// Clear the live panel after 2s delay
+		m.livePanel.Clear()
+		m.recalcViewportHeight()
+		m.updateViewportContent()
 
 	case InterventionRequestMsg:
 		_, cmd = m.handleInterventionRequest(msg)
@@ -680,16 +746,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Done && m.analytics != nil {
 			m.analytics.RecordToolUse(msg.ToolName)
 		}
+		elapsedD := time.Duration(msg.Elapsed * float64(time.Second))
 		if msg.Done {
-			// Remove the tool from the live panel.
-			for i, t := range m.activeTools {
-				if t == msg.ToolName {
-					m.activeTools = append(m.activeTools[:i], m.activeTools[i+1:]...)
-					break
-				}
-			}
+			// Mark tool as complete in live panel
+			result := &tools.ToolResult{Success: msg.Success}
+			m.livePanel.CompleteTool(msg.ToolName, result, elapsedD)
+
 			// ── Hook: seal the most-recent active hook for this tool ──────────
-			elapsedD := time.Duration(msg.Elapsed * float64(time.Second))
 			// Walk backwards through activeHooks to find the matching entry.
 			for i := len(m.activeHooks) - 1; i >= 0; i-- {
 				if m.activeHooks[i].Active && strings.HasPrefix(m.activeHooks[i].ID, msg.ToolName+"_") {
@@ -702,13 +765,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		} else {
-			// Add the tool to the live panel and record start time.
-			m.activeTools = append(m.activeTools, msg.ToolName)
+			// Start tool in live panel
+			m.livePanel.StartTool(msg.ToolName, nil) // params not available in ToolProgressMsg
 			if m.toolStartTimes != nil {
 				m.toolStartTimes[msg.ToolName] = time.Now()
 			}
 		}
-		m.statusBar.SetActiveTools(len(m.activeTools))
+		// Update status bar with active tool count
+		m.statusBar.SetActiveTools(m.livePanel.ActiveCount())
 
 	// ── Consultation pipeline → hook integration ─────────────────────────────
 	case ConsultationStageMsg:
@@ -935,7 +999,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// But RecordTokens expects the ABSOLUTE total.
 			// m.analytics.TotalTokens is updated at end of turn.
 			// Let's just update the analytics fields directly.
-			if liveToks > 0 {
+			if m.generating && liveToks > 0 {
 				m.analytics.RecordTokens(m.analytics.TotalTokens+liveToks, m.analytics.SessionCostUS)
 			}
 			
@@ -1258,6 +1322,31 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Live panel keyboard shortcuts
+	if m.livePanel != nil && m.livePanel.HasActivity() {
+		switch msg.String() {
+		case "alt+l": // Focus latest tool
+			if m.livePanel.ActiveCount() > 0 {
+				m.livePanel.focusIdx = len(m.livePanel.boxes) - 1
+			}
+			return m, nil
+		case "alt+c": // Clear panel
+			m.livePanel.Clear()
+			m.recalcViewportHeight()
+			m.updateViewportContent()
+			return m, nil
+		case "alt+j": // Next tool
+			m.livePanel.FocusNext()
+			return m, nil
+		case "alt+k": // Previous tool
+			m.livePanel.FocusPrev()
+			return m, nil
+		case "ctrl+o": // Expand/collapse
+			m.livePanel.ExpandFocused()
+			return m, nil
+		}
+	}
+
 	// Chat-specific keybindings
 	switch {
 	case key.Matches(msg, m.keymap.SelectModel):
@@ -1290,7 +1379,24 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.commands != nil {
 			toolReg = m.commands.GetToolRegistry()
 		}
-		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn, providerSetter, m.integrationGetter, m.integrationSetter)
+		var sreEnabledSetter func(bool) error
+		var ensembleSetter func(bool) error
+		sreEnabled, ensembleEnabled := false, false
+		if m.commands != nil && m.commands.Orch != nil {
+			if m.commands.Orch.SetSREEnabled != nil {
+				sreEnabledSetter = m.commands.Orch.SetSREEnabled
+			}
+			if m.commands.Orch.SetEnsembleEnabled != nil {
+				ensembleSetter = m.commands.Orch.SetEnsembleEnabled
+			}
+			if m.commands.Orch.GetSREEnabled != nil {
+				sreEnabled = m.commands.Orch.GetSREEnabled()
+			}
+			if m.commands.Orch.GetEnsembleEnabled != nil {
+				ensembleEnabled = m.commands.Orch.GetEnsembleEnabled()
+			}
+		}
+		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn, providerSetter, m.integrationGetter, m.integrationSetter, sreEnabled, ensembleEnabled, sreEnabledSetter, ensembleSetter)
 		return m, nil
 
 	// ctrl+d (0x04) is intercepted by the hotkey manager (CmdDuplicateSess).
@@ -1713,6 +1819,13 @@ func (m *Model) handleStreamComplete(msg StreamCompleteMsg) (tea.Model, tea.Cmd)
 	m.activeHooks = sealAllHooks(m.activeHooks)
 	m.hookTickActive = false
 
+	// Schedule live panel clear after 2s (allows user to see final tool states)
+	clearCmd := tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		// Return a custom message to clear the panel
+		return LivePanelClearMsg{}
+	})
+	cmds := []tea.Cmd{clearCmd}
+
 	// Expand viewport — the loading indicator line is now gone.
 	// handleWindowSize reserved 1 line for it; without this the scroll area
 	// stays 1 line short and touch scroll appears frozen on Termux.
@@ -1728,7 +1841,7 @@ func (m *Model) handleStreamComplete(msg StreamCompleteMsg) (tea.Model, tea.Cmd)
 	m.textarea.Blur()
 	m.textarea.Focus()
 
-	return m, textarea.Blink
+	return m, tea.Batch(append(cmds, textarea.Blink)...)
 }
 
 // handleHITLRequest handles a SENSE HITL plan-and-execute approval request.
@@ -1810,6 +1923,8 @@ func (m *Model) handleToolExecution(msg ToolExecutionMsg) (tea.Model, tea.Cmd) {
 		}
 		m.currentActivity = nil
 	}
+	// Complete tool in live panel
+	m.livePanel.CompleteTool(msg.ToolName, msg.Result, elapsed)
 	m.genPhase = phaseSynthesizing
 
 	// If auth is required, trigger the dynamic wizard
@@ -1903,12 +2018,20 @@ func (m *Model) updateStreamingMessage() {
 				break
 			}
 		}
+
+		// Apply markdown resilience: Auto-close open code blocks in the live stream
+		displaySeg := seg
+		backtickCount := strings.Count(displaySeg, "```")
+		if backtickCount%2 != 0 {
+			displaySeg += "\n```"
+		}
+
 		if foundIndex != -1 {
-			m.messages[foundIndex].Content = seg
+			m.messages[foundIndex].Content = displaySeg
 		} else {
 			m.messages = append(m.messages, Message{
 				Role:         role,
-				Content:      seg,
+				Content:      displaySeg,
 				IsConsultant: m.isConsultant,
 			})
 		}
@@ -2235,7 +2358,22 @@ func (m *Model) recalcViewportHeight() {
 		hookHeight = 1 + maxHookSectionLines // 1 header + 8 = 9
 	}
 
-	fixed := brandingHeight + tabsHeight + separatorHeight + inputHeight + statusBarHeight + notifyHeight + hookHeight
+	// Live panel height: reserve space when tools are running or recently completed
+	panelHeight := 0
+	if m.livePanel != nil && m.livePanel.HasActivity() {
+		panelHeight = m.livePanel.Height()
+		if panelHeight > 12 {
+			panelHeight = 12 // Cap at 12 lines
+		}
+	}
+
+	// Use whichever is active: hooks (legacy DAG) or livePanel (chat tools)
+	dynamicHeight := hookHeight
+	if panelHeight > 0 {
+		dynamicHeight = panelHeight
+	}
+
+	fixed := brandingHeight + tabsHeight + separatorHeight + inputHeight + statusBarHeight + notifyHeight + dynamicHeight
 	if m.generating {
 		fixed += loadingHeight
 	}
