@@ -32,9 +32,7 @@ jobs:
         id: release
         uses: googleapis/release-please-action@v4
         with:
-          # Configuration
           token: ${{ secrets.GITHUB_TOKEN }}
-          command: manifest
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
