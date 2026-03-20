@@ -49,9 +49,12 @@ func NewServer(port int, orch *engine.Orchestrator, reg *registry.ModelRegistry,
 
 	// Security Headers
 	r.Use(func(c *gin.Context) {
-		c.Header("Content-Security-Policy", "default-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://storage.googleapis.com; object-src 'none'")
+		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; img-src 'self' data: https://storage.googleapis.com; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("X-Frame-Options", "DENY")
+		c.Header("X-XSS-Protection", "1; mode=block")
+		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
+		c.Header("Permissions-Policy", "accelerometer=(), camera=(), microphone=(), payment=(), usb=(), magnetometer=(), gyroscope=(), geolocation=()")
 		c.Next()
 	})
 
