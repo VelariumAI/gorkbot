@@ -52,6 +52,8 @@ type Manager struct {
 	agentsMu    sync.RWMutex
 	agents      []*AgentNode
 	stopCh      chan struct{}
+	doneCh      chan struct{}
+	started     bool
 	logger      *slog.Logger
 }
 
@@ -64,6 +66,7 @@ func NewManager(xaiKey, geminiKey string, logger *slog.Logger) *Manager {
 		xaiKey:    xaiKey,
 		geminiKey: geminiKey,
 		stopCh:    make(chan struct{}),
+		doneCh:    make(chan struct{}),
 		logger:    logger,
 	}
 }
@@ -77,14 +80,25 @@ func NewManagerWithKeys(kg KeyGetter, logger *slog.Logger) *Manager {
 	m := &Manager{
 		keyGetter: kg,
 		stopCh:    make(chan struct{}),
+		doneCh:    make(chan struct{}),
 		logger:    logger,
 	}
 	return m
 }
 
 // Start begins polling (initial poll immediately, then every 30 min). Non-blocking.
+// Idempotent: safe to call multiple times.
 func (dm *Manager) Start(ctx context.Context) {
+	dm.subMu.Lock()
+	if dm.started {
+		dm.subMu.Unlock()
+		return
+	}
+	dm.started = true
+	dm.subMu.Unlock()
+
 	go func() {
+		defer close(dm.doneCh)
 		dm.poll(ctx)
 		ticker := time.NewTicker(pollInterval)
 		defer ticker.Stop()
@@ -101,13 +115,16 @@ func (dm *Manager) Start(ctx context.Context) {
 	}()
 }
 
-// Stop signals the polling goroutine to exit.
+// Stop signals the polling goroutine to exit and waits for it to finish.
 func (dm *Manager) Stop() {
 	select {
 	case <-dm.stopCh:
+		return
 	default:
 		close(dm.stopCh)
 	}
+	// Wait for goroutine to finish
+	<-dm.doneCh
 }
 
 // Subscribe returns a buffered channel that receives the full model list on each update.

@@ -169,7 +169,6 @@ type Server struct {
 	runner  TaskRunnerFunc
 	logger  *slog.Logger
 	httpSrv *http.Server
-	mu      sync.RWMutex
 }
 
 // NewServer creates a new A2A HTTP server.
@@ -330,7 +329,7 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Method {
 	case "message/send":
-		s.rpcMessageSend(w, req)
+		s.rpcMessageSend(r.Context(), w, req)
 	case "tasks/get":
 		s.rpcTasksGet(w, req)
 	case "tasks/cancel":
@@ -341,7 +340,7 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 }
 
 // rpcMessageSend handles the message/send JSON-RPC method.
-func (s *Server) rpcMessageSend(w http.ResponseWriter, req rpcRequest) {
+func (s *Server) rpcMessageSend(ctx context.Context, w http.ResponseWriter, req rpcRequest) {
 	// Parse params: {"message": {"parts": [{"text": "..."}]}}
 	var params struct {
 		Message struct {
@@ -369,8 +368,8 @@ func (s *Server) rpcMessageSend(w http.ResponseWriter, req rpcRequest) {
 	// Create task and respond immediately with submitted status.
 	task := s.tasks.create(prompt)
 
-	// Run the task asynchronously.
-	taskCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	// Run the task asynchronously, inheriting HTTP request context.
+	taskCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	s.tasks.setCancel(task.ID, cancel)
 
 	go func() {

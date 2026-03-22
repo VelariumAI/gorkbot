@@ -48,6 +48,14 @@ func shouldSuppressToolOutput(prompt string) bool {
 	return true
 }
 
+// getThinkingCallbackFromAtomic retrieves the thinking callback from atomic storage
+func getThinkingCallbackFromAtomic(o *Orchestrator) StreamCallback {
+	if cb, ok := o.thinkingCallback.Load().(func(string)); ok {
+		return cb
+	}
+	return nil
+}
+
 // stripToolOutputPatterns removes raw tool output blocks from AI responses.
 // Strips patterns like "Verified Status:", "Actionable Commands:", system tables, etc.
 func stripToolOutputPatterns(response string) string {
@@ -340,19 +348,24 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 			// System prompt changed — create a new Gemini cache entry async.
 			gc := o.CacheAdvisor.GeminiCacheClient()
 			if gc != nil {
-				go func(sp string) {
-					name, err := gc.Create(context.Background(), sp)
-					if err != nil {
-						o.Logger.Warn("Gemini cache create failed", "error", err)
-						return
-					}
-					if name != "" {
-						o.CacheAdvisor.RecordGeminiCacheName(name)
-						if gp, ok := o.Primary.(interface{ SetCachedContent(string) }); ok {
-							gp.SetCachedContent(name)
+				// Capture primary before spawning goroutine to avoid race condition
+				prov := o.Primary
+				if prov != nil {
+					o.eg.Go(func() error {
+						name, err := gc.Create(o.rootCtx, systemPrompt)
+						if err != nil {
+							o.Logger.Warn("Gemini cache create failed", "error", err)
+							return err
 						}
-					}
-				}(systemPrompt)
+						if name != "" {
+							o.CacheAdvisor.RecordGeminiCacheName(name)
+							if gp, ok := prov.(interface{ SetCachedContent(string) }); ok {
+								gp.SetCachedContent(name)
+							}
+						}
+						return nil
+					})
+				}
 			}
 		}
 
@@ -389,15 +402,11 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 	// Extracts semantic facts from the prompt before any planning or tool use begins.
 	if o.SRE != nil && o.SRE.Enabled() {
 		// Emit status: grounding extraction
-		if o.StatusCallback != nil {
-			o.StatusCallback("grounding", "Grounding task and extracting anchors...", 0, "")
-		}
+		o.invokeStatus("grounding", "Grounding task and extracting anchors...", 0, "")
 		_ = o.prepareGrounding(ctx, prompt)
 	} else {
 		// Emit status: pipeline analysis
-		if o.StatusCallback != nil {
-			o.StatusCallback("pipeline", "Analyzing input...", 0, "")
-		}
+		o.invokeStatus("pipeline", "Analyzing input...", 0, "")
 	}
 
 	// ── IngressFilter: prune low-information content from the prompt ─────────
@@ -486,7 +495,7 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 			orchestrator:         o,
 			interventionCallback: interventionCallback,
 			relay:                o.Relay,
-			thinkingCallback:     o.ThinkingCallback,
+			thinkingCallback:     getThinkingCallbackFromAtomic(o),
 			statusUpdateFreq:     10, // emit status every 10 tokens
 			suppressor:           o.MessageSuppressor, // Apply message suppression if configured
 		}
@@ -511,9 +520,9 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 			label := fmt.Sprintf("[SRE: %s]", phaseStr)
 			description := o.SRE.CurrentDescriptiveLabel()
 
-			if o.StatusCallback != nil && description != "" {
+			if description != "" {
 				// Emit status with SRE phase label and descriptive text
-				o.StatusCallback("sre_"+strings.ToLower(phaseStr), label+" "+description, 0, "")
+				o.invokeStatus("sre_"+strings.ToLower(phaseStr), label+" "+description, 0, "")
 			}
 		}
 
@@ -1106,13 +1115,13 @@ func (w *streamCallbackWriter) Write(p []byte) (n int, err error) {
 			w.modelID = w.orchestrator.Primary.GetMetadata().ID
 		}
 
-		if w.orchestrator != nil && w.orchestrator.StatusCallback != nil {
-			w.orchestrator.StatusCallback("thinking", "Thinking...", 0, "")
+		if w.orchestrator != nil {
+			w.orchestrator.invokeStatus("thinking", "Thinking...", 0, "")
 		}
 	} else if w.tokenCount > w.lastStatusTokens+w.statusUpdateFreq {
 		// Emit status update with token count every N tokens
-		if w.orchestrator != nil && w.orchestrator.StatusCallback != nil {
-			w.orchestrator.StatusCallback("thinking", "Thinking...", w.tokenCount, w.modelID)
+		if w.orchestrator != nil {
+			w.orchestrator.invokeStatus("thinking", "Thinking...", w.tokenCount, w.modelID)
 			w.lastStatusTokens = w.tokenCount
 		}
 	}

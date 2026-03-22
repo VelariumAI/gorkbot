@@ -3,14 +3,17 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	"github.com/velariumai/gorkbot/internal/platform"
 	"github.com/velariumai/gorkbot/internal/xskill"
 	"github.com/velariumai/gorkbot/pkg/adaptive"
@@ -93,22 +96,18 @@ type Orchestrator struct {
 	// The value is the token budget for the thinking block.
 	ThinkingBudget int
 
-	// ThinkingCallback, when non-nil, receives decoded thinking-block tokens
-	// separately from the main stream (stripped of the \x02/\x03 sentinels).
-	// The TUI sets this to route extended thinking to its dedicated panel.
-	ThinkingCallback StreamCallback
+	// Lock-free atomic callbacks (set via SetThinkingCallback/SetStatusCallback)
+	// thinkingCallback: func(token string), invoked via invokeThinking
+	thinkingCallback atomic.Value
+
+	// statusCallback: func(phase, desc string, tokens int, model string), invoked via invokeStatus
+	statusCallback atomic.Value
 
 	// ToolProgressCallback, when non-nil, is called for each tool execution
 	// with elapsed time updates every ~250ms while running, and once on completion.
 	// Signature: func(toolName string, elapsed time.Duration, done bool, success bool)
 	// The TUI uses this to update the live tools panel with per-tool timings.
 	ToolProgressCallback func(toolName string, elapsed time.Duration, done bool, success bool)
-
-	// StatusCallback, when non-nil, is called to update the single authoritative status line.
-	// Used to show pipeline progress, SRE phases, and token counts in the TUI.
-	// Signature: func(phase string, description string, tokens int, model string)
-	// The TUI sets this to update the "G ▶ " status line in real-time.
-	StatusCallback func(phase string, description string, tokens int, model string)
 
 	// ExecutionStats tracks historical tool execution times for progress estimation.
 	ExecutionStats *tools.ExecutionStats
@@ -270,6 +269,12 @@ type Orchestrator struct {
 	// xskillMu guards the per-task trajectory fields below.
 	xskillMu sync.Mutex
 
+	// Structured concurrency: root context for all background goroutines
+	rootCtx    context.Context
+	rootCancel context.CancelCauseFunc
+	eg         *errgroup.Group
+	shutdown   sync.Once
+
 	// xskillSteps accumulates TrajectoryStep records during a single task.
 	xskillSteps []xskill.TrajectoryStep
 
@@ -301,6 +306,8 @@ type Orchestrator struct {
 
 // NewOrchestrator initializes the orchestration engine with SENSE components.
 func NewOrchestrator(primary, consultant ai.AIProvider, registry *tools.Registry, logger *slog.Logger, enableWatchdog bool) *Orchestrator {
+	ctx, cancel := context.WithCancelCause(context.Background())
+
 	o := &Orchestrator{
 		Primary:             primary,
 		Consultant:          consultant,
@@ -317,6 +324,13 @@ func NewOrchestrator(primary, consultant ai.AIProvider, registry *tools.Registry
 		Checkpoints: session.NewCheckpointManager(20, ""),
 		ToolCache:   tools.NewToolCache(1000, nil), // Default bounded cache size, db can be wired later if needed.
 		Exporter:    session.NewExporter(),
+		// Structured concurrency
+		rootCtx:    ctx,
+		rootCancel: cancel,
+		eg:         new(errgroup.Group),
+		// Initialize atomic values for callbacks
+		thinkingCallback: atomic.Value{},
+		statusCallback:   atomic.Value{},
 	}
 
 	// Stabilizer uses Consultant for task-alignment scoring when available.
@@ -362,6 +376,38 @@ func NewOrchestrator(primary, consultant ai.AIProvider, registry *tools.Registry
 	}
 
 	return o
+}
+
+// SetThinkingCallback sets the callback for thinking block tokens (lock-free).
+func (o *Orchestrator) SetThinkingCallback(cb func(string)) {
+	o.thinkingCallback.Store(cb)
+}
+
+// SetStatusCallback sets the callback for status updates (lock-free).
+func (o *Orchestrator) SetStatusCallback(cb func(string, string, int, string)) {
+	o.statusCallback.Store(cb)
+}
+
+// invokeThinking safely invokes the thinking callback if set (lock-free).
+func (o *Orchestrator) invokeThinking(token string) {
+	if cb, ok := o.thinkingCallback.Load().(func(string)); ok && cb != nil {
+		cb(token)
+	}
+}
+
+// invokeStatus safely invokes the status callback if set (lock-free).
+func (o *Orchestrator) invokeStatus(phase, desc string, tokens int, model string) {
+	if cb, ok := o.statusCallback.Load().(func(string, string, int, string)); ok && cb != nil {
+		cb(phase, desc, tokens, model)
+	}
+}
+
+// Shutdown gracefully shuts down the orchestrator and waits for background goroutines.
+func (o *Orchestrator) Shutdown(ctx context.Context) error {
+	o.shutdown.Do(func() {
+		o.rootCancel(errors.New("orchestrator shutdown"))
+	})
+	return o.eg.Wait()
 }
 
 // InitEnhancements wires up config-dir-dependent systems.

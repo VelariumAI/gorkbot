@@ -215,12 +215,8 @@ type Model struct {
 	// ── Planning box: hides internal monologue during generation ──────────
 	// planningActive is true while the AI is generating (hidden in box).
 	// planningBuf is kept for the PlanningCommit path (content capture).
-	// planningShowDots / planningIntent are no longer used for display
-	// (superseded by the activity panel below).
-	planningActive   bool
-	planningBuf      strings.Builder
-	planningIntent   string // unused; kept for zero-cost backward compat
-	planningShowDots bool   // unused; kept for zero-cost backward compat
+	planningActive bool
+	planningBuf    strings.Builder
 
 	// ── Extended thinking panel ────────────────────────────────────────────
 	// thinkingBuf accumulates streamed thinking tokens from Anthropic's
@@ -2081,16 +2077,7 @@ func (m *Model) handleBangCommand(input string) tea.Cmd {
 
 	id := fmt.Sprintf("cmd-%d", len(m.processManager.ListProcesses())+1)
 
-	// Start process
-	// Note: We use PTY by default for ! commands to support interactive apps
-	proc, err := m.processManager.Start(id, cmdName, args, true)
-	if err != nil {
-		m.addSystemMessage(fmt.Sprintf("❌ Failed to start process: %v", err))
-		m.updateViewportContent()
-		return nil
-	}
-
-	// Set up streaming output to chat
+	// Set up streaming output to chat (define early to avoid race)
 	processID := id
 	sendMsg := func(output string, isStderr, done bool, exitCode int) {
 		if m.program != nil {
@@ -2104,7 +2091,7 @@ func (m *Model) handleBangCommand(input string) tea.Cmd {
 		}
 	}
 
-	// Create buffered writer for streaming
+	// Create buffered writers for streaming BEFORE starting process
 	stdoutWriter := &processStreamWriter{
 		processID: id,
 		sendMsg:   sendMsg,
@@ -2118,7 +2105,16 @@ func (m *Model) handleBangCommand(input string) tea.Cmd {
 		buffer:    make([]byte, 0, 4096),
 	}
 
-	// Attach writers to process (goroutines already started, but they'll check these)
+	// Start process
+	// Note: We use PTY by default for ! commands to support interactive apps
+	proc, err := m.processManager.Start(id, cmdName, args, true)
+	if err != nil {
+		m.addSystemMessage(fmt.Sprintf("❌ Failed to start process: %v", err))
+		m.updateViewportContent()
+		return nil
+	}
+
+	// Attach writers to process immediately after Start() returns to avoid race
 	proc.StdoutStream = stdoutWriter
 	proc.StderrStream = stderrWriter
 
@@ -2641,7 +2637,7 @@ func (m *Model) callOrchestrator(prompt string) tea.Cmd {
 		// Wire extended-thinking callback so the TUI can show a thinking panel.
 		// The closure captures prog to avoid races; the \x03 sentinel signals done.
 		if m.orchestrator != nil {
-			m.orchestrator.ThinkingCallback = func(token string) {
+			m.orchestrator.SetThinkingCallback(func(token string) {
 				if prog := m.getProgram(); prog != nil {
 					if token == "\x03" {
 						prog.Send(ThinkingDoneMsg{})
@@ -2649,13 +2645,13 @@ func (m *Model) callOrchestrator(prompt string) tea.Cmd {
 						prog.Send(ThinkingTokenMsg{Content: token})
 					}
 				}
-			}
+			})
 		}
 
 	// Wire status callback so the TUI can show the single authoritative status line.
 	// The closure captures prog to avoid races; sends StatusUpdateMsg on every update.
 	if m.orchestrator != nil {
-		m.orchestrator.StatusCallback = func(phase string, description string, tokens int, model string) {
+		m.orchestrator.SetStatusCallback(func(phase string, description string, tokens int, model string) {
 			if prog := m.getProgram(); prog != nil {
 				prog.Send(StatusUpdateMsg{
 					Phase:       phase,
@@ -2664,7 +2660,7 @@ func (m *Model) callOrchestrator(prompt string) tea.Cmd {
 					Model:       model,
 				})
 			}
-		}
+		})
 	}
 		// Call orchestrator with streaming support
 		err := m.orchestrator.ExecuteTaskWithStreaming(ctx, prompt, streamCallback, toolCallback, toolStartCallback, interventionCallback, nil)

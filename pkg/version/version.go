@@ -3,14 +3,14 @@ package version
 import "fmt"
 
 // Internal versioning (development)
-const InternalVersion = "5.3.0"
+const InternalVersion = "5.4.0"
 
 // Public versioning (user-facing releases)
 const PublicMajor = 1
-const PublicMinor = 2
+const PublicMinor = 3
 const PublicBuild = 0
 const PublicRevision = 0 // 0 = no revision suffix
-const PublicStatus = "beta"
+const PublicStatus = "" // empty = stable release
 
 // GetInternalVersion returns the internal development version.
 func GetInternalVersion() string {

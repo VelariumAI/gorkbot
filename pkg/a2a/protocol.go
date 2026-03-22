@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/velariumai/gorkbot/pkg/ai"
 )
 
@@ -43,7 +44,6 @@ type Channel struct {
 	grokProvider   ai.AIProvider
 	geminiProvider ai.AIProvider
 	messages       []Message
-	pendingReplies map[string]chan Message
 	mu             sync.RWMutex
 	// journal, when non-nil, durably persists outbound messages so they
 	// survive a crash and can be re-dispatched on the next startup.
@@ -56,7 +56,6 @@ func NewChannel(grok, gemini ai.AIProvider) *Channel {
 		grokProvider:   grok,
 		geminiProvider: gemini,
 		messages:       make([]Message, 0),
-		pendingReplies: make(map[string]chan Message),
 	}
 }
 
@@ -72,7 +71,6 @@ func NewChannelWithJournal(grok, gemini ai.AIProvider, pendingDir string) (*Chan
 		grokProvider:   grok,
 		geminiProvider: gemini,
 		messages:       make([]Message, 0),
-		pendingReplies: make(map[string]chan Message),
 		journal:        j,
 	}, nil
 }
@@ -212,7 +210,7 @@ func formatQuery(msg Message) string {
 	return query
 }
 
-// generateMessageID generates a unique message ID
+// generateMessageID generates a unique collision-safe message ID
 func generateMessageID() string {
-	return fmt.Sprintf("msg_%d", time.Now().UnixNano())
+	return "msg-" + uuid.New().String()
 }

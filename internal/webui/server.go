@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -34,7 +35,7 @@ type Server struct {
 
 	// Active streams
 	streams map[string]chan StreamEvent
-	mu      sync.Mutex
+	mu      sync.RWMutex
 }
 
 type StreamEvent struct {
@@ -49,12 +50,9 @@ func NewServer(port int, orch *engine.Orchestrator, reg *registry.ModelRegistry,
 
 	// Security Headers
 	r.Use(func(c *gin.Context) {
-		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; img-src 'self' data: https://storage.googleapis.com; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+		c.Header("Content-Security-Policy", "default-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://storage.googleapis.com; object-src 'none'")
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("X-Frame-Options", "DENY")
-		c.Header("X-XSS-Protection", "1; mode=block")
-		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
-		c.Header("Permissions-Policy", "accelerometer=(), camera=(), microphone=(), payment=(), usb=(), magnetometer=(), gyroscope=(), geolocation=()")
 		c.Next()
 	})
 
@@ -81,7 +79,8 @@ func (s *Server) Start() error {
 func (s *Server) routes() {
 	staticFS, err := fs.Sub(content, "static")
 	if err != nil {
-		panic(err)
+		s.logger.Error("embedded static filesystem unavailable, fallback to disk", "error", err)
+		staticFS, _ = fs.Sub(os.DirFS("static"), ".")
 	}
 
 	s.router.StaticFS("/static", http.FS(staticFS))
@@ -151,7 +150,7 @@ func (s *Server) handleChat(c *gin.Context) {
 			close(ch)
 		}()
 
-		ctx := context.Background()
+		ctx := c.Request.Context()
 
 		err := s.orch.ExecuteTaskWithStreaming(
 			ctx,
@@ -187,12 +186,12 @@ func (s *Server) handleStream(c *gin.Context) {
 		return
 	}
 
-	s.mu.Lock()
+	s.mu.RLock()
 	ch, ok := s.streams[sessionID]
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid session_id"})
+	if !ok || ch == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "session not found or already completed"})
 		return
 	}
 
@@ -324,10 +323,33 @@ func (s *Server) handleTools(c *gin.Context) {
 }
 
 func (s *Server) handleAgents(c *gin.Context) {
-	out := []gin.H{
+	agents := []gin.H{
 		{"id": "agent-core", "status": "active", "type": "Orchestrator"},
 	}
-	c.JSON(http.StatusOK, gin.H{"agents": out})
+
+	// Add background agents if available
+	if s.orch != nil && s.orch.BackgroundAgents != nil {
+		for _, bg := range s.orch.BackgroundAgents.List() {
+			agents = append(agents, gin.H{
+				"id":     bg.ID,
+				"status": bg.Status,
+				"type":   "Background",
+			})
+		}
+	}
+
+	// Add discovered agents if available
+	if s.orch != nil && s.orch.Discovery != nil {
+		for _, node := range s.orch.Discovery.AgentTree() {
+			agents = append(agents, gin.H{
+				"id":     node.ID,
+				"status": node.Status,
+				"type":   "Discovered",
+			})
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"agents": agents})
 }
 
 func (s *Server) handleMemory(c *gin.Context) {

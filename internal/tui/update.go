@@ -728,7 +728,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.generating = false
 			m.planningActive = false
 			m.planningBuf.Reset()
-			m.planningIntent = ""
 			m.currentResponse.Reset()
 			m.streamChunkCount = 0
 			m.recalcViewportHeight()
@@ -1266,7 +1265,6 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.generating = false
 			m.planningActive = false
 			m.planningBuf.Reset()
-			m.planningIntent = ""
 			m.currentResponse.Reset()
 			m.streamChunkCount = 0
 			m.recalcViewportHeight()
@@ -1472,7 +1470,6 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.generating = false
 			m.planningActive = false
 			m.planningBuf.Reset()
-			m.planningIntent = ""
 			m.currentResponse.Reset()
 			m.streamChunkCount = 0
 			// Expand viewport now loading bar is gone, then sync content.

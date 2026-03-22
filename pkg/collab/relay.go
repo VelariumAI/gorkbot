@@ -5,11 +5,13 @@
 package collab
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"sync"
+	"time"
 )
 
 // EventType classifies a relay broadcast.
@@ -35,6 +37,8 @@ type Relay struct {
 	mu       sync.RWMutex
 	clients  map[chan Event]struct{}
 	listener net.Listener
+	httpSrv  *http.Server
+	doneCh   chan struct{}
 	port     int
 }
 
@@ -42,6 +46,7 @@ type Relay struct {
 func NewRelay(port int) *Relay {
 	return &Relay{
 		clients: make(map[chan Event]struct{}),
+		doneCh:  make(chan struct{}),
 		port:    port,
 	}
 }
@@ -60,19 +65,28 @@ func (r *Relay) Start() (string, error) {
 	r.listener = ln
 	r.port = ln.Addr().(*net.TCPAddr).Port
 
-	server := &http.Server{Handler: mux}
+	r.httpSrv = &http.Server{Handler: mux}
 	go func() {
-		_ = server.Serve(ln) // errors suppressed after Stop()
+		defer close(r.doneCh)
+		_ = r.httpSrv.Serve(ln) // errors suppressed after Stop()
 	}()
 
 	return fmt.Sprintf("http://localhost:%d/stream", r.port), nil
 }
 
-// Stop shuts down the relay server.
+// Stop shuts down the relay server gracefully.
 func (r *Relay) Stop() {
 	if r.listener != nil {
 		_ = r.listener.Close()
 	}
+	if r.httpSrv != nil {
+		// Graceful shutdown with 5 second timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = r.httpSrv.Shutdown(ctx)
+	}
+	// Wait for goroutine to finish
+	<-r.doneCh
 }
 
 // Port returns the actual port being listened on (useful when port=0).
