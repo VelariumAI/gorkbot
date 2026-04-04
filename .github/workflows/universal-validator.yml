@@ -24,6 +24,9 @@ jobs:
       - name: Public repository hygiene gate
         run: bash scripts/check_public_hygiene.sh
 
+      - name: Promotion manifest parity gate
+        run: bash scripts/check_promotion_manifest.sh
+
   # Multi-platform build validation
   cross-platform-build:
     name: Build - ${{ matrix.os }} (${{ matrix.arch }})

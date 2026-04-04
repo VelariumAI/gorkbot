@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SRC="${SRC:-/data/data/com.termux/files/home/project/gorky}"
-DST="${DST:-/data/data/com.termux/files/home/project/gorkbot}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SRC="${SRC:-${ROOT}}"
+DST="${DST:-${ROOT}}"
 ALLOWLIST_FILE="${ALLOWLIST_FILE:-${SRC}/configs/promotion-allowlist.txt}"
 
 fail() {
@@ -26,7 +27,7 @@ trap 'rm -f "$tmp_expected" "$tmp_actual" "$tmp_missing" "$tmp_unmanaged"' EXIT
 # Expected projected file set from source allowlist (tracked files only).
 for p in "${ALLOWLIST[@]}"; do
   if [[ "${p}" == */ ]]; then
-    git -C "${SRC}" ls-files "${p}*" >> "$tmp_expected" || true
+    git -C "${SRC}" ls-files "${p}**" >> "$tmp_expected" || true
   else
     git -C "${SRC}" ls-files "${p}" >> "$tmp_expected" || true
   fi
@@ -40,10 +41,14 @@ sort -u "$tmp_expected" -o "$tmp_expected"
 
 # Actual file set in destination under managed allowlist paths.
 for p in "${ALLOWLIST[@]}"; do
-  if [[ -d "${DST}/${p}" ]]; then
-    find "${DST}/${p}" -type f -print | sed "s#^${DST}/##" >> "$tmp_actual"
-  elif [[ -f "${DST}/${p}" ]]; then
-    printf '%s\n' "${p}" >> "$tmp_actual"
+  if [[ "${p}" == */ ]]; then
+    while IFS= read -r rel; do
+      [[ -e "${DST}/${rel}" ]] && printf '%s\n' "${rel}" >> "$tmp_actual"
+    done < <(git -C "${DST}" ls-files "${p}**" || true)
+  else
+    while IFS= read -r rel; do
+      [[ -e "${DST}/${rel}" ]] && printf '%s\n' "${rel}" >> "$tmp_actual"
+    done < <(git -C "${DST}" ls-files "${p}" || true)
   fi
 done
 sort -u "$tmp_actual" -o "$tmp_actual"

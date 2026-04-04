@@ -13,6 +13,9 @@ bash scripts/check_promotion_allowlist.sh
 echo "[release-check] public hygiene"
 bash scripts/check_public_hygiene.sh
 
+echo "[release-check] promotion manifest parity"
+bash scripts/check_promotion_manifest.sh
+
 echo "[release-check] lint promotion script"
 bash -n scripts/promote_to_public.sh
 
