@@ -1,20 +1,20 @@
 # Gorkbot Versioning
 
 ## Public Release Version
-1.2.0-beta
+1.6.0-rc
 
 ## Internal Development Version
-5.3.0
+6.2.0
 
 ## Release Notes
 
-### Public Version (1.2.0-beta)
-- **Status**: Beta - Feature-complete, architectural stability verified
+### Public Version (1.6.0-rc)
+- **Status**: Release Candidate - production hardening and promotion readiness
 - **Target Audience**: Advanced users, developers, early adopters
-- **Date**: March 20, 2026
+- **Date**: April 4, 2026
 
 ### Internal Versioning
-- Application: 5.3.0
+- Application: 6.2.0
 - SENSE: 1.9.0
 - SRE: 1.0.0
 - XSKILL: 1.0.0

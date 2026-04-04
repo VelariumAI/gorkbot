@@ -116,7 +116,12 @@ mcp_servers/
 orchestrator/
 plugins/
 server/
-scripts/
+scripts/*
+!scripts/
+!scripts/build_llm_bridge.sh
+!scripts/bootstrap_native_llm.sh
+!scripts/setup_wizard.sh
+!scripts/write_launcher.sh
 
 # Generated & dynamic tools
 pkg/tools/custom/
