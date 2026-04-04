@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // AccessibilityQueryTool queries the Android accessibility tree via Termux:API.
@@ -39,35 +40,51 @@ func (t *AccessibilityQueryTool) Parameters() json.RawMessage {
 }
 
 func (t *AccessibilityQueryTool) Execute(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	// Not implemented in standard Termux:API?
-	// Actually there is termux-accessibility-services? No.
-	// But `adb shell uiautomator dump` works if ADB is available.
-	// Or `termux-accessibility` if the user installed a specific plugin.
-	// Standard termux-api doesn't have accessibility query.
-	// The roadmap item says "(requires Termux:API)".
-	// Maybe it meant `termux-assist` or similar?
-	// Or maybe `adb shell input` + `screencap` is what was meant?
-	// But `accessibility_query` implies structured data.
+	if _, err := exec.LookPath("adb"); err != nil {
+		return &ToolResult{
+			Success: false,
+			Error:   "adb is not installed or not in PATH; install android-tools to use accessibility_query",
+		}, nil
+	}
 
-	// I will implement a placeholder that tries to use `adb shell uiautomator dump` via `adb_shell` if available,
-	// or returns an error suggesting installation.
-
-	// Actually, let's assume `adb` is available since `intent_broadcast` used `am`.
-	// `am` works on device without root/adb if in Termux? No, usually `am` requires shell permission or adb.
-	// Termux environment usually requires `adb` (via `android-tools`) and wireless debugging enabled.
-
-	// So I will use `adb shell uiautomator dump /sdcard/window_dump.xml && cat /sdcard/window_dump.xml`
+	packageFilter, _ := args["package"].(string)
+	packageFilter = strings.TrimSpace(packageFilter)
 
 	cmd := exec.CommandContext(ctx, "adb", "shell", "uiautomator", "dump", "/sdcard/window_dump.xml")
 	if err := cmd.Run(); err != nil {
-		return &ToolResult{Success: false, Error: fmt.Sprintf("Failed to dump UI: %v (Is ADB connected?)", err)}, nil
+		return &ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("failed to dump UI with adb: %v (is a device connected and authorized?)", err),
+		}, nil
 	}
 
 	cmdRead := exec.CommandContext(ctx, "adb", "shell", "cat", "/sdcard/window_dump.xml")
 	out, err := cmdRead.CombinedOutput()
 	if err != nil {
-		return &ToolResult{Success: false, Error: fmt.Sprintf("Failed to read UI dump: %v", err)}, nil
+		return &ToolResult{Success: false, Error: fmt.Sprintf("failed to read UI dump: %v", err)}, nil
 	}
 
-	return &ToolResult{Success: true, Output: string(out)}, nil
+	xml := string(out)
+	if packageFilter != "" {
+		needle := fmt.Sprintf(`package="%s"`, packageFilter)
+		if !strings.Contains(xml, needle) {
+			return &ToolResult{
+				Success: true,
+				Output:  fmt.Sprintf("No accessibility nodes found for package %q.", packageFilter),
+				Data: map[string]interface{}{
+					"package_filter": packageFilter,
+					"matched":        false,
+				},
+			}, nil
+		}
+	}
+
+	return &ToolResult{
+		Success: true,
+		Output:  xml,
+		Data: map[string]interface{}{
+			"package_filter": packageFilter,
+			"matched":        true,
+		},
+	}, nil
 }
