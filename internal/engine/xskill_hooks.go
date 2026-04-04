@@ -44,8 +44,14 @@ func (o *Orchestrator) InitXSkill(configDir string) bool {
 		return false
 	}
 
+	primary := o.Primary()
+	if primary == nil {
+		// Primary provider required for XSKILL initialization
+		o.Logger.Warn("XSKILL: primary provider not available, disabling")
+		return false
+	}
 	provider := &mutableProvider{
-		aiProvider: o.Primary,
+		aiProvider: primary,
 		embedder:   emb,
 	}
 

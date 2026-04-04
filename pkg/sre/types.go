@@ -8,10 +8,11 @@ import (
 // SREVersion is the semantic version of the Step-wise Reasoning Engine.
 //
 // History:
-//   1.0.0 — initial release (v5.2.0): CoS (Chain-of-Thought) engine with HYPOTHESIS/PRUNE/CONVERGE phases,
-//            GroundingExtractor (semantic fact extraction), AnchorLayer (working memory),
-//            EnsembleManager (multi-trajectory reasoning), CorrectionEngine (deviation detection),
-//            TUI integration with authoritative status line showing phase progress and SRE labels.
+//
+//	1.0.0 — initial release (v5.2.0): CoS (Chain-of-Thought) engine with HYPOTHESIS/PRUNE/CONVERGE phases,
+//	         GroundingExtractor (semantic fact extraction), AnchorLayer (working memory),
+//	         EnsembleManager (multi-trajectory reasoning), CorrectionEngine (deviation detection),
+//	         TUI integration with authoritative status line showing phase progress and SRE labels.
 const SREVersion = "1.0.0"
 
 // SREPhase is the current step-wise reasoning phase.

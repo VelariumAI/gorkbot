@@ -73,8 +73,16 @@ func NormalizeToolParams(toolName string, params map[string]interface{}) map[str
 
 	// "q" → "query" for web search tools
 	switch toolName {
-	case "web_search", "web_fetch", "http_request":
+	case "web_search", "web_fetch", "http_request", "browser_search":
 		rename("q", "query")
+	}
+
+	// Research tool param aliases
+	switch toolName {
+	case "browser_open":
+		rename("link", "url")
+	case "browser_find":
+		rename("search", "pattern")
 	}
 
 	// Universal: "src" → "source", "dest" → "destination"
@@ -115,6 +123,13 @@ func normalizeToolName(name string) string {
 	// skills_list aliases
 	case "skill_list", "list_skills", "list_skill":
 		return "skills_list"
+	// research tool aliases
+	case "research":
+		return "browser_search"
+	case "open_page":
+		return "browser_open"
+	case "find_in_page":
+		return "browser_find"
 	default:
 		return name
 	}

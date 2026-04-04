@@ -1,4 +1,3 @@
-// Package tools provides all tool implementations for Gorkbot.
 package tools
 
 import (

@@ -13,35 +13,37 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/sync/errgroup"
+	"github.com/velariumai/gorkbot/internal/engine/providers"
+	"github.com/velariumai/gorkbot/internal/events"
+	"github.com/velariumai/gorkbot/internal/observability"
 	"github.com/velariumai/gorkbot/internal/platform"
 	"github.com/velariumai/gorkbot/internal/xskill"
 	"github.com/velariumai/gorkbot/pkg/adaptive"
-	"github.com/velariumai/gorkbot/pkg/cache"
-	"github.com/velariumai/gorkbot/pkg/spark"
-	"github.com/velariumai/gorkbot/pkg/sre"
 	"github.com/velariumai/gorkbot/pkg/ai"
 	"github.com/velariumai/gorkbot/pkg/billing"
+	"github.com/velariumai/gorkbot/pkg/cache"
 	"github.com/velariumai/gorkbot/pkg/collab"
 	"github.com/velariumai/gorkbot/pkg/config"
-	"github.com/velariumai/gorkbot/pkg/discovery"
+	"github.com/velariumai/gorkbot/pkg/distributed"
 	"github.com/velariumai/gorkbot/pkg/hooks"
 	"github.com/velariumai/gorkbot/pkg/memory"
 	"github.com/velariumai/gorkbot/pkg/persist"
 	"github.com/velariumai/gorkbot/pkg/router"
+	"github.com/velariumai/gorkbot/pkg/selfimprove"
 	"github.com/velariumai/gorkbot/pkg/sense"
-	"github.com/velariumai/gorkbot/pkg/skills"
 	"github.com/velariumai/gorkbot/pkg/session"
+	"github.com/velariumai/gorkbot/pkg/skills"
+	"github.com/velariumai/gorkbot/pkg/spark"
+	"github.com/velariumai/gorkbot/pkg/sre"
 	"github.com/velariumai/gorkbot/pkg/subagents"
 	"github.com/velariumai/gorkbot/pkg/tools"
 	"github.com/velariumai/gorkbot/pkg/tui"
 	"github.com/velariumai/gorkbot/pkg/vectorstore"
+	"golang.org/x/sync/errgroup"
 )
 
 // Orchestrator manages the interaction between the user and the AI providers.
 type Orchestrator struct {
-	Primary             ai.AIProvider
-	Consultant          ai.AIProvider
 	Registry            *tools.Registry
 	Logger              *slog.Logger
 	EnableWatchdog      bool
@@ -50,6 +52,12 @@ type Orchestrator struct {
 	Stylist             *tui.Stylist
 	PersistStore        *persist.Store
 	SessionID           string
+
+	// ── Provider Coordination ────────────────────────────────────────────────
+	// ProviderCoord manages AI provider selection, failover, and health monitoring.
+	// It replaces scattered provider logic with a focused coordinator.
+	// Wired by NewOrchestrator; provides Primary/Consultant via accessor methods.
+	ProviderCoord *providers.ProviderCoordinator
 
 	// ── SENSE components ────────────────────────────────────────────────────
 	LIE          *sense.LIEEvaluator
@@ -90,6 +98,8 @@ type Orchestrator struct {
 	Dispatcher *tools.Dispatcher
 	// Exporter handles conversation export.
 	Exporter *session.Exporter
+	// AppStateManager provides access to persisted user preferences (HITL settings, etc).
+	AppStateManager interface{} // Will be *config.AppStateManager
 
 	// ThinkingBudget, when > 0, enables extended thinking on providers that
 	// support it (Anthropic claude-3-7+/claude-4, xAI grok-3-mini).
@@ -116,7 +126,8 @@ type Orchestrator struct {
 	cancelMu   sync.Mutex
 	cancelFunc context.CancelFunc // Set during generation; Interrupt() calls it.
 
-	// primaryModelName is stored for cost/context reports.
+	// primaryModelName is cached for cost/context reports.
+	// Updated via provider coordinator callbacks.
 	primaryModelName string
 
 	// Tracer writes a newline-delimited JSON execution trace (--trace flag).
@@ -128,10 +139,6 @@ type Orchestrator struct {
 
 	// Feedback records routing outcomes and seeds the AdaptiveRouter.
 	Feedback *router.FeedbackManager
-
-	// Discovery polls xAI and Gemini for live model lists; used by the
-	// Cloud Brains TUI tab and spawn_sub_agent depth-aware routing.
-	Discovery *discovery.Manager
 
 	// Intelligence bundles the ARC Router and MEL learning system.
 	// Initialized after construction via InitIntelligence().
@@ -193,6 +200,23 @@ type Orchestrator struct {
 	// project memory (Hot / Specialist / Cold) with Truth Sentry drift detection.
 	// Initialized by InitEnhancements() → InitCCI().
 	CCI *adaptive.CCILayer
+
+	// Observability hub tracks 6 metric families for monitoring and observability.
+	// Records provider latency, tool execution, failures, approval outcomes,
+	// memory quality, and self-improvement cycle metrics. Exported as Prometheus format.
+	Observability *observability.ObservabilityHub
+
+	// eventBus is the internal event bus for coordinator communication.
+	// Initialized in NewOrchestrator; can be wrapped by distributedBus for multi-node coordination.
+	eventBus *events.Bus
+
+	// distributedBus extends the local event bus with remote node capabilities (optional).
+	// Nil when running in single-node mode. Initialized via InitDistributedBus().
+	distributedBus *distributed.DistributedBus
+
+	// memoryCoordinator manages memory queries and compression via the event bus (optional).
+	// Nil when memory coordination is not needed. Initialized via InitMemoryCoordinator().
+	memoryCoordinator *memory.MemoryCoordinator
 
 	// CompressionPipe compresses history when token count exceeds its threshold.
 	// Wired in main.go after persistStore and Compressor are ready.
@@ -291,13 +315,22 @@ type Orchestrator struct {
 	// Nil until InitSPARK succeeds.
 	SPARK *spark.SPARK
 
+	// FreeWillEngine enables autonomous evolution proposals.
+	// Wired by InitFreeWill(); nil when feature is disabled.
+	FreeWillEngine *FreeWillEngine
+
+	// SIDriver coordinates autonomous self-improvement via multi-signal drive.
+	// Wired by InitSelfImprove(); nil until explicitly initialized.
+	SIDriver *selfimprove.Driver
+
+	// siNotifyCallback sends SI status messages to the TUI.
+	siNotifyCallback func(string)
+
+	// researchEngine provides web research capabilities for SI and other subsystems.
+	researchEngine interface{} // Will be *research.Engine
+
 	// SRE — Step-wise Reasoning Engine
 	SRE *sre.Coordinator
-
-	// CascadeOrder overrides the default provider failover sequence.
-	// nil or empty means use the hardcoded providerPriority default in fallback.go.
-	// Set from AppState.CascadeOrder in main.go after AppState restore.
-	CascadeOrder []string
 
 	// sandboxSanitizer stores the InputSanitizer when the sandbox is bypassed
 	// so it can be restored by ToggleSandbox(). Nil when sandbox is active.
@@ -305,12 +338,12 @@ type Orchestrator struct {
 }
 
 // NewOrchestrator initializes the orchestration engine with SENSE components.
-func NewOrchestrator(primary, consultant ai.AIProvider, registry *tools.Registry, logger *slog.Logger, enableWatchdog bool) *Orchestrator {
+// The providerCoord must not be nil and should be pre-initialized with primary and consultant providers.
+func NewOrchestrator(providerCoord *providers.ProviderCoordinator, registry *tools.Registry, logger *slog.Logger, enableWatchdog bool) *Orchestrator {
 	ctx, cancel := context.WithCancelCause(context.Background())
 
 	o := &Orchestrator{
-		Primary:             primary,
-		Consultant:          consultant,
+		ProviderCoord:       providerCoord,
 		Registry:            registry,
 		Logger:              logger,
 		EnableWatchdog:      enableWatchdog,
@@ -332,6 +365,10 @@ func NewOrchestrator(primary, consultant ai.AIProvider, registry *tools.Registry
 		thinkingCallback: atomic.Value{},
 		statusCallback:   atomic.Value{},
 	}
+
+	// Get providers from coordinator
+	primary := providerCoord.Primary()
+	consultant := providerCoord.Consultant()
 
 	// Stabilizer uses Consultant for task-alignment scoring when available.
 	var stabGen sense.TextGenerator
@@ -355,6 +392,14 @@ func NewOrchestrator(primary, consultant ai.AIProvider, registry *tools.Registry
 	// Ralph Loop — self-referential retry (oh-my-opencode inspired).
 	o.RalphLoop = NewRalphLoop(DefaultRalphConfig())
 
+	// Observability hub for 6 metric families (provider latency, tool execution,
+	// failures, approval outcomes, memory quality, SI outcomes).
+	o.Observability = observability.NewObservabilityHub(logger)
+
+	// Event bus for coordinator communication (local, single-node mode).
+	// Can be wrapped with distributed.DistributedBus for multi-node coordination via InitDistributedBus().
+	o.eventBus = events.NewBus()
+
 	// Three-tier context injector (oh-my-opencode inspired).
 	o.ContextInjector = NewContextInjector()
 
@@ -371,11 +416,68 @@ func NewOrchestrator(primary, consultant ai.AIProvider, registry *tools.Registry
 
 	o.Crystallizer = NewCrystallizer(o)
 
+	// Initialize primaryModelName from current primary provider
 	if primary != nil {
 		o.primaryModelName = primary.Name()
 	}
 
+	// Wire provider coordinator callbacks to update dependent systems
+	// These are called when providers change to ensure atomicity
+	providerCoord.SetCallbacks(
+		// onContextChange: Update context manager token limits
+		func(maxTokens int) {
+			if o.ContextMgr != nil {
+				o.ContextMgr.mu.Lock()
+				o.ContextMgr.maxTokens = maxTokens
+				o.ContextMgr.mu.Unlock()
+			}
+		},
+		// onProviderSwitch: Update registry and cache model name
+		func(prov ai.AIProvider) {
+			if prov != nil {
+				meta := prov.GetMetadata()
+				o.primaryModelName = meta.Name
+			}
+			if o.Registry != nil {
+				o.Registry.SetAIProvider(prov)
+			}
+		},
+		// onCompressorChange: Keep compressor synced with primary provider
+		func(prov ai.AIProvider) {
+			if prov != nil {
+				o.Compressor = sense.NewCompressor(prov)
+			}
+		},
+		// onStabilizerReset: Reinitialize stabilizer when consultant changes
+		func() {
+			var stabGen sense.TextGenerator
+			if consultant := providerCoord.Consultant(); consultant != nil {
+				stabGen = consultant
+			}
+			o.Stabilizer = sense.NewStabilizer(stabGen)
+		},
+	)
+
+	// Register provider coordinator event handlers
+	o.registerProviderCoordinatorHandlers()
+
 	return o
+}
+
+// Primary returns the current primary AI provider (convenience accessor).
+func (o *Orchestrator) Primary() ai.AIProvider {
+	if o.ProviderCoord == nil {
+		return nil
+	}
+	return o.ProviderCoord.Primary()
+}
+
+// Consultant returns the current consultant (secondary) AI provider (convenience accessor).
+func (o *Orchestrator) Consultant() ai.AIProvider {
+	if o.ProviderCoord == nil {
+		return nil
+	}
+	return o.ProviderCoord.Consultant()
 }
 
 // SetThinkingCallback sets the callback for thinking block tokens (lock-free).
@@ -443,8 +545,13 @@ func (o *Orchestrator) InitEnhancements(configDir, cwd string) {
 	// ── RoutingTable: pattern-based agent routing fallback ────────────────
 	o.RoutingTable = adaptive.NewRoutingTable()
 
-	// ── PromptBuilder: structured five-layer prompt assembly ─────────────
+	// ── PromptBuilder: structured multi-layer prompt assembly ─────────────
 	o.PromptBuilder = NewPromptBuilder()
+	// Add intelligent tool suppression layer to prevent unsolicited diagnostic tool calls
+	o.PromptBuilder.AddLayer(&ToolSuppressionLayer{
+		DetectDiagnosticQuery: true,
+		// UserQuery will be set dynamically before each Build() call
+	})
 
 	o.Logger.Info("Enhanced systems initialized",
 		"hooks_dir", o.Hooks.HooksDir(),
@@ -499,10 +606,12 @@ func (o *Orchestrator) InitCompanions(configDir, geminiKey, geminiModel string) 
 		o.CacheAdvisor = advisor
 
 		// Wire Grok conv-id into the GrokProvider if it is the primary.
-		if grokProv, ok := o.Primary.(interface{ SetConvID(string) }); ok {
-			hints := advisor.Advise("grok", "", "", nil)
-			if hints.GrokConvID != "" {
-				grokProv.SetConvID(hints.GrokConvID)
+		if primary := o.Primary(); primary != nil {
+			if grokProv, ok := primary.(interface{ SetConvID(string) }); ok {
+				hints := advisor.Advise("grok", "", "", nil)
+				if hints.GrokConvID != "" {
+					grokProv.SetConvID(hints.GrokConvID)
+				}
 			}
 		}
 		o.Logger.Info("CacheAdvisor ready")
@@ -576,12 +685,17 @@ func (o *Orchestrator) SetCompressorGenerator(gen sense.TextGenerator) {
 // SetCascadeOrder updates the provider failover order at runtime.
 // Pass nil to restore the default hardcoded order.
 func (o *Orchestrator) SetCascadeOrder(order []string) {
-	o.CascadeOrder = order
+	if o.ProviderCoord != nil {
+		o.ProviderCoord.SetCascadeOrder(order)
+	}
 }
 
 // GetCascadeOrder returns the current effective cascade order.
 func (o *Orchestrator) GetCascadeOrder() []string {
-	return o.effectiveCascade()
+	if o.ProviderCoord == nil {
+		return nil
+	}
+	return o.ProviderCoord.GetCascadeOrder()
 }
 
 // ToggleDebug flips the DebugMode flag and returns the new value.
@@ -713,8 +827,8 @@ func (o *Orchestrator) GetCostReport() string {
 		return "Cost tracking not initialized."
 	}
 	consultant := ""
-	if o.Consultant != nil {
-		consultant = o.Consultant.Name()
+	if c := o.Consultant(); c != nil {
+		consultant = c.Name()
 	}
 	return o.ContextMgr.CostReport(o.primaryModelName, consultant)
 }
@@ -975,9 +1089,11 @@ func (o *Orchestrator) GetHistory() *ai.ConversationHistory {
 
 func (o *Orchestrator) printWatchdogState(stage string, prompt string) {
 	fmt.Fprintf(os.Stderr, "\n[WATCHDOG] Stage: %s\n", stage)
-	fmt.Fprintf(os.Stderr, "[WATCHDOG] Primary Provider: %s\n", o.Primary.Name())
-	if o.Consultant != nil {
-		fmt.Fprintf(os.Stderr, "[WATCHDOG] Consultant Provider: %s\n", o.Consultant.Name())
+	if p := o.Primary(); p != nil {
+		fmt.Fprintf(os.Stderr, "[WATCHDOG] Primary Provider: %s\n", p.Name())
+	}
+	if c := o.Consultant(); c != nil {
+		fmt.Fprintf(os.Stderr, "[WATCHDOG] Consultant Provider: %s\n", c.Name())
 	}
 	fmt.Fprintf(os.Stderr, "[WATCHDOG] Prompt Length: %d\n", len(prompt))
 	fmt.Fprintf(os.Stderr, "[WATCHDOG] Prompt Preview: %.50s...\n\n", prompt)
@@ -1062,7 +1178,8 @@ func (o *Orchestrator) AnalyzeAgency(ctx context.Context, lastResponse string) (
 	}
 
 	// ── 3. Consultant Check (escalation path) ────────────────────────────────
-	if o.Consultant == nil {
+	consultant := o.Consultant()
+	if consultant == nil {
 		return injected, nil
 	}
 
@@ -1086,7 +1203,7 @@ Determine if the agent:
   Example: "SYSTEM_ADVICE: You failed to read the file. Use create_tool to build a file reader."
 `, lastResponse)
 
-	advice, err := o.Consultant.Generate(ctx, prompt)
+	advice, err := consultant.Generate(ctx, prompt)
 	if err != nil {
 		o.Logger.Warn("Consultant agency check failed", "error", err)
 		return injected, nil
@@ -1187,23 +1304,25 @@ func (o *Orchestrator) ExecuteTaskWithTools(ctx context.Context, prompt string, 
 	}
 
 	var consultationAdvice string
-	if needsConsult && o.Consultant != nil {
-		o.Logger.Info("Triggering Specialty Consult with Gemini...", "consultant", o.Consultant.Name())
+	if needsConsult {
+		if consultant := o.Consultant(); consultant != nil {
+			o.Logger.Info("Triggering Specialty Consult with Gemini...", "consultant", consultant.Name())
 
-		if o.EnableWatchdog {
-			o.printWatchdogState("Consultation", prompt)
-		}
+			if o.EnableWatchdog {
+				o.printWatchdogState("Consultation", prompt)
+			}
 
-		advice, err := o.Consultant.Generate(ctx, prompt)
-		if err != nil {
-			o.Logger.Error("Consultation failed", "error", err)
-			consultationAdvice = ""
-		} else if advice == "" {
-			o.Logger.Warn("Consultant returned empty response")
-			consultationAdvice = ""
-		} else {
-			consultationAdvice = advice
-			o.Logger.Info("Consultation received", "length", len(advice))
+			advice, err := consultant.Generate(ctx, prompt)
+			if err != nil {
+				o.Logger.Error("Consultation failed", "error", err)
+				consultationAdvice = ""
+			} else if advice == "" {
+				o.Logger.Warn("Consultant returned empty response")
+				consultationAdvice = ""
+			} else {
+				consultationAdvice = advice
+				o.Logger.Info("Consultation received", "length", len(advice))
+			}
 		}
 	}
 
@@ -1213,9 +1332,11 @@ func (o *Orchestrator) ExecuteTaskWithTools(ctx context.Context, prompt string, 
 	// Detection must happen BEFORE history injection so the correct system prompt is used.
 	var nativeCaller ai.NativeToolCaller
 	var grokTools []ai.GrokToolSchema
-	if ntc, ok := o.Primary.(ai.NativeToolCaller); ok {
-		nativeCaller = ntc
-		grokTools = o.buildGrokTools()
+	if primary := o.Primary(); primary != nil {
+		if ntc, ok := primary.(ai.NativeToolCaller); ok {
+			nativeCaller = ntc
+			grokTools = o.buildGrokTools()
+		}
 	}
 	useNative := nativeCaller != nil && len(grokTools) > 0
 
@@ -1319,14 +1440,18 @@ func (o *Orchestrator) ExecuteTaskWithTools(ctx context.Context, prompt string, 
 		// updateContextMgr pulls the last-call usage from the provider (if supported)
 		// and records the outcome for model confidence tracking.
 		updateContextMgr := func(failed bool) {
-			modelID := o.Primary.GetMetadata().ID
+			primary := o.Primary()
+			if primary == nil {
+				return
+			}
+			modelID := primary.GetMetadata().ID
 			// EWMA confidence tracking
 			if globalProvMgr != nil {
 				globalProvMgr.RecordOutcome(modelID, failed)
 			}
-			if ur, ok := o.Primary.(ai.UsageReporter); ok {
+			if ur, ok := primary.(ai.UsageReporter); ok {
 				u := ur.LastUsage()
-				provID := string(o.Primary.ID())
+				provID := string(primary.ID())
 				if o.ContextMgr != nil {
 					o.ContextMgr.UpdateFromUsage(TokenUsage{
 						InputTokens:  u.PromptTokens,
@@ -1336,7 +1461,13 @@ func (o *Orchestrator) ExecuteTaskWithTools(ctx context.Context, prompt string, 
 					})
 				}
 				if o.Billing != nil {
+					cost := o.Billing.CalculateCost(provID, modelID, u.PromptTokens, u.CompletionTokens)
 					o.Billing.TrackTurn(provID, modelID, u.PromptTokens, u.CompletionTokens)
+
+					// Record cost metric
+					if o.Observability != nil {
+						o.Observability.RecordCost(provID, modelID, u.PromptTokens, u.CompletionTokens, cost)
+					}
 				}
 			}
 		}
@@ -1417,7 +1548,11 @@ func (o *Orchestrator) ExecuteTaskWithTools(ctx context.Context, prompt string, 
 
 		} else {
 			// ── Text-based fallback path ──────────────────────────────────────
-			response, err := o.Primary.GenerateWithHistory(ctx, o.ConversationHistory)
+			primary := o.Primary()
+			if primary == nil {
+				return "", fmt.Errorf("no primary provider available")
+			}
+			response, err := primary.GenerateWithHistory(ctx, o.ConversationHistory)
 			if err != nil {
 				updateContextMgr(true)
 				o.Logger.Error("Primary execution failed", "error", err, "turn", turn+1)
@@ -1571,32 +1706,24 @@ func (o *Orchestrator) getToolContextInternal(useNative bool) string {
 
 	var sb strings.Builder
 	sb.WriteString("SYSTEM INSTRUCTIONS:\n")
-	sb.WriteString(fmt.Sprintf("You are Gorkbot v%s, an intelligent AI assistant designed by Todd Eddings (Velarium AI). ", platform.Version) +
-		"Gorkbot is an independent project — not affiliated with xAI's Grok or Google's Gemini — " +
-		"and works with any OpenAI-compatible API endpoint.\n")
+	sb.WriteString(fmt.Sprintf("You are Gorkbot v%s, built by Todd Eddings (Velarium AI). You are a capable, direct collaborator — not a service bot. ", platform.Version) +
+		"You help the user think, build, and debug.\n")
 	sb.WriteString(fmt.Sprintf("Environment: %s\n", osInfo))
 	sb.WriteString("Your goal is to assist the user by executing tasks, answering questions, and providing insights.\n\n")
 
 	sb.WriteString("### CRITICAL GUIDELINES:\n")
-	sb.WriteString("1. **Reason First**: Before taking action, briefly explain your reasoning. Why are you choosing a specific tool?\n")
-	sb.WriteString("2. **Consult Specialist**: For complex planning, reasoning, or if you are unsure, use the `consultation` tool to get expert advice.\n")
-	sb.WriteString("3. **Verify Facts**: If asked for current events or specific data, use `web_search` or `web_fetch`. Do not hallucinate.\n")
-	sb.WriteString("4. **Tool Usage**: Use tools only when necessary. If a simple answer suffices, just answer.\n")
+	sb.WriteString("1. Verify facts with `web_search` or `web_fetch`. Do not hallucinate about current events or data.\n")
+	sb.WriteString("2. Use tools only when necessary. If a simple answer suffices, just answer.\n")
 	if useNative {
-		sb.WriteString("5. **Tool Invocation**: Call tools using the structured function-calling interface provided by the API. Do NOT output raw JSON blocks in your response text.\n")
+		sb.WriteString("3. Call tools using the structured function-calling interface provided by the API. Do NOT output raw JSON blocks in your response text.\n")
 	} else {
-		sb.WriteString("5. **Output Format**: When invoking a tool, always start with a brief plain-language explanation of what you are doing and why. Then include the JSON tool block. After receiving tool results, summarize the outcome in natural language — do NOT repeat the raw JSON or results verbatim in your reply.\n")
+		sb.WriteString("3. When invoking a tool, start with a brief plain-language explanation. After tool results, summarize the outcome naturally — do NOT repeat raw JSON verbatim.\n")
 	}
-	sb.WriteString("6. **Preview Destructive Actions**: Before running destructive shell commands or modifying production systems, use `code2world` to preview the action.\n")
-	sb.WriteString("7. **Record Preferences**: When you learn a user preference or a reliable tool pattern, use `record_engram` to remember it for future sessions.\n\n")
-	sb.WriteString("8. **Parallel Agent Orchestration**: For complex coding tasks, DO NOT attempt to do everything yourself sequentially. Instead, spawn specialized agents in parallel (e.g., 'plan', 'frontend-styling-expert', 'full-stack-developer', 'code-reviewer', 'test-engineer') to work efficiently. Use `spawn_agent` to launch them and `check_agent_status` to monitor their progress.\n\n")
-	sb.WriteString("9. **Self-Knowledge Grounding (CRITICAL)**: You CANNOT know your own runtime state from training data. Before making ANY claim about the current date/time, your version, which providers or models are active, whether semantic embedding is running, build variant, or any other live system fact — you MUST call `gorkbot_status` first. Never assert these facts from memory or inference. Treat unverified self-knowledge as hallucination.\n\n")
+	sb.WriteString("4. Preview destructive actions before running them. Do not blindly execute shell commands.\n")
+	sb.WriteString("5. You CANNOT know your runtime state from training data alone. Before claiming anything about your version, active providers, or system facts — call `gorkbot_status` first. Treat unverified self-knowledge as hallucination.\n\n")
 
-	sb.WriteString("### TOOL USAGE SOP (STRICT ENFORCEMENT):\n")
-	sb.WriteString("1. **CHECK AVAILABLE TOOLS FIRST**: Before even considering creating a new tool, you MUST exhaustively review the 'AVAILABLE TOOLS' list below.\n")
-	sb.WriteString("2. **NO DUPLICATES**: Do NOT create a tool if a similar one exists. For example, do not create `read_file_content` if `read_file` exists. Do not create `run_bash` if `bash` exists.\n")
-	sb.WriteString("3. **REUSE**: If an existing tool can perform the task (e.g., using `bash` to run a custom script), USE IT instead of creating a new dedicated tool.\n")
-	sb.WriteString("4. **JUSTIFY CREATION**: You may ONLY create a new tool if strictly necessary and NO existing tool can accomplish the goal. In your reasoning, you must explicitly state: 'I checked the tool list and tool X is missing/insufficient because...'.\n\n")
+	sb.WriteString("### TOOL USAGE:\n")
+	sb.WriteString("Before creating a new tool, exhaustively check the available tools below — reuse existing tools rather than creating duplicates. Only create a new tool if strictly necessary and no existing tool can accomplish the goal.\n\n")
 
 	// Inject environment snapshot so the AI knows exactly what is installed
 	// before it sees the tool list.  This prevents wasted tool calls against
@@ -1648,71 +1775,31 @@ func (o *Orchestrator) getToolContextInternal(useNative bool) string {
 		}
 	}
 
-	// Inject available skills index (name + description only — ~50 chars/skill).
-	// Full skill content is loaded on demand via skill_view tool.
 	if o.SkillLoader != nil {
-		skillDefs := o.SkillLoader.LoadAll()
-		if len(skillDefs) > 0 {
-			sb.WriteString("\n<available_skills>\n")
-			for _, sd := range skillDefs {
-				sb.WriteString("• ")
-				sb.WriteString(sd.Name)
-				if sd.Description != "" {
-					sb.WriteString(": ")
-					desc := sd.Description
-					if len(desc) > 80 {
-						desc = desc[:77] + "..."
-					}
-					sb.WriteString(desc)
-				}
-				sb.WriteString("\n")
-			}
-			sb.WriteString("</available_skills>\n")
-		}
+		sb.WriteString(o.SkillLoader.FormatIndexForPrompt())
 	}
 
-	// ### SELF-IMPROVEMENT DIRECTIVES (mandatory)
+	// ### SELF-IMPROVEMENT DIRECTIVES
 	sb.WriteString(`
-### SELF-IMPROVEMENT DIRECTIVES (mandatory):
+### Self-Improvement Directives:
 
-**FACT RECORDING**: When you discover something non-obvious — a tool quirk, environment
-detail, configuration fact, or solution to a problem that took effort — call ` + "`record_fact`" + `
-immediately. Do NOT wait to be asked. Future sessions reload this. Prefer ` + "`record_fact`" + `
-over repeating the same discovery.
+When you discover something non-obvious — a tool quirk, environment detail, configuration fact, or solution — call ` + "`record_fact`" + ` immediately. Future sessions reload this.
 
-**USER MODELLING**: When the user expresses a preference, corrects an assumption, reveals
-their workflow, or you observe a repeating pattern — call ` + "`record_user_pref`" + `. Build the
-model incrementally. Never ask the user to re-explain something you've been told before.
+When the user expresses a preference, corrects an assumption, or reveals their workflow, call ` + "`record_user_pref`" + `. Build the model incrementally and never ask the user to re-explain something you've been told before.
 
-**SKILL CREATION**: After completing a multi-step task (5+ tool calls, a complex workflow,
-a tricky fix) — call ` + "`skill_create`" + ` with the procedure. Skills are reused across ALL future
-sessions. Prefer skills for reusable procedures; prefer ` + "`record_fact`" + ` for one-off facts.
+After completing a multi-step task (5+ tool calls, complex workflow, tricky fix), call ` + "`skill_create`" + ` with the procedure. Skills are reused across all future sessions.
 
-**SKILL SCANNING**: Before starting any task, scan ` + "`<available_skills>`" + ` above. If a skill
-clearly matches (even partially), call ` + "`skill_view(name)`" + ` to load it before proceeding.
-Following a skill prevents repeating prior mistakes.
+Before starting any task, scan ` + "`<available_skills>`" + ` above. If a skill matches (even partially), call ` + "`skill_view(name)`" + ` to load it first. Following a skill prevents repeating prior mistakes.
 
-**PAST RECALL**: When the user references prior work, or you suspect a past session holds
-relevant context, call ` + "`session_search(query)`" + ` BEFORE asking the user to repeat themselves.
-Search proactively — do not make the user remind you of your own history.
+When the user references prior work or you suspect a past session holds relevant context, call ` + "`session_search(query)`" + ` before asking the user to repeat themselves. Search proactively.
 
-**SENSE SELF-CHECK**: After a tool fails unexpectedly, call ` + "`sense_check`" + ` to see if a
-learned correction heuristic already covers this failure class. If not, use ` + "`sense_evolve`" + `
-to create one.
+After a tool fails unexpectedly, call ` + "`sense_check`" + ` to see if a learned correction heuristic already covers this failure class. If not, use ` + "`sense_evolve`" + ` to create one.
 
-**PRIVILEGE-AWARE EXECUTION**: Never embed ` + "`sudo`" + ` or ` + "`su -c`" + ` inside a ` + "`bash`" + ` command.
-Instead, use ` + "`privileged_execute`" + ` — it probes the environment (root/su/sudo) and routes
-automatically. The ` + "`Privilege`" + ` line in GORKBOT ENVIRONMENT above tells you what is available.
+Never embed ` + "`sudo`" + ` or ` + "`su -c`" + ` inside a ` + "`bash`" + ` command. Instead, use ` + "`privileged_execute`" + ` — it probes the environment and routes automatically.
 
-**STRUCTURED OUTPUT**: When you will inspect, filter, compare, or chain a command's output,
-use ` + "`structured_bash`" + ` instead of ` + "`bash`" + `. It auto-parses stdout into typed JSON
-(` + "`data_type`" + `: json/tabular/keyvalue/raw) with a 5 MB memory cap. Use ` + "`bash`" + ` for
-fire-and-forget commands; use ` + "`structured_bash`" + ` when the result feeds into reasoning.
+When you will inspect, filter, compare, or chain a command's output, use ` + "`structured_bash`" + ` instead of ` + "`bash`" + `. It auto-parses stdout into typed JSON. Use ` + "`bash`" + ` for fire-and-forget commands.
 
-**USE SENSE EFFICIENTLY**: Always call ` + "`sense_discovery`" + ` with ` + "`compact=true`" + ` for routine
-tool lookup — this omits full JSON schemas and keeps output ~1.5k tokens. Use
-` + "`compact=false, category=X`" + ` only when you need the full parameter schema for a specific
-category. Calling ` + "`sense_discovery`" + ` without ` + "`compact=true`" + ` adds ~22,000 tokens to context unnecessarily.
+Always call ` + "`sense_discovery`" + ` with ` + "`compact=true`" + ` for routine tool lookup. Use ` + "`compact=false, category=X`" + ` only when you need the full parameter schema.
 
 `)
 
@@ -1755,14 +1842,14 @@ func (o *Orchestrator) buildGrokTools() []ai.GrokToolSchema {
 //
 // Returns "" when all sources are empty so no empty system messages are injected.
 func (o *Orchestrator) buildMemoryContext(prompt string) string {
-	var parts []string
+	var rawParts []string
 
 	// 1. AgeMem: cross-tier query-relevant facts. FormatRelevant searches both
 	//    STM (in-session, hot/warm) and LTM (cross-session, cold/persistent)
 	//    using keyword overlap × priority × recency scoring.
 	if o.AgeMem != nil {
 		if ctx := o.AgeMem.FormatRelevant(prompt, 600); ctx != "" {
-			parts = append(parts, "### Remembered Context (AgeMem):\n"+ctx)
+			rawParts = append(rawParts, "### Remembered Context (AgeMem):\n"+ctx)
 		}
 	}
 
@@ -1770,7 +1857,7 @@ func (o *Orchestrator) buildMemoryContext(prompt string) string {
 	//    Persisted to LTM unconditionally so they survive across sessions.
 	if o.Engrams != nil {
 		if ctx := o.Engrams.FormatAsContext(prompt); ctx != "" {
-			parts = append(parts, ctx)
+			rawParts = append(rawParts, ctx)
 		}
 	}
 
@@ -1778,14 +1865,15 @@ func (o *Orchestrator) buildMemoryContext(prompt string) string {
 	//    BifurcationAnalyzer. Scored by Jaccard × confidence × log(UseCount).
 	if o.Intelligence != nil {
 		if ctx := o.Intelligence.HeuristicContext(prompt); ctx != "" {
-			parts = append(parts, ctx)
+			rawParts = append(rawParts, ctx)
 		}
 	}
 
-	if len(parts) == 0 {
+	pruned := pruneMemoryParts(rawParts, maxMemoryTokens)
+	if len(pruned) == 0 {
 		return ""
 	}
-	return "[[MEMORY]]\n" + strings.Join(parts, "\n") + "\n[[/MEMORY]]"
+	return "[[MEMORY]]\n" + strings.Join(pruned, "\n") + "\n[[/MEMORY]]"
 }
 
 // ExecuteTool executes a tool request with permission checking and SENSE HITL gating.
@@ -1891,6 +1979,25 @@ func (o *Orchestrator) ExecuteTool(ctx context.Context, req tools.ToolRequest) (
 	}
 
 	proceed, notes := o.GateToolExecution(ctx, req, o.HITLGuard, o.HITLCallback, aiReasoning)
+
+	// Record approval outcome metric
+	if o.Observability != nil && o.HITLGuard != nil && o.HITLGuard.IsHighStakes(req.ToolName, req.Parameters) {
+		// Determine risk level based on tool characteristics
+		riskLevel := "medium" // default
+		if req.ToolName == "bash" || req.ToolName == "create_tool" || req.ToolName == "modify_tool" {
+			riskLevel = "high"
+		} else if req.ToolName == "read_file" || req.ToolName == "list_directory" {
+			riskLevel = "low"
+		}
+
+		// Record outcome
+		outcome := "approved"
+		if !proceed {
+			outcome = "denied"
+		}
+		o.Observability.RecordApprovalOutcome(riskLevel, outcome)
+	}
+
 	if !proceed {
 		reason := "Execution blocked by HITL guard"
 		if notes != "" {
@@ -1927,6 +2034,11 @@ func (o *Orchestrator) ExecuteTool(ctx context.Context, req tools.ToolRequest) (
 		ctxWithOrchestrator = tools.BackgroundSpawnerToContext(ctxWithOrchestrator, o)
 	}
 
+	// Add observability hub to context for metric recording
+	if o.Observability != nil {
+		ctxWithOrchestrator = context.WithValue(ctxWithOrchestrator, tools.ObservabilityContextKey(), o.Observability)
+	}
+
 	toolStart := time.Now()
 	result, err := o.Registry.Execute(ctxWithOrchestrator, &req)
 	toolElapsed := time.Since(toolStart)
@@ -1939,6 +2051,15 @@ func (o *Orchestrator) ExecuteTool(ctx context.Context, req tools.ToolRequest) (
 	// ── Enrich failed results with structured recovery hints ─────────────────
 	if result != nil && !result.Success {
 		tools.EnrichResult(result, req.ToolName)
+
+		// Record failure metric
+		if o.Observability != nil {
+			errMsg := result.Error
+			if errMsg == "" && err != nil {
+				errMsg = err.Error()
+			}
+			o.Observability.RecordFailure("tool_error", errMsg)
+		}
 	}
 
 	// ── CCI Gap Detection ─────────────────────────────────────────────────────
@@ -2112,7 +2233,7 @@ func (o *Orchestrator) SpawnFromTool(ctx context.Context, label, prompt, model s
 	if o.BackgroundAgents == nil {
 		return "", fmt.Errorf("background agent manager not initialised")
 	}
-	provider := o.Primary
+	provider := o.Primary()
 	if provider == nil {
 		return "", fmt.Errorf("no primary AI provider available")
 	}
@@ -2259,7 +2380,8 @@ func (o *Orchestrator) SaveTrajectory(ctx context.Context, success bool) {
 // the response text. It is used by the MCP sampling protocol handler to allow
 // MCP servers to request LLM inference without importing the engine package.
 func (o *Orchestrator) SampleOnce(ctx context.Context, model, systemPrompt, userPrompt string) (string, error) {
-	if o.Primary == nil {
+	primary := o.Primary()
+	if primary == nil {
 		return "", fmt.Errorf("no primary provider configured")
 	}
 	history := ai.NewConversationHistory()
@@ -2267,7 +2389,7 @@ func (o *Orchestrator) SampleOnce(ctx context.Context, model, systemPrompt, user
 		history.AddSystemMessage(systemPrompt)
 	}
 	history.AddUserMessage(userPrompt)
-	return o.Primary.GenerateWithHistory(ctx, history)
+	return primary.GenerateWithHistory(ctx, history)
 }
 
 // AutoTitleSession generates and persists a human-readable title for the session
@@ -2315,4 +2437,154 @@ func (o *Orchestrator) AutoTitleSession(ctx context.Context, firstUserMessage st
 	}
 
 	_ = o.PersistStore.SetSessionTitle(ctx, o.SessionID, title)
+}
+
+// RefreshHITLSettings loads the latest HITL power user settings from AppStateManager
+// and updates the HITLGuard. Should be called when settings change or at startup.
+func (o *Orchestrator) RefreshHITLSettings() {
+	if o.AppStateManager == nil || o.HITLGuard == nil {
+		return
+	}
+
+	// Type assert to *config.AppStateManager
+	manager, ok := o.AppStateManager.(*config.AppStateManager)
+	if !ok {
+		return
+	}
+
+	// Get current HITL settings
+	settings := manager.GetHITLSettings()
+
+	// Convert to map for dynamic passing
+	settingsMap := map[string]interface{}{
+		"enabled":              settings.Enabled != nil && *settings.Enabled,
+		"min_risk_level":       settings.MinRiskLevel,
+		"confidence_threshold": settings.ConfidenceThreshold,
+		"whitelisted_tools":    settings.WhitelistedTools,
+		"disable_warning":      settings.DisableWarning,
+	}
+
+	// Update the HITL guard with power user settings
+	o.HITLGuard.PowerUserSettings = settingsMap
+}
+
+// InitDistributedBus wraps the local event bus with distributed capabilities.
+// Called from main.go if multi-node coordination is enabled.
+// transport: Transport implementation (gRPC, NATS, or hybrid)
+// eventSrc: EventSource for event persistence (optional)
+// ctx: Context for bus startup
+func (o *Orchestrator) InitDistributedBus(ctx context.Context, transport distributed.Transport, eventSrc distributed.EventSource) error {
+	if o.eventBus == nil {
+		return fmt.Errorf("eventBus not initialized")
+	}
+
+	// Create distributed bus wrapping the local bus
+	o.distributedBus = distributed.NewDistributedBus(
+		o.eventBus,
+		transport,
+		eventSrc,
+		"gorkbot-primary", // Node ID; can be made configurable
+		o.Logger,
+	)
+
+	// Set up node selector (least-loaded by default)
+	o.distributedBus.SetNodeSelector(distributed.NewLeastLoadedSelector())
+
+	// Wire observability
+	o.distributedBus.SetObservability(o.Observability)
+
+	// Start the distributed bus
+	if err := o.distributedBus.Start(ctx); err != nil {
+		o.Logger.Error("distributed bus start failed", "error", err)
+		return err
+	}
+
+	o.Logger.Info("distributed bus initialized", "node_id", "gorkbot-primary")
+	return nil
+}
+
+// InitMemoryCoordinator sets up memory query routing via the event bus.
+// Called after unified and temporal memory are available.
+func (o *Orchestrator) InitMemoryCoordinator(unified *memory.UnifiedMemory, temporal *memory.TemporalMemory) error {
+	if o.eventBus == nil {
+		return fmt.Errorf("eventBus not initialized")
+	}
+
+	o.memoryCoordinator = memory.NewMemoryCoordinator(
+		unified,
+		temporal,
+		o.eventBus,
+		o.Logger,
+	)
+
+	// Wire observability
+	o.memoryCoordinator.SetObservability(o.Observability)
+
+	o.Logger.Info("memory coordinator initialized")
+	return nil
+}
+
+// registerProviderCoordinatorHandlers wires the ProviderCoordinator to the event bus.
+// Called after both eventBus and ProviderCoord are initialized.
+func (o *Orchestrator) registerProviderCoordinatorHandlers() {
+	if o.eventBus == nil || o.ProviderCoord == nil {
+		return
+	}
+
+	// Register health check event handler
+	o.eventBus.Register("ProviderHealthEvent", func(ctx context.Context, event events.BusEvent) events.BusEvent {
+		healthEvent, ok := event.(*events.ProviderHealthEvent)
+		if !ok {
+			return nil
+		}
+
+		// Record provider latency to observability
+		if o.Observability != nil {
+			o.Observability.RecordProviderLatency(
+				healthEvent.ProviderID,
+				o.ProviderCoord.Primary().Name(),
+				healthEvent.Latency,
+			)
+		}
+
+		// Log health status
+		if !healthEvent.Healthy {
+			o.Logger.Warn("provider health check failed",
+				"provider", healthEvent.ProviderID,
+				"error", healthEvent.Error)
+		}
+
+		return nil
+	})
+
+	// Register failover event handler
+	o.eventBus.Register("ProviderFailoverEvent", func(ctx context.Context, event events.BusEvent) events.BusEvent {
+		failoverEvent, ok := event.(*events.ProviderFailoverEvent)
+		if !ok {
+			return nil
+		}
+
+		// Record failover to observability
+		if o.Observability != nil {
+			o.Observability.RecordProviderFailover()
+		}
+
+		o.Logger.Info("provider failover recorded",
+			"from", failoverEvent.FromProvider,
+			"to", failoverEvent.ToProvider,
+			"reason", failoverEvent.Reason)
+
+		return nil
+	})
+
+	o.Logger.Debug("provider coordinator handlers registered")
+}
+
+// EventBus returns the event bus publisher interface (may be local or distributed).
+func (o *Orchestrator) EventBus() events.BusPublisher {
+	// Return distributed bus if available, otherwise local bus
+	if o.distributedBus != nil {
+		return o.distributedBus
+	}
+	return o.eventBus
 }

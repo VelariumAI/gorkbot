@@ -260,7 +260,7 @@ func (ch *ConversationHistory) TruncateToTokenLimit(maxTokens int) {
 				if tailChars < 0 {
 					tailChars = 0
 				}
-				
+
 				notice := fmt.Sprintf("\n\n[... %d characters truncated by Gorkbot Context Manager ...]\n\n", len(msg.Content)-targetChars)
 				msg.Content = msg.Content[:headChars] + notice + msg.Content[len(msg.Content)-tailChars:]
 				msgTokens = len(msg.Content) / 4
@@ -273,7 +273,7 @@ func (ch *ConversationHistory) TruncateToTokenLimit(maxTokens int) {
 
 		keptMessages = append([]ConversationMessage{msg}, keptMessages...)
 		currentTokens += msgTokens
-		
+
 		if currentTokens >= availableTokens {
 			break
 		}

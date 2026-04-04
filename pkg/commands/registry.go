@@ -122,6 +122,36 @@ type OrchestratorAdapter struct {
 	GetEnsembleEnabled func() bool
 	// SetEnsembleEnabled enables or disables ensemble reasoning and persists the change.
 	SetEnsembleEnabled func(bool) error
+
+	// Security mode controls access to penetration testing tools.
+	// GetSecurityMode returns true when security tools are enabled.
+	GetSecurityMode func() bool
+	// SetSecurityMode enables or disables security tools and persists the change.
+	SetSecurityMode func(bool) error
+
+	// HITL (Human-in-the-Loop) override settings for power users
+	// GetHITLSettings returns the current HITL configuration.
+	GetHITLSettings func() interface{} // config.HITLSettings
+	// SetHITLSettings persists updated HITL configuration.
+	SetHITLSettings func(interface{}) error // config.HITLSettings
+
+	// Evolution settings for Self-Evolution and Free Will Engine
+	// GetEvolutionSettings returns the current evolution configuration.
+	GetEvolutionSettings func() interface{} // config.EvolutionSettings
+	// SetEvolutionSettings persists updated evolution configuration.
+	SetEvolutionSettings func(interface{}) error // config.EvolutionSettings
+
+	// System Monitor settings for resource monitoring control
+	// GetSystemMonitorSettings returns the current system monitor configuration.
+	GetSystemMonitorSettings func() interface{} // config.SystemMonitorSettings
+	// SetSystemMonitorSettings persists updated system monitor configuration.
+	SetSystemMonitorSettings func(interface{}) error // config.SystemMonitorSettings
+
+	// Self-Improvement drive controls
+	// ToggleSelfImprove switches the SI drive on/off. Returns new enabled state.
+	ToggleSelfImprove func() bool
+	// GetSISnapshot returns the current SI state snapshot for display.
+	GetSISnapshot func() interface{} // selfimprove.SISnapshot
 }
 
 // Registry holds all available commands
@@ -332,6 +362,14 @@ func (r *Registry) registerCommands() {
 		Description: "Toggle verbose mode (show/hide internal system messages)",
 		Usage:       "/verbose [on|off|toggle]",
 		Handler:     r.handleVerbose,
+		IsModifier:  true,
+	}
+
+	r.commands["security"] = &CommandDefinition{
+		Name:        "security",
+		Description: "Enable/disable security (penetration testing) tools",
+		Usage:       "/security [on|off|status]",
+		Handler:     r.handleSecurity,
 		IsModifier:  true,
 	}
 
@@ -577,6 +615,14 @@ func (r *Registry) registerCommands() {
 		IsModifier:  true,
 	}
 
+	r.commands["evolve"] = &CommandDefinition{
+		Name:        "evolve",
+		Description: "Toggle autonomous self-improvement drive (SI kernel)",
+		Usage:       "/evolve  |  /evolve status",
+		Handler:     r.handleEvolve,
+		IsModifier:  true,
+	}
+
 }
 
 // Command Handlers
@@ -597,7 +643,7 @@ func (r *Registry) handleHelp(args []string) (string, error) {
 		{"Session", []string{"save", "resume", "rename", "chat", "export", "rewind"}},
 		{"AI & Models", []string{"model", "think", "mode", "cascade", "rate", "compress", "compact"}},
 		{"Tools & Permissions", []string{"tools", "permissions", "rules", "key", "auth", "sandbox"}},
-		{"Skills & Learning", []string{"skills", "self", "env", "context", "cost"}},
+		{"Skills & Learning", []string{"skills", "self", "evolve", "env", "context", "cost"}},
 		{"Integrations", []string{"mcp", "a2a", "telegram", "share", "schedule"}},
 		{"System", []string{"hooks", "commands", "settings", "version", "about", "bug", "help"}},
 	}
@@ -1339,6 +1385,55 @@ func (r *Registry) handleVerbose(args []string) (string, error) {
 	return fmt.Sprintf("Verbose mode is now **%s**", statusStr), nil
 }
 
+func (r *Registry) handleSecurity(args []string) (string, error) {
+	// Get current state
+	if r.Orch == nil || r.Orch.GetSecurityMode == nil {
+		return "Security mode is not available", nil
+	}
+
+	currentState := r.Orch.GetSecurityMode()
+
+	// Parse argument
+	var newState bool
+	var action string
+	if len(args) == 0 {
+		// No args = show status
+		action = "status"
+	} else {
+		switch strings.ToLower(args[0]) {
+		case "on", "yes", "true", "1":
+			newState = true
+			action = "enable"
+		case "off", "no", "false", "0":
+			newState = false
+			action = "disable"
+		case "status":
+			action = "status"
+		case "toggle":
+			newState = !currentState
+			action = "toggle"
+		default:
+			return fmt.Sprintf("Invalid argument: %s. Use 'on', 'off', 'toggle', or 'status'", args[0]), nil
+		}
+	}
+
+	// If status only, don't change anything
+	if action != "status" && action != "" {
+		if r.Orch.SetSecurityMode != nil {
+			if err := r.Orch.SetSecurityMode(newState); err != nil {
+				return fmt.Sprintf("Error setting security mode: %v", err), err
+			}
+		}
+		currentState = newState
+	}
+
+	statusStr := "**DISABLED** (security tools blocked for safety)"
+	if currentState {
+		statusStr = "**ENABLED** (penetration testing tools available)"
+	}
+	return fmt.Sprintf("Security mode is %s\n\n🔐 Use with caution — security tools provide powerful attack capabilities and should only be enabled for authorized penetration testing and security research.", statusStr), nil
+}
+
 // GetToolRegistry exposes the tool registry for use by the settings overlay.
 func (r *Registry) GetToolRegistry() *tools.Registry {
 	return r.toolRegistry
@@ -1580,7 +1675,7 @@ func (r *Registry) listPermissions() (string, error) {
 	sb.WriteString("**Commands:**\n")
 	sb.WriteString("- `/permissions reset` - Reset all permissions\n")
 	sb.WriteString("- `/permissions reset <tool>` - Reset specific tool\n")
-	sb.WriteString("\n💡 **Tip:** Session permissions are cleared when you exit Gorkbot.\n")
+	sb.WriteString("\n💡 **Tip:** Session permissions are cleared when you exit Grokster.\n")
 
 	return sb.String(), nil
 }
@@ -2354,6 +2449,36 @@ func (r *Registry) handleSandbox(args []string) (string, error) {
 		sb.WriteString("\n**Usage:** `/sandbox on` | `/sandbox off`\n")
 		return sb.String(), nil
 	}
+}
+
+func (r *Registry) handleEvolve(args []string) (string, error) {
+	if r.Orch == nil || r.Orch.ToggleSelfImprove == nil || r.Orch.GetSISnapshot == nil {
+		return "Self-Improvement drive not available (orchestrator not wired).", nil
+	}
+
+	sub := ""
+	if len(args) > 0 {
+		sub = strings.ToLower(args[0])
+	}
+
+	if sub == "status" {
+		// Just show status without toggling
+		snap := r.Orch.GetSISnapshot()
+		if snap == nil {
+			return "Self-Improvement state unavailable.", nil
+		}
+		// Type assert to SISnapshot (from pkg/selfimprove)
+		// For now, return a simple string representation
+		return fmt.Sprintf("Self-Improvement: status snapshot retrieved (interface not directly displayable)"), nil
+	}
+
+	// Toggle the drive
+	enabled := r.Orch.ToggleSelfImprove()
+
+	if enabled {
+		return "✨ Self-Improvement drive **ENABLED**\n\nAutonomous background loop started with multi-signal drive scoring. Mode: CALM (8min heartbeat).", nil
+	}
+	return "⏸ Self-Improvement drive **DISABLED**\n\nAutonomous loop stopped.", nil
 }
 
 func (r *Registry) handleEnv(args []string) (string, error) {

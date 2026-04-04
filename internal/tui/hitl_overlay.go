@@ -11,9 +11,9 @@ import (
 
 // HITLOverlay renders a rich HITL approval dialog with risk/confidence visualization.
 type HITLOverlay struct {
-	Request      engine.HITLRequest
-	SelectedIdx  int // For keyboard navigation (Approve=0, Reject=1)
-	IsVisible    bool
+	Request     engine.HITLRequest
+	SelectedIdx int // For keyboard navigation (Approve=0, Reject=1)
+	IsVisible   bool
 }
 
 // NewHITLOverlay creates a new HITL overlay for the given request.

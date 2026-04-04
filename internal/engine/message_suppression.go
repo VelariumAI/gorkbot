@@ -10,9 +10,9 @@ import (
 // It suppresses internal system messages based on verbosity settings while
 // preserving user-facing content and actual tool results.
 type MessageSuppressionMiddleware struct {
-	filter    *sense.OutputFilter
-	verbose   bool
-	logger    Logger
+	filter  *sense.OutputFilter
+	verbose bool
+	logger  Logger
 }
 
 // Logger is a minimal logging interface for the middleware.
@@ -77,17 +77,13 @@ func (m *MessageSuppressionMiddleware) ProcessStreamingToken(token string) strin
 }
 
 // suppressToolNarrationTokens removes tokens that are part of tool narration.
-// Examples: "I'm running", "Tool has", "executing..."
+// Examples: "I'm executing the", "Tool has completed", "invoking tool", "calling tool"
 func (m *MessageSuppressionMiddleware) suppressToolNarrationTokens(token string) string {
 	narrationPatterns := []string{
-		"I'm running",
-		"I'm executing",
-		"I am running",
-		"Tool has",
-		"step-by-step",
-		"narrating",
-		"showing you",
-		"here's what",
+		"I'm executing the",
+		"Tool has completed",
+		"invoking tool",
+		"calling tool",
 	}
 
 	lowerToken := strings.ToLower(token)
@@ -100,16 +96,13 @@ func (m *MessageSuppressionMiddleware) suppressToolNarrationTokens(token string)
 	return token
 }
 
-// suppressSystemStatusTokens removes tokens related to system status updates.
+// suppressSystemStatusTokens removes tokens related to system status section headers only.
 func (m *MessageSuppressionMiddleware) suppressSystemStatusTokens(token string) string {
 	statusPatterns := []string{
-		"system status",
-		"current status",
-		"status update",
-		"system information",
-		"memory usage",
-		"cpu usage",
-		"disk usage",
+		"=== system status ===",
+		"--- status update ---",
+		"=== status update ===",
+		"--- system status ---",
 	}
 
 	lowerToken := strings.ToLower(token)

@@ -89,8 +89,7 @@ func (m *Manager) Fire(ctx context.Context, event Event, payload Payload) HookRe
 	tctx, cancel := context.WithTimeout(ctx, m.timeout)
 	defer cancel()
 
-	// Execute script directly with proper quoting to prevent injection
-	cmd := exec.CommandContext(tctx, "/bin/sh", "-c", "exec \"$1\"", "sh", scriptPath)
+	cmd := exec.CommandContext(tctx, "/bin/sh", scriptPath)
 	cmd.Stdin = bytes.NewReader(payloadJSON)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

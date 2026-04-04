@@ -23,12 +23,12 @@ type IngressFilter struct {
 	MaxRunes int64 // 0 = no limit
 
 	// Counters — read with Load(), reset with Reset().
-	totalIn    atomic.Int64
-	totalOut   atomic.Int64
-	callCount  atomic.Int64
+	totalIn   atomic.Int64
+	totalOut  atomic.Int64
+	callCount atomic.Int64
 
-	ansiRE    *regexp.Regexp
-	fillerRE  *regexp.Regexp
+	ansiRE   *regexp.Regexp
+	fillerRE *regexp.Regexp
 }
 
 // NewIngressFilter creates an IngressFilter with a default rune limit of
@@ -38,9 +38,9 @@ func NewIngressFilter(maxRunes int64) *IngressFilter {
 		maxRunes = 32000
 	}
 	return &IngressFilter{
-		MaxRunes:  maxRunes,
-		ansiRE:    regexp.MustCompile(`\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`),
-		fillerRE:  regexp.MustCompile(`(?i)\b(?:please|kindly|would you (?:mind |be able to )?|could you (?:please )?|if you (?:don't mind,? )?|feel free to |go ahead and )\b`),
+		MaxRunes: maxRunes,
+		ansiRE:   regexp.MustCompile(`\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`),
+		fillerRE: regexp.MustCompile(`(?i)\b(?:please|kindly|would you (?:mind |be able to )?|could you (?:please )?|if you (?:don't mind,? )?|feel free to |go ahead and )\b`),
 	}
 }
 

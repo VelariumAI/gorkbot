@@ -152,11 +152,13 @@ func (m *Model) renderAgentTree(width int) string {
 	b.WriteString(discHeaderStyle.Render("Active Delegation Tree"))
 	b.WriteString("\n")
 
-	// Get the orchestrator's discovery manager via the orchestrator field.
+	// Get the orchestrator's discovery manager via the ProviderCoordinator.
 	// We access it through the interface to avoid a direct import cycle.
 	var nodes []*discovery.AgentNode
-	if m.orchestrator != nil && m.orchestrator.Discovery != nil {
-		nodes = m.orchestrator.Discovery.AgentTree()
+	if m.orchestrator != nil && m.orchestrator.ProviderCoord != nil {
+		if discoveryMgr := m.orchestrator.ProviderCoord.Discovery(); discoveryMgr != nil {
+			nodes = discoveryMgr.AgentTree()
+		}
 	}
 
 	if len(nodes) == 0 {

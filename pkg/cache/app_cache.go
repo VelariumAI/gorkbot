@@ -6,9 +6,9 @@ import (
 )
 
 const (
-	appCacheDefaultTTL     = 5 * time.Minute
-	appCacheMaxEntries     = 256
-	appCacheCleanupEvery   = 100 // evict expired entries after this many Sets
+	appCacheDefaultTTL   = 5 * time.Minute
+	appCacheMaxEntries   = 256
+	appCacheCleanupEvery = 100 // evict expired entries after this many Sets
 )
 
 // appCacheEntry is a single cached response with an expiry time.
@@ -23,11 +23,11 @@ type appCacheEntry struct {
 // Keys are typically: "<providerID>:<model>:<system_hash>".
 // Eviction strategy: LRU on overflow + time-based expiry on access.
 type AppCache struct {
-	mu        sync.RWMutex
-	entries   map[string]appCacheEntry
-	order     []string // insertion-order for LRU eviction (oldest first)
-	ttl       time.Duration
-	setCount  int
+	mu       sync.RWMutex
+	entries  map[string]appCacheEntry
+	order    []string // insertion-order for LRU eviction (oldest first)
+	ttl      time.Duration
+	setCount int
 }
 
 // NewAppCache creates an AppCache. configDir is accepted for future on-disk

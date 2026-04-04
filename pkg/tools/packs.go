@@ -36,17 +36,10 @@ func GetToolPacks() map[string][]Tool {
 			NewWebFetchTool(), NewHttpRequestTool(), NewCheckPortTool(), NewDownloadFileTool(), NewXPullTool(),
 			NewWebSearchTool(), NewWebReaderTool(),
 			NewScraplingFetchTool(), NewScraplingStealthTool(), NewScraplingDynamicTool(), NewScraplingExtractTool(), NewScraplingSearchTool(),
+			// Research: context-efficient web browsing
+			NewBrowserSearchTool(), NewBrowserOpenTool(), NewBrowserFindTool(),
 		},
-		"sec": {
-			NewNmapScanTool(), NewPacketCaptureTool(), NewWifiAnalyzerTool(), NewShodanQueryTool(), NewMetasploitRpcTool(), NewSslValidatorTool(),
-			NewMasscanRunTool(), NewDnsEnumTool(), NewArpScanRunTool(), NewTracerouteRunTool(), NewNiktoScanTool(), NewGobusterScanTool(),
-			NewFfufRunTool(), NewSqlmapScanTool(), NewWafw00fRunTool(), NewHttpHeaderAuditTool(), NewJwtDecodeTool(), NewHydraRunTool(),
-			NewHashcatRunTool(), NewJohnRunTool(), NewHashIdentifyTool(), NewSearchsploitQueryTool(), NewCveLookupTool(), NewEnum4linuxRunTool(),
-			NewSmbmapRunTool(), NewSuidCheckTool(), NewSudoCheckTool(), NewLinpeasRunTool(), NewStringsAnalyzeTool(), NewHexdumpFileTool(),
-			NewNetstatAnalysisTool(), NewSubfinderRunTool(), NewNucleiScanTool(), NewTotpGenerateTool(),
-			NewNetworkScanTool(), NewSocketConnectTool(), NewNetworkEscapeProxyTool(),
-			NewBurpSuiteScanTool(), NewImpacketAttackTool(), NewTsharkCaptureTool(),
-		},
+		"sec": getSecurityPack(),
 		"media": {
 			NewImageProcessTool(), NewMediaConvertTool(), NewFfmpegProTool(), NewAudioTranscribeTool(), NewTtsGenerateTool(),
 			NewImageOcrBatchTool(), NewVideoSummarizeTool(), NewMemeGeneratorTool(),
@@ -88,9 +81,14 @@ func GetToolPacks() map[string][]Tool {
 			NewAddGoalTool(), NewCloseGoalTool(), NewListGoalsTool(), NewReportFindingTool(), NewRunPipelineTool(),
 			NewScheduleTaskTool(), NewListScheduledTasksTool(), NewCancelScheduledTaskTool(), NewPauseResumeScheduledTaskTool(), NewDefineCommandTool(),
 			NewDocParserTool(),
+			// Harness: multi-session state tracking + verification
+			NewHarnessInitTool(), NewHarnessBootTool(), NewHarnessSelectTool(), NewHarnessCompleteTool(),
+			NewHarnessStatusTool(), NewHarnessUpdateTool(), NewVerifyFeatureTool(), NewVerifyReportTool(),
 		},
 		"comm": {
-			NewSendEmailTool(), NewSlackNotifyTool(),
+			// Intentionally omitted: send_email / slack_post currently rely on
+			// placeholder implementations and should not be user-visible until
+			// fully wired to real backends.
 			NewCalendarManageTool(), NewEmailClientTool(), NewContactSyncTool(), NewSmartHomeApiTool(),
 		},
 	}

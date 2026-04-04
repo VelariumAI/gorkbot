@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
+	"time"
 )
 
 // ─── AI / ML ──────────────────────────────────────────────────────────────────
@@ -607,10 +609,10 @@ type SensorReadTool struct{ BaseTool }
 func NewSensorReadTool() *SensorReadTool {
 	return &SensorReadTool{BaseTool: BaseTool{
 		name:               "sensor_read",
-		description:        "Read Android hardware sensor data (accelerometer, light, battery, GPS, etc.) using Termux:API.",
+		description:        "⚠️ SUPPRESSED: Read Android hardware sensor data (accelerometer, light, battery, GPS, etc.) using Termux:API. INTENTIONALLY HIDDEN FROM LLM PROMPTS to prevent automatic battery/system monitoring.",
 		category:           CategoryAndroid,
 		requiresPermission: false,
-		defaultPermission:  PermissionAlways,
+		defaultPermission:  PermissionNever,
 	}}
 }
 
@@ -670,16 +672,31 @@ func (t *SensorReadTool) Execute(ctx context.Context, params map[string]interfac
 // ─────────────────────────────────────────────────────────────────────────────
 
 // NotificationSendTool sends an Android notification via Termux:API.
-type NotificationSendTool struct{ BaseTool }
+// Includes sophisticated throttling to prevent notification spam (same limits as post_notify).
+type NotificationSendTool struct {
+	BaseTool
+	lastNotification map[string]time.Time
+	throttleMutex    sync.RWMutex
+}
+
+const (
+	// NotificationSendGlobalCooldown: minimum between ANY Android notifications (7.5 minutes)
+	NotificationSendGlobalCooldown = 7*time.Minute + 30*time.Second
+	// NotificationSendTypeCooldown: minimum between identical notifications (30 minutes)
+	NotificationSendTypeCooldown = 30 * time.Minute
+)
 
 func NewNotificationSendTool() *NotificationSendTool {
-	return &NotificationSendTool{BaseTool: BaseTool{
-		name:               "notification_send",
-		description:        "Send an Android system notification using Termux:API.",
-		category:           CategoryAndroid,
-		requiresPermission: false,
-		defaultPermission:  PermissionAlways,
-	}}
+	return &NotificationSendTool{
+		BaseTool: BaseTool{
+			name:               "notification_send",
+			description:        "Send an Android system notification using Termux:API. THROTTLED: Max 8 notifications per hour, no duplicates for 30 minutes.",
+			category:           CategoryAndroid,
+			requiresPermission: false,
+			defaultPermission:  PermissionAlways,
+		},
+		lastNotification: make(map[string]time.Time),
+	}
 }
 
 func (t *NotificationSendTool) Parameters() json.RawMessage {
@@ -704,6 +721,45 @@ func (t *NotificationSendTool) Execute(ctx context.Context, params map[string]in
 	if title == "" || content == "" {
 		return &ToolResult{Success: false, Error: "title and content are required"}, fmt.Errorf("title and content required")
 	}
+
+	// ── THROTTLE CHECK ────────────────────────────────────────────────────────
+	// Apply same throttling as post_notify to prevent Android notification spam
+	now := time.Now()
+
+	t.throttleMutex.Lock()
+	defer t.throttleMutex.Unlock()
+
+	// Check global cooldown
+	if lastGlobal, exists := t.lastNotification["__global__"]; exists {
+		elapsed := now.Sub(lastGlobal)
+		if elapsed < NotificationSendGlobalCooldown {
+			waitTime := NotificationSendGlobalCooldown - elapsed
+			return &ToolResult{
+				Success: true,
+				Output:  fmt.Sprintf("Android notification throttled (global limit). Wait %.0f seconds before next notification. (Max 8 per hour)", waitTime.Seconds()),
+			}, nil
+		}
+	}
+
+	// Check type-specific cooldown (same title+content = same notification)
+	msgKey := fmt.Sprintf("msg:%d", simpleHash(title+"|"+content))
+	if lastType, exists := t.lastNotification[msgKey]; exists {
+		elapsed := now.Sub(lastType)
+		if elapsed < NotificationSendTypeCooldown {
+			waitTime := NotificationSendTypeCooldown - elapsed
+			return &ToolResult{
+				Success: true,
+				Output:  fmt.Sprintf("Android notification throttled (duplicate). Same notification already sent. Wait %.0f seconds. (Max 1 per 30 min per message)", waitTime.Seconds()),
+			}, nil
+		}
+	}
+
+	// Update throttle clocks
+	t.lastNotification["__global__"] = now
+	t.lastNotification[msgKey] = now
+
+	// ───────────────────────────────────────────────────────────────────────────
+
 	id, _ := params["id"].(string)
 	priority, _ := params["priority"].(string)
 	if priority == "" {
@@ -728,6 +784,18 @@ func (t *NotificationSendTool) Execute(ctx context.Context, params map[string]in
 	)
 
 	return NewBashTool().Execute(ctx, map[string]interface{}{"command": cmd, "timeout": 10})
+}
+
+// simpleHash returns a simple hash of a string
+func simpleHash(s string) int {
+	h := 0
+	for _, c := range s {
+		h = h*31 + int(c)
+	}
+	if h < 0 {
+		h = -h
+	}
+	return h
 }
 
 // ─── PACKAGE MANAGEMENT ───────────────────────────────────────────────────────

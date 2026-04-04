@@ -99,6 +99,12 @@ func (t *DynamicScriptTool) Parameters() json.RawMessage {
 	return data
 }
 
+// wrapWithResourceLimits wraps a command with ulimit to prevent resource exhaustion.
+// Enforces: 512MB virtual memory, 30s CPU time max.
+func wrapWithResourceLimits(cmd string) string {
+	return fmt.Sprintf("ulimit -v 524288 -t 30 2>/dev/null; %s", cmd)
+}
+
 func (t *DynamicScriptTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
 	cmd := t.config.Command
 
@@ -119,6 +125,9 @@ func (t *DynamicScriptTool) Execute(ctx context.Context, params map[string]inter
 
 		cmd = strings.ReplaceAll(cmd, placeholder, shellescape(value))
 	}
+
+	// Wrap with resource limits to prevent exhaustion
+	cmd = wrapWithResourceLimits(cmd)
 
 	bashTool := NewBashTool()
 	return bashTool.Execute(ctx, map[string]interface{}{"command": cmd})

@@ -279,8 +279,8 @@ func (t *SENSETracer) LogParamError(tool, errMsg string) {
 // LogSREGrounding records SRE grounding extraction results.
 func (t *SENSETracer) LogSREGrounding(confidence float64, entityCount, factCount int) {
 	t.write(SENSETrace{
-		Kind:  KindSREGrounding,
-		Error: fmt.Sprintf("confidence=%.2f entities=%d facts=%d", confidence, entityCount, factCount),
+		Kind:   KindSREGrounding,
+		Error:  fmt.Sprintf("confidence=%.2f entities=%d facts=%d", confidence, entityCount, factCount),
 		Labels: []string{"sre", "grounding"},
 	})
 }
@@ -288,8 +288,8 @@ func (t *SENSETracer) LogSREGrounding(confidence float64, entityCount, factCount
 // LogSREPhase records SRE phase transitions.
 func (t *SENSETracer) LogSREPhase(fromPhase, toPhase string, turn int) {
 	t.write(SENSETrace{
-		Kind:  KindSREPhase,
-		Error: fmt.Sprintf("phase_transition: %s -> %s at turn %d", fromPhase, toPhase, turn),
+		Kind:   KindSREPhase,
+		Error:  fmt.Sprintf("phase_transition: %s -> %s at turn %d", fromPhase, toPhase, turn),
 		Labels: []string{"sre", "phase_transition"},
 	})
 }
@@ -297,8 +297,8 @@ func (t *SENSETracer) LogSREPhase(fromPhase, toPhase string, turn int) {
 // LogSRECorrection records SRE deviation detection and backtrack.
 func (t *SENSETracer) LogSRECorrection(reason, revertPhase string) {
 	t.write(SENSETrace{
-		Kind:  KindSRECorrection,
-		Error: fmt.Sprintf("reason=%s revert_to=%s", reason, revertPhase),
+		Kind:   KindSRECorrection,
+		Error:  fmt.Sprintf("reason=%s revert_to=%s", reason, revertPhase),
 		Labels: []string{"sre", "correction", "backtrack"},
 	})
 }
@@ -306,8 +306,8 @@ func (t *SENSETracer) LogSRECorrection(reason, revertPhase string) {
 // LogSREEnsemble records SRE ensemble execution.
 func (t *SENSETracer) LogSREEnsemble(conflictCount int, confidence float64) {
 	t.write(SENSETrace{
-		Kind:  KindSREEnsemble,
-		Error: fmt.Sprintf("conflicts=%d confidence=%.2f", conflictCount, confidence),
+		Kind:   KindSREEnsemble,
+		Error:  fmt.Sprintf("conflicts=%d confidence=%.2f", conflictCount, confidence),
 		Labels: []string{"sre", "ensemble"},
 	})
 }

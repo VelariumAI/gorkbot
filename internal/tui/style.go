@@ -3,6 +3,7 @@ package tui
 import (
 	"github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/velariumai/gorkbot/internal/designsystem"
 	"github.com/velariumai/gorkbot/pkg/theme"
 )
 
@@ -105,6 +106,21 @@ const (
 	ArcaneWarn       = "#FFB86C" // amber for warnings
 )
 
+// ── Dashboard Sidebar Color Palette ───────────────────────────────────────
+const (
+	DashFgMuted      = "#A3A7AD" // muted metadata text
+	DashMainGreen    = "#4AFEAD" // section header glyph+text (vibrant green)
+	DashRuleCharcoal = "#2D333D" // horizontal rule fill
+	DashBulletYellow = "#FEB800" // active/running agent bullet
+	DashBulletBlue   = "#56B6F7" // pending/idle agent bullet
+	DashBulletWhite  = "#FFFFFF" // completed checkmark
+	DashBarMagenta   = "#FC107A" // top tool bar (rank 1)
+	DashBarPurple    = "#8C54FB" // mid tool bar (rank 2)
+	DashBarTeal      = "#29A6A3" // bottom tool bar (rank 3+)
+	DashPillBg       = "#A8A3E7" // intent pill background (lavender)
+	DashPillFg       = "#1A1D24" // intent pill text (dark on lavender)
+)
+
 // Styles holds all Lip Gloss styles for the TUI
 type HookStyles struct {
 	Bullet   lipgloss.Style
@@ -173,6 +189,18 @@ type Styles struct {
 
 	// Gorky identity glyph styling (𝗚 ▸)
 	GorkyGlyphStyle lipgloss.Style
+
+	// TokenStyles holds semantic styles from design tokens.
+	// Nil when designsystem is not initialized — always nil-check before use.
+	TokenStyles *theme.TUIStyles
+}
+
+// tryGetTokenStyles safely retrieves TUIStyles from design tokens.
+// Returns nil if designsystem is not initialized.
+// Uses recover() to prevent panics.
+func tryGetTokenStyles() *theme.TUIStyles {
+	defer func() { recover() }()
+	return theme.TokensToLipGloss(designsystem.Get().GetColors())
 }
 
 // NewStyles creates a new Styles instance with the given theme.
@@ -335,6 +363,9 @@ func NewStyles(t *theme.Theme) *Styles {
 		Foreground(lipgloss.Color(colors.Primary)).
 		Bold(true)
 
+	// Wire design token styles
+	s.TokenStyles = tryGetTokenStyles()
+
 	return s
 }
 
@@ -464,6 +495,9 @@ func NewArcaneBloodStyles() *Styles {
 	s.GorkyGlyphStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(ArcaneGold)).
 		Bold(true)
+
+	// Wire design token styles
+	s.TokenStyles = tryGetTokenStyles()
 
 	return s
 }

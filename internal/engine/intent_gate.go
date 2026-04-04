@@ -158,9 +158,9 @@ func (o *Orchestrator) RunIntentGate(ctx context.Context, prompt string) *Intent
 
 	// Bypass rules-based when Native LLM is enabled, and try to use API provider as fallback
 	// or return nil to let native engine handle it.
-	provider := o.Consultant
+	provider := o.Consultant()
 	if provider == nil {
-		provider = o.Primary
+		provider = o.Primary()
 	}
 	if provider == nil {
 		return nil

@@ -23,11 +23,12 @@ type StatusBar struct {
 	styles          *Styles
 
 	// Enhanced fields (P0/P1)
-	contextPct  float64 // 0.0–1.0 context window usage
-	costUSD     float64 // session cost
-	modeName    string  // "NORMAL", "PLAN", "AUTO"
-	activeTools int     // tools currently running
-	gitBranch   string  // current git branch
+	contextPct     float64 // 0.0–1.0 context window usage
+	costUSD        float64 // session cost
+	modeName       string  // "NORMAL", "PLAN", "AUTO"
+	activeTools    int     // tools currently running
+	gitBranch      string  // current git branch
+	consultantModel string // consultant provider name (Phase 3)
 
 	// Token rate history for mini sparkline
 	tokenRateHistory []float64
@@ -103,6 +104,12 @@ func (s *StatusBar) SetActiveTools(count int) {
 // SetGitBranch updates the displayed git branch name.
 func (s *StatusBar) SetGitBranch(branch string) {
 	s.gitBranch = branch
+}
+
+// SetProviders updates the primary and consultant provider names (Phase 3).
+func (s *StatusBar) SetProviders(primary, consultant string) {
+	s.currentModel = primary
+	s.consultantModel = consultant
 }
 
 // SetTokenRateHistory sets the token rate history for the mini sparkline.
@@ -205,6 +212,14 @@ func (s *StatusBar) buildRight() string {
 		model := s.currentModel
 		if len(model) > 12 {
 			model = model[:12]
+		}
+		// Add consultant indicator if present (Phase 3)
+		if s.consultantModel != "" {
+			consultant := s.consultantModel
+			if len(consultant) > 8 {
+				consultant = consultant[:8]
+			}
+			model = fmt.Sprintf("%s·+%s", model, consultant)
 		}
 		parts = append(parts, model)
 	}

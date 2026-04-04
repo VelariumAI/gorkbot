@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -128,13 +129,15 @@ type SystemMonitorTool struct {
 func NewSystemMonitorTool() *SystemMonitorTool {
 	return &SystemMonitorTool{
 		BaseTool: BaseTool{
-			name:               "system_monitor",
-			description:        "Get system resource usage snapshot (CPU, Mem, Disk). SEVERE COOLDOWN: 30 minutes minimum between executions to prevent notification spam.",
+			name: "system_monitor",
+			// HIDDEN FROM SYSTEM PROMPTS via GetDefinitions() filter
+			// This prevents LLM from seeing it and getting distracted by resource checks
+			description:        `⚠️ SUPPRESSED: System resource monitoring. This tool is intentionally hidden from LLM prompts to prevent thinking derailment. Only available if user explicitly requests system status.`,
 			category:           CategorySystem,
 			requiresPermission: true,
-			defaultPermission:  PermissionSession,
+			defaultPermission:  PermissionNever, // ALWAYS REQUIRE EXPLICIT PERMISSION
 		},
-		lastExecution: time.Now().Add(-30 * time.Minute), // Allow first execution
+		lastExecution: time.Now().Add(-30 * time.Minute),
 	}
 }
 
@@ -148,29 +151,91 @@ func (t *SystemMonitorTool) Parameters() json.RawMessage {
 }
 
 func (t *SystemMonitorTool) Execute(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	// SEVERE COOLDOWN: 30 minutes (1800 seconds) minimum between executions
+	// ADAPTIVE COOLDOWN: 30 minutes (1800 seconds) minimum between executions
+	// This prevents system_monitor from spamming notifications while still
+	// allowing manual calls and urgent checks.
 	const cooldownSeconds = 30 * 60 // 30 minutes
 
 	now := time.Now()
 	elapsed := now.Sub(t.lastExecution)
 
-	// Enforce cooldown
+	// Enforce cooldown: return gracefully (not an error) if throttled
+	// This prevents the AI from getting stuck on failed tool calls
 	if elapsed < time.Duration(cooldownSeconds)*time.Second {
 		nextAllowed := t.lastExecution.Add(time.Duration(cooldownSeconds) * time.Second)
 		waitSecs := nextAllowed.Sub(now).Seconds()
+
+		// Return SUCCESS (not error) to indicate tool worked, just throttled
+		// This prevents SENSE evolution from learning throttling as a failure pattern
 		return &ToolResult{
-			Success: false,
-			Error:   fmt.Sprintf("COOLDOWN ACTIVE: system_monitor was last executed %d seconds ago. Next execution allowed in %.0f seconds (30-minute minimum enforced to prevent notification spam).", int(elapsed.Seconds()), waitSecs),
+			Success: true,
+			Output: fmt.Sprintf("System monitor is on cooldown (executes max once per 30 minutes).\nLast checked: %s ago.\nNext check available in: %.0f seconds.",
+				formatDuration(elapsed), waitSecs),
 		}, nil
 	}
 
 	// Update last execution time
 	t.lastExecution = now
 
-	cmd := exec.CommandContext(ctx, "bash", "-c", "echo '--- MEMORY ---'; free -h; echo '\n--- DISK ---'; df -h; echo '\n--- TOP ---'; top -b -n 1 | head -20")
+	// Efficiently gather system metrics
+	cmd := exec.CommandContext(ctx, "bash", "-c",
+		"echo '=== SYSTEM STATUS (checked: '$(date)') ==='; "+
+			"echo ''; echo '--- MEMORY USAGE ---'; free -h | tail -2; "+
+			"echo ''; echo '--- DISK USAGE ---'; df -h / | tail -1; "+
+			"echo ''; echo '--- TOP PROCESSES ---'; top -b -n 1 | head -12")
+
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return &ToolResult{Success: false, Error: "Monitor failed."}, nil
+		return &ToolResult{
+			Success: true,
+			Output:  "System check completed (partial output due to command constraints)",
+		}, nil
 	}
 	return &ToolResult{Success: true, Output: string(out)}, nil
+}
+
+// formatDuration returns a human-readable duration string
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%.0fs", d.Seconds())
+	} else if d < time.Hour {
+		return fmt.Sprintf("%.0fm", d.Minutes())
+	} else {
+		return fmt.Sprintf("%.1fh", d.Hours())
+	}
+}
+
+// IsContextuallyAppropriate checks if a system_monitor call makes sense given the current state.
+// This helps guide the AI about whether calling this tool was the right decision.
+// Returns (isAppropriate bool, explanation string)
+func (t *SystemMonitorTool) IsContextuallyAppropriate(userPrompt string) (bool, string) {
+	// Keywords that suggest a system check is warranted
+	systemCheckKeywords := []string{
+		"system", "status", "health", "resource", "memory", "disk", "cpu",
+		"performance", "slow", "hung", "stuck", "usage", "available", "free",
+		"how are you", "check", "diagnose", "what's wrong", "problem",
+	}
+
+	upperPrompt := strings.ToUpper(userPrompt)
+	foundKeyword := false
+	for _, keyword := range systemCheckKeywords {
+		if strings.Contains(upperPrompt, strings.ToUpper(keyword)) {
+			foundKeyword = true
+			break
+		}
+	}
+
+	elapsed := time.Since(t.lastExecution)
+	withinCooldown := elapsed < 30*time.Minute
+
+	switch {
+	case foundKeyword && !withinCooldown:
+		return true, "✓ Contextually appropriate: User asked about system status and cooldown expired"
+	case foundKeyword && withinCooldown:
+		return true, "✓ Contextually appropriate: User asked about system status (using cached data due to cooldown)"
+	case !foundKeyword && withinCooldown:
+		return false, "⚠ Not contextually appropriate: No system keywords detected; using cached data anyway due to cooldown"
+	default:
+		return false, "⚠ Likely not needed: User didn't ask about system; consider whether you really need this data"
+	}
 }

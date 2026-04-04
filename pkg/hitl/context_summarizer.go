@@ -14,11 +14,11 @@ type ContextSummarizer struct {
 
 // ConversationTurn represents a single exchange in the conversation
 type ConversationTurn struct {
-	UserMessage      string
-	AIResponse       string
-	ToolsRequested   []string
-	Timestamp        string
-	TurnNumber       int
+	UserMessage    string
+	AIResponse     string
+	ToolsRequested []string
+	Timestamp      string
+	TurnNumber     int
 }
 
 // NewContextSummarizer creates a new context summarizer
@@ -180,27 +180,27 @@ func (cs *ContextSummarizer) describeToolPurpose(toolName string) string {
 
 	// Tool purpose mappings
 	purposes := map[string]string{
-		"read_file":       "to retrieve file contents",
-		"write_file":      "to create or update a file",
-		"delete_file":     "to remove a file",
-		"list_directory":  "to show directory contents",
-		"search_files":    "to search for files matching a pattern",
-		"grep_content":    "to search within files",
-		"git_status":      "to check the status of the git repository",
-		"git_diff":        "to show changes in the repository",
-		"git_commit":      "to commit changes to git",
-		"git_push":        "to push changes to the remote repository",
-		"git_pull":        "to pull changes from the remote repository",
-		"bash":            "to execute a shell command",
-		"execute":         "to run a system command",
-		"web_fetch":       "to retrieve content from a web URL",
-		"http_request":    "to make an HTTP request",
-		"system_info":     "to gather system information",
-		"list_processes":  "to show running processes",
-		"spawn_agent":     "to initiate a specialized agent",
-		"http_get":        "to fetch data from an API endpoint",
-		"http_post":       "to send data to an API endpoint",
-		"create_tool":     "to define a new custom tool",
+		"read_file":      "to retrieve file contents",
+		"write_file":     "to create or update a file",
+		"delete_file":    "to remove a file",
+		"list_directory": "to show directory contents",
+		"search_files":   "to search for files matching a pattern",
+		"grep_content":   "to search within files",
+		"git_status":     "to check the status of the git repository",
+		"git_diff":       "to show changes in the repository",
+		"git_commit":     "to commit changes to git",
+		"git_push":       "to push changes to the remote repository",
+		"git_pull":       "to pull changes from the remote repository",
+		"bash":           "to execute a shell command",
+		"execute":        "to run a system command",
+		"web_fetch":      "to retrieve content from a web URL",
+		"http_request":   "to make an HTTP request",
+		"system_info":    "to gather system information",
+		"list_processes": "to show running processes",
+		"spawn_agent":    "to initiate a specialized agent",
+		"http_get":       "to fetch data from an API endpoint",
+		"http_post":      "to send data to an API endpoint",
+		"create_tool":    "to define a new custom tool",
 	}
 
 	// Exact match

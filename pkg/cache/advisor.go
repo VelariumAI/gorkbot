@@ -12,13 +12,13 @@ import (
 type Strategy int
 
 const (
-	StrategyNone                Strategy = iota
+	StrategyNone                 Strategy = iota
 	StrategyAnthropicBreakpoints          // Anthropic, MiniMax, OpenRouter → cache_control blocks
-	StrategyGeminiContext                  // Gemini → cachedContents REST lifecycle
-	StrategyGrokAutomatic                  // xAI/Grok → automatic + x-grok-conv-id header
-	StrategyOpenAIAutomatic                // OpenAI → stable-prefix structural optimisation
-	StrategyMoonshotBestEffort             // Moonshot → graceful no-op until API confirmed
-	StrategyApplicationLayer               // Universal → local TTL response cache
+	StrategyGeminiContext                 // Gemini → cachedContents REST lifecycle
+	StrategyGrokAutomatic                 // xAI/Grok → automatic + x-grok-conv-id header
+	StrategyOpenAIAutomatic               // OpenAI → stable-prefix structural optimisation
+	StrategyMoonshotBestEffort            // Moonshot → graceful no-op until API confirmed
+	StrategyApplicationLayer              // Universal → local TTL response cache
 )
 
 // CacheHints carries the cache instructions the orchestrator applies before

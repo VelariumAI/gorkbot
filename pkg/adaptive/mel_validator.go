@@ -24,9 +24,9 @@ import (
 //     This reuses the same patterns as sense.InputSanitizer.ScanContextContent
 //     without depending on the full sanitizer package.
 type MELValidator struct {
-	mu          sync.Mutex
-	blockedHex  map[string]struct{} // BLAKE2b-256 hex hashes of blocked content
-	callCount   int
+	mu           sync.Mutex
+	blockedHex   map[string]struct{} // BLAKE2b-256 hex hashes of blocked content
+	callCount    int
 	blockedCount int
 }
 

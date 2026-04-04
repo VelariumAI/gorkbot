@@ -28,7 +28,7 @@ type GrokRequest struct {
 	// (e.g. grok-3-mini family). Valid values: "low", "medium", "high".
 	// Omit entirely for models that do not support it — sending it to unsupported
 	// models returns a 400 Bad Request.
-	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	ReasoningEffort string   `json:"reasoning_effort,omitempty"`
 	Temperature     *float32 `json:"temperature,omitempty"`
 	TopP            *float32 `json:"top_p,omitempty"`
 }

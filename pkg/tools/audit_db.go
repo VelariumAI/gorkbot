@@ -25,6 +25,7 @@ package tools
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -101,7 +102,7 @@ func InitAuditDB(dataDir string) (*AuditDB, error) {
 	return &AuditDB{db: db}, nil
 }
 
-// auditMigrate creates the tool_audit_log table and its indexes idempotently.
+// auditMigrate creates the tool_audit_log and tool_creation_log tables and their indexes idempotently.
 func auditMigrate(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS tool_audit_log (
@@ -116,6 +117,18 @@ func auditMigrate(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_tool_name ON tool_audit_log(tool_name);
 		CREATE INDEX IF NOT EXISTS idx_success   ON tool_audit_log(success);
+		CREATE TABLE IF NOT EXISTS tool_creation_log (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp        DATETIME DEFAULT CURRENT_TIMESTAMP,
+			tool_name        TEXT NOT NULL,
+			command_template TEXT NOT NULL,
+			params_json      TEXT,
+			approved         BOOLEAN NOT NULL,
+			approver_notes   TEXT,
+			violations       TEXT,
+			pid              INTEGER
+		);
+		CREATE INDEX IF NOT EXISTS idx_created_tool_name ON tool_creation_log(tool_name);
 	`)
 	return err
 }
@@ -187,6 +200,52 @@ func (a *AuditDB) LogExecution(
 
 		//nolint:errcheck  — best-effort; caller must not block on audit writes
 		_ = a.auditExecWithRetry(ctx, q, tn, aj, successVal, ec, re, ms)
+	}()
+}
+
+// LogToolCreation fires a background goroutine to insert one row into
+// tool_creation_log for forensic auditing of tool creation events.
+// It returns immediately and never blocks the caller.
+// Safe to call with a nil receiver — becomes a no-op.
+func (a *AuditDB) LogToolCreation(
+	toolName, cmdTemplate, paramsJSON string,
+	approved bool, approverNotes string,
+	violations []string,
+) {
+	if a == nil || a.db == nil {
+		return
+	}
+
+	// Snapshot values before handing off to the goroutine.
+	tn, ct, pj, app, an := toolName, cmdTemplate, paramsJSON, approved, approverNotes
+
+	// Serialize violations to JSON
+	violationsJSON := "[]"
+	if len(violations) > 0 {
+		if b, err := json.Marshal(violations); err == nil {
+			violationsJSON = string(b)
+		}
+	}
+	vj := violationsJSON
+
+	pid := os.Getpid()
+
+	go func() {
+		// 10-second budget for DB write
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		appVal := 0
+		if app {
+			appVal = 1
+		}
+
+		const q = `INSERT INTO tool_creation_log
+			(tool_name, command_template, params_json, approved, approver_notes, violations, pid)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`
+
+		//nolint:errcheck  — best-effort; caller must not block on audit writes
+		_ = a.auditExecWithRetry(ctx, q, tn, ct, pj, appVal, an, vj, pid)
 	}()
 }
 

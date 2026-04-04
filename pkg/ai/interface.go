@@ -50,3 +50,12 @@ type AIProvider interface {
 	// This allows the Registry/Router to select specific models dynamically.
 	WithModel(model string) AIProvider
 }
+
+// ThinkingBudgetProvider is an optional interface for providers that support extended thinking.
+// Providers implementing this interface can have their thinking budget configured dynamically.
+type ThinkingBudgetProvider interface {
+	// SetThinkingBudget sets the thinking budget for extended thinking support.
+	SetThinkingBudget(budget int)
+	// GetThinkingBudget returns the current thinking budget.
+	GetThinkingBudget() int
+}

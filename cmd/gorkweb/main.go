@@ -32,8 +32,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/velariumai/gorkbot/internal/designsystem"
 	"github.com/velariumai/gorkbot/internal/engine"
 	"github.com/velariumai/gorkbot/internal/engine/consultation"
+	engprov "github.com/velariumai/gorkbot/internal/engine/providers"
+	"github.com/velariumai/gorkbot/internal/events"
 	"github.com/velariumai/gorkbot/internal/llm"
 	"github.com/velariumai/gorkbot/internal/platform"
 	"github.com/velariumai/gorkbot/internal/tui"
@@ -55,6 +58,7 @@ import (
 	"github.com/velariumai/gorkbot/pkg/process"
 	"github.com/velariumai/gorkbot/pkg/providers"
 	"github.com/velariumai/gorkbot/pkg/registry"
+	"github.com/velariumai/gorkbot/pkg/research"
 	"github.com/velariumai/gorkbot/pkg/router"
 	"github.com/velariumai/gorkbot/pkg/scheduler"
 	"github.com/velariumai/gorkbot/pkg/schema"
@@ -152,6 +156,7 @@ func main() {
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 	logger.Info("Gorkbot initialized", "os", env.OS, "arch", env.Arch, "termux", env.IsTermux)
+	platform.LogFeatures(logger)
 
 	// 3. CLI Configuration
 	fs := flag.NewFlagSet("gorkbot", flag.ContinueOnError)
@@ -229,96 +234,113 @@ func main() {
 	// Convenience vars for backward-compat with the router and discovery code below.
 	grokKey, _ := keyStore.Get(providers.ProviderXAI)
 	geminiKey, _ := keyStore.Get(providers.ProviderGoogle)
+	anthropicKey, _ := keyStore.Get(providers.ProviderAnthropic)
+	openaiKey, _ := keyStore.Get(providers.ProviderOpenAI)
+	minimaxKey, _ := keyStore.Get(providers.ProviderMiniMax)
+	openrouterKey, _ := keyStore.Get(providers.ProviderOpenRouter)
+	moonshotKey, _ := keyStore.Get(providers.ProviderMoonshot)
 
-	// Read Model Overrides
-	primaryOverride := os.Getenv("GORKBOT_PRIMARY_MODEL")
-	consultantOverride := os.Getenv("GORKBOT_CONSULTANT_MODEL")
+	// Read Provider Selection (Provider Agnosticism)
+	// Priority: explicit flag/env var > first available > error
+	primaryOverride := os.Getenv("GORKBOT_PRIMARY")
+	consultantOverride := os.Getenv("GORKBOT_CONSULTANT")
+	// Legacy support for model overrides (deprecated)
+	primaryModelOverride := os.Getenv("GORKBOT_PRIMARY_MODEL")
+	consultantModelOverride := os.Getenv("GORKBOT_CONSULTANT_MODEL")
 
-	if grokKey == "" {
-		logger.Warn("XAI_API_KEY missing")
+	if grokKey == "" && geminiKey == "" && anthropicKey == "" && openaiKey == "" {
+		logger.Warn("No AI provider API keys configured. Set at least one of: XAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY")
 	}
 
-	// Initialize Base Providers (Factories)
-	baseGrok := ai.NewGrokProvider(grokKey, primaryOverride)
-	baseGemini := ai.NewGeminiProvider(geminiKey, consultantOverride, *verboseThoughts)
-
-	// Initialize Registry
+	// Initialize Registry (Provider Agnosticism)
 	reg := registry.NewModelRegistry(logger)
 	startupCtx := context.Background()
 
-	// Register Providers
+	// Register ALL providers that have API keys (provider-agnostic)
 	if grokKey != "" {
+		baseGrok := ai.NewGrokProvider(grokKey, primaryModelOverride)
 		if err := reg.RegisterProvider(startupCtx, baseGrok); err != nil {
 			logger.Error("Failed to register Grok provider", "error", err)
 		}
 	}
 	if geminiKey != "" {
+		baseGemini := ai.NewGeminiProvider(geminiKey, consultantModelOverride, *verboseThoughts)
 		if err := reg.RegisterProvider(startupCtx, baseGemini); err != nil {
 			logger.Error("Failed to register Gemini provider", "error", err)
+		}
+	}
+	if anthropicKey != "" {
+		baseAnthropic := ai.NewAnthropicProvider(anthropicKey, "")
+		if err := reg.RegisterProvider(startupCtx, baseAnthropic); err != nil {
+			logger.Error("Failed to register Anthropic provider", "error", err)
+		}
+	}
+	if openaiKey != "" {
+		baseOpenAI := ai.NewOpenAIProvider(openaiKey, "")
+		if err := reg.RegisterProvider(startupCtx, baseOpenAI); err != nil {
+			logger.Error("Failed to register OpenAI provider", "error", err)
+		}
+	}
+	if minimaxKey != "" {
+		baseMiniMax := ai.NewMiniMaxProvider(minimaxKey, "")
+		if err := reg.RegisterProvider(startupCtx, baseMiniMax); err != nil {
+			logger.Error("Failed to register MiniMax provider", "error", err)
+		}
+	}
+	if openrouterKey != "" {
+		baseOpenRouter := ai.NewOpenRouterProvider(openrouterKey, "")
+		if err := reg.RegisterProvider(startupCtx, baseOpenRouter); err != nil {
+			logger.Error("Failed to register OpenRouter provider", "error", err)
+		}
+	}
+	if moonshotKey != "" {
+		baseMoonshot := ai.NewMoonshotProvider(moonshotKey, "")
+		if err := reg.RegisterProvider(startupCtx, baseMoonshot); err != nil {
+			logger.Error("Failed to register Moonshot provider", "error", err)
 		}
 	}
 
 	// Initialize Router
 	r := router.NewRouter(reg, logger)
 
-	// Select System Models (Dynamic Configuration)
+	// Select Providers (Provider Agnosticism)
+	// This uses provider-agnostic selection: explicit override > first available > error
 	var primary ai.AIProvider
 	var consultant ai.AIProvider
-	var sysConfig *router.SystemConfiguration // Declare here
+	var sysConfig *router.SystemConfiguration
 
-	// Check if user has explicit preferences via ENV vars first
-	if primaryOverride != "" && consultantOverride != "" {
-		logger.Info("Using explicit model overrides from environment",
-			"primary", primaryOverride, "consultant", consultantOverride)
+	// Use the new agnostic provider selection
+	var primaryErr error
+	primary, consultant, primaryErr = SelectProviders(
+		reg,
+		primaryOverride,    // GORKBOT_PRIMARY env var (provider name)
+		consultantOverride, // GORKBOT_CONSULTANT env var (provider name)
+		logger,
+	)
 
-		primary = baseGrok.WithModel(primaryOverride)
-		consultant = baseGemini.WithModel(consultantOverride)
+	if primaryErr != nil {
+		logger.Error("Provider selection failed", "error", primaryErr)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", primaryErr)
+		os.Exit(1)
+	}
 
-		// Create a dummy sysConfig for display purposes if needed
-		sysConfig = &router.SystemConfiguration{
-			Reasoning: "Explicit environment variable override",
-		}
+	// Validate provider configuration
+	if err := ValidateProviderConfig(primary, consultant, logger); err != nil {
+		logger.Error("Invalid provider configuration", "error", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Attempt Dynamic Model Selection (optional optimization)
+	sysConfig, err = r.SelectSystemModels()
+	if err == nil {
+		logger.Info("Dynamic Model Selection Successful",
+			"primary", sysConfig.PrimaryModel.ID,
+			"specialist", sysConfig.SpecialistModel.ID,
+			"reason", sysConfig.Reasoning)
 	} else {
-		// Attempt Dynamic Selection
-		sysConfig, err = r.SelectSystemModels()
-		if err == nil {
-			logger.Info("Dynamic Model Selection Successful",
-				"primary", sysConfig.PrimaryModel.ID,
-				"specialist", sysConfig.SpecialistModel.ID,
-				"reason", sysConfig.Reasoning)
-
-			// Instantiate Primary
-			if p, ok := reg.GetProvider(sysConfig.PrimaryModel.Provider); ok {
-				if factory, ok := p.(ai.AIProvider); ok {
-					primary = factory.WithModel(string(sysConfig.PrimaryModel.ID))
-				}
-			}
-
-			// Instantiate Consultant
-			if p, ok := reg.GetProvider(sysConfig.SpecialistModel.Provider); ok {
-				if factory, ok := p.(ai.AIProvider); ok {
-					consultant = factory.WithModel(string(sysConfig.SpecialistModel.ID))
-				}
-			}
-		} else {
-			logger.Warn("Dynamic Model Selection Failed - Falling back to defaults/overrides", "error", err)
-		}
-	}
-
-	// Fallback / Default Initialization if dynamic failed or only partial overrides
-	if primary == nil {
-		if primaryOverride != "" {
-			primary = baseGrok.WithModel(primaryOverride)
-		} else {
-			primary = baseGrok
-		}
-	}
-	if consultant == nil && geminiKey != "" {
-		if consultantOverride != "" {
-			consultant = baseGemini.WithModel(consultantOverride)
-		} else {
-			consultant = baseGemini
-		}
+		logger.Debug("Dynamic Model Selection unavailable, using default models", "error", err)
+		// This is not a critical error - providers will use their defaults
 	}
 
 	// 4.2 Initialize Process Manager (For Advanced Shell Execution)
@@ -384,6 +406,13 @@ func main() {
 	logger.Info("SENSE tracer active", "trace_dir", senseTraceDir)
 	// SENSETracer is also stored on the orchestrator (set after orch is created
 	// below) so streaming can emit context-overflow and provider-error events.
+
+	// ── Research Engine (context-efficient web browsing) ──────────────────────
+	// Initialize the Deep Research Engine for browser_search/open/find tools.
+	// Document content stays in a ring buffer and never enters conversation.
+	researchEngine := research.NewEngine(10, logger)
+	toolRegistry.SetResearchEngine(researchEngine)
+	logger.Info("Research engine initialized", "max_documents", 10)
 
 	if err := toolRegistry.RegisterDefaultTools(); err != nil {
 		logger.Error("Failed to register default tools", "error", err)
@@ -477,8 +506,9 @@ func main() {
 		}
 	}
 
-	// 6. Orchestration Engine
-	orch := engine.NewOrchestrator(primary, consultant, toolRegistry, logger, *watchdogFlag)
+	// 6. Orchestration Engine with ProviderCoordinator
+	provCoord := engprov.NewProviderCoordinator(provMgr, primary, consultant, discMgr, events.NewBus(), logger)
+	orch := engine.NewOrchestrator(provCoord, toolRegistry, logger, *watchdogFlag)
 
 	// Wire SENSE tracer onto orchestrator so streaming can emit
 	// context-overflow and provider-error events (complementing tool-layer tracing).
@@ -512,6 +542,21 @@ func main() {
 	orch.InitEnhancements(env.ConfigDir, cwd)
 	logger.Info("Enhanced systems initialized", "version", platform.Version)
 
+	// 6.2a Skills registry/loader wiring.
+	skillsDir := filepath.Join(env.ConfigDir, "skills")
+	if err := os.MkdirAll(skillsDir, 0700); err != nil {
+		logger.Warn("Failed to prepare skills directory", "dir", skillsDir, "error", err)
+	} else {
+		skillRegistry := skills.NewPersistentRegistry(skillsDir, logger)
+		skillLoader := skills.NewLoader(skillRegistry, logger)
+		if loaded, loadErr := skillLoader.LoadDirectory(skillsDir); loadErr != nil {
+			logger.Warn("Skills load failed", "dir", skillsDir, "error", loadErr)
+		} else if loaded > 0 {
+			logger.Info("Skills loaded", "count", loaded, "dir", skillsDir)
+		}
+		orch.SkillLoader = skillLoader
+	}
+
 	// 6.3 Intelligence layer (ARC Router + MEL Meta-Experience Learning)
 	orch.InitIntelligence(env.ConfigDir)
 	logger.Info("Intelligence layer initialized (ARC + MEL)")
@@ -540,10 +585,11 @@ func main() {
 		if !ok {
 			return "", fmt.Errorf("unknown agent type: %s", agentType)
 		}
-		if orch.Primary == nil {
+		primary := orch.Primary()
+		if primary == nil {
 			return "", fmt.Errorf("no primary AI provider available")
 		}
-		return agent.Execute(ctx, task, orch.Primary, toolRegistry)
+		return agent.Execute(ctx, task, primary, toolRegistry)
 	})
 
 	// 6.3c Unified Memory — wraps AgeMem + Engrams + MEL
@@ -556,14 +602,15 @@ func main() {
 
 	// 6.3a Colony debate — wire orchestrator primary provider as the runner
 	toolRegistry.SetColonyRunner(func(ctx context.Context, sys, prompt string) (string, error) {
-		if orch.Primary == nil {
+		primary := orch.Primary()
+		if primary == nil {
 			return "", fmt.Errorf("no primary provider")
 		}
 		combined := prompt
 		if sys != "" {
 			combined = sys + "\n\n" + prompt
 		}
-		return orch.Primary.Generate(ctx, combined)
+		return primary.Generate(ctx, combined)
 	})
 	logger.Info("Colony debate tool registered")
 
@@ -572,7 +619,7 @@ func main() {
 	// SetVectorStore is called there once the store is ready; the mediator runs
 	// in gracefully-degraded mode (lexical-only context, no engram cache) until then.
 	consultMediator := consultation.NewMediator(consultation.MediatorConfig{
-		Secondary:   orch.Consultant,
+		Secondary:   orch.Consultant(),
 		VectorStore: nil, // patched in initEmbedder
 		Embedder:    nil, // patched in initEmbedder
 		AgeMem:      orch.AgeMem,
@@ -653,9 +700,8 @@ func main() {
 		// Propagate restored selections to the already-initialised orchestrator and
 		// tool registry. NewOrchestrator (and toolRegistry.SetConsultantProvider) ran
 		// before app state was loaded and therefore hold pre-restore values.
-		orch.Primary = primary
+		// Note: Primary/Consultant are now managed via ProviderCoordinator setters
 		toolRegistry.SetAIProvider(primary)
-		orch.Consultant = consultant
 		toolRegistry.SetConsultantProvider(consultant)
 	}
 
@@ -829,8 +875,8 @@ func main() {
 	orch.Feedback = router.NewFeedbackManager(env.ConfigDir, logger)
 	defer orch.Feedback.Close()
 
-	// 6.5.3 Wire discovery manager into orchestrator (used by spawn_sub_agent + Cloud Brains tab).
-	orch.Discovery = discMgr
+	// 6.5.3 Discovery manager is already wired into ProviderCoordinator during initialization
+	// (used by spawn_sub_agent + Cloud Brains tab, accessed via orch.ProviderCoord.Discovery())
 
 	// 6.5.4 SQLite persistence store — conversation history + tool call analytics.
 	sessionID := fmt.Sprintf("session-%d", time.Now().UnixNano())
@@ -954,6 +1000,11 @@ func main() {
 		port := 8080
 		if p := os.Getenv("PORT"); p != "" {
 			fmt.Sscanf(p, "%d", &port)
+		}
+
+		// Initialize design system for theme tokens
+		if err := designsystem.Init(logger); err != nil {
+			logger.Error("Failed to initialize design system", "error", err)
 		}
 
 		server := webui.NewServer(port, orch, reg, appState, logger)
@@ -1238,8 +1289,8 @@ func wireCommandRegistry(ctx context.Context, cmdReg *commands.Registry, orch *e
 				return "Feedback manager not available."
 			}
 			modelID := ""
-			if orch.Primary != nil {
-				modelID = orch.Primary.GetMetadata().ID
+			if primary := orch.Primary(); primary != nil {
+				modelID = primary.GetMetadata().ID
 			}
 			// Normalize 1–5 → 0.0–1.0 and treat ≥3 as success.
 			orch.Feedback.RecordOutcome(router.ClassifyQuery(""), modelID, (score-1)/4.0, score >= 3)
@@ -1284,8 +1335,8 @@ func wireCommandRegistry(ctx context.Context, cmdReg *commands.Registry, orch *e
 			return fmt.Sprintf("Secondary switched to **%s** (%s)", modelID, providerName)
 		},
 		SetAutoSecondary: func() string {
-			orch.Consultant = nil
-			// Clear registry cache so ResolveConsultantProvider auto-selects.
+			// Clear registry cache so ResolveConsultantProvider auto-selects
+			// (Consultant provider itself is managed by ProviderCoordinator)
 			if orch.Registry != nil {
 				orch.Registry.SetConsultantProvider(nil)
 			}
@@ -1415,24 +1466,11 @@ func wireCommandRegistry(ctx context.Context, cmdReg *commands.Registry, orch *e
 		}
 	}
 
-	// Wire skills loader.
-	cwd, _ := os.Getwd()
-	configDir := os.Getenv("XDG_CONFIG_HOME")
-	if configDir == "" {
-		home, _ := os.UserHomeDir()
-		configDir = home + "/.config/gorkbot"
-	}
-	skillsLoader := skills.NewLoader(
-		configDir+"/skills",
-		cwd+"/.gorkbot/skills",
-	)
-	cmdReg.SkillsFormat = skillsLoader.Format
-	cmdReg.SkillsGet = func(name, argsStr string) (string, bool) {
-		def, ok := skillsLoader.Get(name)
-		if !ok {
-			return "", false
-		}
-		return def.Render(argsStr), true
+	// Wire command registry.
+	if orch != nil && orch.SkillLoader != nil {
+		sl := orch.SkillLoader
+		cmdReg.SkillsFormat = sl.FormatList
+		cmdReg.SkillsGet = sl.RenderInvocation
 	}
 
 	// Wire rule engine into commands.

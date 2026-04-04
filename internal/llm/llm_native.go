@@ -4,7 +4,11 @@ package llm
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/cbridge -I${SRCDIR}/../../ext/llama.cpp/include -I${SRCDIR}/../../ext/llama.cpp/ggml/include
-#cgo LDFLAGS: ${SRCDIR}/libgorkbot_llm.a ${SRCDIR}/../../ext/llama.cpp/build/libllama.a ${SRCDIR}/../../ext/llama.cpp/build/libggml.a ${SRCDIR}/../../ext/llama.cpp/build/libggml-cpu.a ${SRCDIR}/../../ext/llama.cpp/build/libggml-base.a ${SRCDIR}/../../ext/llama.cpp/build/libggml-vulkan.a /data/data/com.termux/files/usr/lib/libomp.a -L/data/data/com.termux/files/usr/lib -lc++_shared -lm -lvulkan
+#cgo CXXFLAGS: -std=c++17
+#cgo LDFLAGS: ${SRCDIR}/libgorkbot_llm.a ${SRCDIR}/../../ext/llama.cpp/build/libllama.a ${SRCDIR}/../../ext/llama.cpp/build/libggml.a ${SRCDIR}/../../ext/llama.cpp/build/libggml-cpu.a ${SRCDIR}/../../ext/llama.cpp/build/libggml-base.a -lm
+#cgo linux LDFLAGS: -lstdc++
+#cgo android LDFLAGS: -lc++_shared
+#cgo darwin LDFLAGS: -lc++
 #include "llm_bridge.h"
 #include <stdlib.h>
 */

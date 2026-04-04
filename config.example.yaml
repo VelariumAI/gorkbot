@@ -1,0 +1,195 @@
+# Gorkbot Configuration
+# Copy this to config.yaml and customize for your setup
+# Values starting with $ are resolved as environment variables
+
+config_version: 2
+
+# ── MODELS ──────────────────────────────────────────────────────────────────
+# Define your LLM models. The first one is the default.
+# 'use' field specifies the provider class path for reflection-based instantiation
+
+models:
+  - name: grok
+    display_name: "xAI Grok"
+    use: "pkg.ai:XAIChatModel"           # Reflection path
+    model: "grok-3-mini"
+    api_key: $XAI_API_KEY                # Environment variable substitution
+    max_tokens: 8192
+    temperature: 0.7
+    supports_thinking: true
+    supports_vision: false
+
+  - name: claude-4
+    display_name: "Claude 4"
+    use: "pkg.ai:AnthropicChatModel"
+    model: "claude-opus-4-6"
+    api_key: $ANTHROPIC_API_KEY
+    max_tokens: 4096
+    temperature: 0.7
+    supports_thinking: true
+    supports_vision: true
+
+  - name: gemini-2
+    display_name: "Google Gemini 2"
+    use: "pkg.ai:GoogleChatModel"
+    model: "gemini-2.0-flash"
+    api_key: $GEMINI_API_KEY
+    base_url: "https://generativelanguage.googleapis.com"
+    supports_thinking: false
+    supports_vision: true
+
+# ── TOOLS ───────────────────────────────────────────────────────────────────
+# Tools available to the agents. Organize by group for easy filtering.
+
+tools:
+  # Sandbox tools
+  - use: "pkg.sandbox.tools:BashTool"
+    group: "sandbox"
+    enabled: true
+
+  - use: "pkg.sandbox.tools:ReadFileTool"
+    group: "sandbox"
+    enabled: true
+
+  - use: "pkg.sandbox.tools:WriteFileTool"
+    group: "sandbox"
+    enabled: true
+
+  - use: "pkg.sandbox.tools:StrReplaceTool"
+    group: "sandbox"
+    enabled: true
+
+  - use: "pkg.sandbox.tools:ListDirTool"
+    group: "sandbox"
+    enabled: true
+
+  # Web tools
+  - use: "pkg.tools:TavilySearchTool"
+    group: "web"
+    enabled: true
+
+  - use: "pkg.tools:WebFetchTool"
+    group: "web"
+    enabled: true
+
+  # Built-in tools
+  - use: "pkg.tools:ListToolsTool"
+    group: "meta"
+    enabled: true
+
+  - use: "pkg.tools:ToolInfoTool"
+    group: "meta"
+    enabled: true
+
+# ── TOOL GROUPS ─────────────────────────────────────────────────────────────
+# Define logical groupings of tools
+
+tool_groups:
+  - name: "sandbox"
+    description: "Code execution and file operations"
+    tools:
+      - "BashTool"
+      - "ReadFileTool"
+      - "WriteFileTool"
+      - "StrReplaceTool"
+      - "ListDirTool"
+
+  - name: "web"
+    description: "Web search and content fetching"
+    tools:
+      - "TavilySearchTool"
+      - "WebFetchTool"
+
+  - name: "meta"
+    description: "Tool discovery and information"
+    tools:
+      - "ListToolsTool"
+      - "ToolInfoTool"
+
+# ── SANDBOX ──────────────────────────────────────────────────────────────────
+# Code execution backend configuration
+
+sandbox:
+  use: "pkg.sandbox.local:LocalSandboxProvider"  # LocalSandboxProvider | DockerSandboxProvider | KubernetesSandboxProvider
+  # For Docker backend, add:
+  # docker_host: "unix:///var/run/docker.sock"
+  # image: "gorkbot:latest"
+
+# ── SKILLS ──────────────────────────────────────────────────────────────────
+# Markdown-based skill definitions
+
+skills:
+  path: "./skills"                # Host path to skills directory
+  container_path: "/mnt/skills"   # Virtual path in agent context
+
+# ── MEMORY ──────────────────────────────────────────────────────────────────
+# Persistent LLM-based memory system with fact extraction
+
+memory:
+  enabled: true
+  injection_enabled: true
+  storage_path: "~/.gorkbot/memory.db"   # SQLite database
+  debounce_seconds: 30                   # Batch updates every 30s
+  model_name: null                       # null = use default model
+  max_facts: 100                         # Maximum facts to store
+  fact_confidence_threshold: 0.7         # Only store facts with confidence >= 0.7
+  max_injection_tokens: 2000             # Max tokens to inject per interaction
+
+# ── SUMMARIZATION ───────────────────────────────────────────────────────────
+# Automatic conversation summarization when approaching token limits
+
+summarization:
+  enabled: false
+  trigger:
+    - type: "tokens"
+      threshold: 80000    # Summarize when approaching 80k tokens
+  keep:
+    type: "messages"
+    keep: 5              # Keep last 5 messages unsummarized
+  model_name: null       # null = use default model
+
+# ── SUBAGENTS ───────────────────────────────────────────────────────────────
+# Background task delegation configuration
+
+subagents:
+  enabled: true
+  max_concurrent: 3      # Maximum concurrent subagents
+  timeout_seconds: 900   # 15-minute timeout per task
+
+# ── CHANNELS ────────────────────────────────────────────────────────────────
+# IM platform integrations
+
+channels:
+  langgraph_url: "http://localhost:2024"
+  gateway_url: "http://localhost:8001"
+
+  session:
+    assistant_id: "lead_agent"
+    config:
+      recursion_limit: 100
+    context:
+      thinking_enabled: true
+      is_plan_mode: false
+      subagent_enabled: true
+
+  feishu:
+    enabled: false
+    app_id: $FEISHU_APP_ID
+    app_secret: $FEISHU_APP_SECRET
+
+  slack:
+    enabled: false
+    bot_token: $SLACK_BOT_TOKEN
+    app_token: $SLACK_APP_TOKEN
+
+  telegram:
+    enabled: false
+    bot_token: $TELEGRAM_BOT_TOKEN
+
+# ── GUARDRAILS ──────────────────────────────────────────────────────────────
+# Tool execution authorization system
+
+guardrails:
+  enabled: false
+  use: "pkg.guardrails:AllowlistProvider"  # AllowlistProvider | CustomProvider
+  # Add provider-specific config below

@@ -174,10 +174,10 @@ func NewWrappedProvider(base ai.AIProvider, cache *SemanticCache) *WrappedProvid
 
 // ── AIProvider interface ──────────────────────────────────────────────────────
 
-func (w *WrappedProvider) Name() string                    { return w.base.Name() }
-func (w *WrappedProvider) ID() registry.ProviderID         { return w.base.ID() }
+func (w *WrappedProvider) Name() string                     { return w.base.Name() }
+func (w *WrappedProvider) ID() registry.ProviderID          { return w.base.ID() }
 func (w *WrappedProvider) GetMetadata() ai.ProviderMetadata { return w.base.GetMetadata() }
-func (w *WrappedProvider) Ping(ctx context.Context) error  { return w.base.Ping(ctx) }
+func (w *WrappedProvider) Ping(ctx context.Context) error   { return w.base.Ping(ctx) }
 func (w *WrappedProvider) FetchModels(ctx context.Context) ([]registry.ModelDefinition, error) {
 	return w.base.FetchModels(ctx)
 }

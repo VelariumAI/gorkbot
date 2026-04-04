@@ -15,12 +15,12 @@ import (
 // The Orchestrator holds a single *Coordinator.
 type Coordinator struct {
 	cfg        SREConfig
-	grounder   *GroundingExtractor  // nil if !cfg.GroundingEnabled
-	anchors    *AnchorLayer          // nil if ageMem == nil
-	cos        *CoSEngine            // nil if !cfg.CoSEnabled
-	correction *CorrectionEngine     // nil if !cfg.CoSEnabled
-	ensemble   *EnsembleManager      // always created; Enabled from cfg
-	sense      SENSEProvider         // nil-safe
+	grounder   *GroundingExtractor // nil if !cfg.GroundingEnabled
+	anchors    *AnchorLayer        // nil if ageMem == nil
+	cos        *CoSEngine          // nil if !cfg.CoSEnabled
+	correction *CorrectionEngine   // nil if !cfg.CoSEnabled
+	ensemble   *EnsembleManager    // always created; Enabled from cfg
+	sense      SENSEProvider       // nil-safe
 	logger     *slog.Logger
 }
 

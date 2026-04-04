@@ -123,8 +123,8 @@ func TestCosineSimilarity64_KnownAngle(t *testing.T) {
 func TestTopKExperiences_Basic(t *testing.T) {
 	// Three experiences; query should rank them by cosine similarity.
 	bank := []Experience{
-		{ID: "E1", Vector: []float64{1, 0, 0}}, // sim with query = 1.0
-		{ID: "E2", Vector: []float64{0, 1, 0}}, // sim with query = 0.0
+		{ID: "E1", Vector: []float64{1, 0, 0}},  // sim with query = 1.0
+		{ID: "E2", Vector: []float64{0, 1, 0}},  // sim with query = 0.0
 		{ID: "E3", Vector: []float64{-1, 0, 0}}, // sim with query = -1.0
 	}
 	query := []float64{1, 0, 0}

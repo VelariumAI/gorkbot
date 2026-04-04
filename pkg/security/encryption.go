@@ -19,7 +19,7 @@ type KeyManager struct {
 // NewKeyManager creates a new key manager
 func NewKeyManager(configDir string) (*KeyManager, error) {
 	return &KeyManager{
-		keyPath: filepath.Join(configDir, ".gorkbot.key"),
+		keyPath: filepath.Join(configDir, ".grokster.key"),
 	}, nil
 }
 

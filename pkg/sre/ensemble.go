@@ -18,7 +18,7 @@ import (
 type TrajectoryResult struct {
 	Label   string
 	Output  string
-	Score   float64       // quality score from SPARK.ObserveEnsemble; 0 = unscored
+	Score   float64 // quality score from SPARK.ObserveEnsemble; 0 = unscored
 	Elapsed time.Duration
 	Err     error
 }
@@ -31,7 +31,7 @@ type TemperatureConfigurable interface {
 // EnsembleManager runs multi-trajectory reasoning and synthesizes results.
 type EnsembleManager struct {
 	provider  ai.AIProvider
-	spark     *spark.SPARK // nil-safe; for ObserveEnsemble scoring
+	spark     *spark.SPARK  // nil-safe; for ObserveEnsemble scoring
 	sense     SENSEProvider // nil-safe; for LogSREEnsemble
 	consensus *ConsensusOrchestrator
 	logger    *slog.Logger
@@ -207,9 +207,9 @@ func (co *ConsensusOrchestrator) Merge(results []TrajectoryResult) (*subagents.S
 		// Fallback: heuristic — return the highest-scoring result
 		best := validResults[0]
 		return &subagents.SynthesisResult{
-			Consensus: best.Output,
+			Consensus:  best.Output,
 			Confidence: best.Score,
-			Sources: []string{best.Label},
+			Sources:    []string{best.Label},
 		}, nil
 	}
 

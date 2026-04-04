@@ -4,11 +4,11 @@
 // continuously improve its tool-use efficiency and problem-solving flexibility:
 //
 //   - Skill Library   : task-level Standard Operating Procedures stored as
-//                       domain-partitioned Markdown documents (e.g. visual-logic.md,
-//                       search-tactics.md).  One file per task class — never a
-//                       monolithic global blob.
+//     domain-partitioned Markdown documents (e.g. visual-logic.md,
+//     search-tactics.md).  One file per task class — never a
+//     monolithic global blob.
 //   - Experience Bank : action-level tactical insights stored as a JSON file with
-//                       cosine-similarity-indexed float64 vectors for retrieval.
+//     cosine-similarity-indexed float64 vectors for retrieval.
 //
 // Architecture:
 //

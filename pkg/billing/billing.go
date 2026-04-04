@@ -157,6 +157,29 @@ func (bm *BillingManager) GetTotalSessionCost() float64 {
 	return bm.TotalSession
 }
 
+// CalculateCost computes the cost for a turn without modifying state
+func (bm *BillingManager) CalculateCost(providerID, modelID string, inputTokens, outputTokens int) float64 {
+	bm.Mu.RLock()
+	defer bm.Mu.RUnlock()
+
+	var inputPrice, outputPrice float64
+
+	// Find pricing
+	providerID = strings.ToLower(providerID)
+	if prov, ok := bm.Config.Providers[providerID]; ok {
+		lowerModel := strings.ToLower(modelID)
+		for _, entry := range prov.Entries {
+			if strings.Contains(lowerModel, strings.ToLower(entry.Prefix)) {
+				inputPrice = entry.InputPerM
+				outputPrice = entry.OutputPerM
+				break
+			}
+		}
+	}
+
+	return (float64(inputTokens)/1_000_000.0)*inputPrice + (float64(outputTokens)/1_000_000.0)*outputPrice
+}
+
 func (bm *BillingManager) GetCostString() string {
 	cost := bm.GetTotalSessionCost()
 	if cost == 0 {

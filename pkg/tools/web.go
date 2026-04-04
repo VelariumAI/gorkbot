@@ -20,7 +20,7 @@ func NewWebFetchTool() *WebFetchTool {
 	return &WebFetchTool{
 		BaseTool: BaseTool{
 			name:               "web_fetch",
-			description:        "Fetch and parse web pages - returns clean text content (not raw HTML). Use this when you need to extract readable text from a URL.",
+			description:        "Fetch and parse web pages - returns clean text content (not raw HTML). Falls back to lynx/curl if scrapling unavailable. Use this when you need to extract readable text from a URL.",
 			category:           CategoryWeb,
 			requiresPermission: true,
 			defaultPermission:  PermissionSession,
@@ -165,6 +165,8 @@ except Exception as e:
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 
+	stderrStr := stderr.String()
+
 	if err == nil && stdout.Len() > 0 {
 		return &ToolResult{
 			Success:      true,
@@ -174,8 +176,15 @@ except Exception as e:
 		}, nil
 	}
 
-	// Log the error for debugging
-	errMsg := fmt.Sprintf("scrapling failed: %v, stderr: %s", err, stderr.String())
+	// Check for ModuleNotFoundError (scrapling not installed)
+	// Skip detailed error logging if it's just a missing module
+	var errMsg string
+	if strings.Contains(stderrStr, "ModuleNotFoundError") || strings.Contains(stderrStr, "No module named 'scrapling'") {
+		// Gracefully handle missing scrapling - don't spam error details
+		errMsg = "scrapling module not installed (OK - using fallback methods)"
+	} else {
+		errMsg = fmt.Sprintf("scrapling failed: %v, stderr: %s", err, stderrStr)
+	}
 
 	// Fallback: try lynx if available
 	return t.executeLynx(ctx, url, errMsg)

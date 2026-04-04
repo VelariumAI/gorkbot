@@ -4,16 +4,16 @@
 // two-stage tiered strategy ported from the build-your-own-openclaw tutorial
 // (Step 05) but implemented in idiomatic Go:
 //
-//  Stage 1 — Soft trim (SoftThresholdPct, default 75%):
-//    Walk the history and truncate any tool-result message whose content
-//    exceeds MaxToolResultBytes (default 2 KB) down to a short summary
-//    header.  Tool-call/tool-result pairs are kept in sync so the history
-//    stays valid.
+//	Stage 1 — Soft trim (SoftThresholdPct, default 75%):
+//	  Walk the history and truncate any tool-result message whose content
+//	  exceeds MaxToolResultBytes (default 2 KB) down to a short summary
+//	  header.  Tool-call/tool-result pairs are kept in sync so the history
+//	  stays valid.
 //
-//  Stage 2 — Hard compress (HardThresholdPct, default 90%):
-//    If the history is still over the hard threshold after Stage 1, invoke
-//    the CompressionPipe synchronously (blocking) to SENSE-compress old
-//    messages into a summary system message.
+//	Stage 2 — Hard compress (HardThresholdPct, default 90%):
+//	  If the history is still over the hard threshold after Stage 1, invoke
+//	  the CompressionPipe synchronously (blocking) to SENSE-compress old
+//	  messages into a summary system message.
 //
 // This replaces the async-only "fire at 95%" approach, which could let the
 // conversation momentarily exceed the provider limit.
@@ -50,23 +50,23 @@ const (
 // TieredCompactor enforces context limits before each LLM call using a
 // two-stage approach: trim large tool results first, then SENSE-compress.
 type TieredCompactor struct {
-	contextMgr        *ContextManager
-	pipe              *CompressionPipe // may be nil
-	logger            *slog.Logger
-	SoftThresholdPct  float64 // default 0.75
-	HardThresholdPct  float64 // default 0.90
-	MaxToolResultBytes int    // default 2048
+	contextMgr         *ContextManager
+	pipe               *CompressionPipe // may be nil
+	logger             *slog.Logger
+	SoftThresholdPct   float64 // default 0.75
+	HardThresholdPct   float64 // default 0.90
+	MaxToolResultBytes int     // default 2048
 }
 
 // NewTieredCompactor creates a TieredCompactor. pipe may be nil (Stage-2
 // compression will be skipped gracefully).
 func NewTieredCompactor(cm *ContextManager, pipe *CompressionPipe, logger *slog.Logger) *TieredCompactor {
 	return &TieredCompactor{
-		contextMgr:        cm,
-		pipe:              pipe,
-		logger:            logger,
-		SoftThresholdPct:  defaultSoftThresholdPct,
-		HardThresholdPct:  defaultHardThresholdPct,
+		contextMgr:         cm,
+		pipe:               pipe,
+		logger:             logger,
+		SoftThresholdPct:   defaultSoftThresholdPct,
+		HardThresholdPct:   defaultHardThresholdPct,
 		MaxToolResultBytes: defaultMaxToolResultBytes,
 	}
 }

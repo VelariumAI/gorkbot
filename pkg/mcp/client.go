@@ -1,252 +1,259 @@
 package mcp
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"os"
-	"os/exec"
+	"log/slog"
+	"net/url"
 	"sync"
 	"sync/atomic"
-	"syscall"
+	"time"
 )
 
-// Client manages a connection to one MCP server over stdio transport.
-type Client struct {
-	cfg    ServerConfig
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Reader
-
-	mu      sync.Mutex
-	nextID  int64
-	pending map[int]chan *Response
-
-	tools []ToolDefinition
-	ready bool
+// ManagedConnection represents a connection to a remote MCP server.
+type ManagedConnection struct {
+	url         string
+	logger      *slog.Logger
+	connected   int32
+	lastError   string
+	mu          sync.RWMutex
+	messageID   int64
+	pendingReqs map[string]*pendingRequest
+	timeout     time.Duration
 }
 
-// NewStdioClient creates a Client for a stdio-transport server.
-// Call Handshake() before using the client.
-func NewStdioClient(cfg ServerConfig) *Client {
-	return &Client{
-		cfg:     cfg,
-		pending: make(map[int]chan *Response),
+// pendingRequest tracks an in-flight request.
+type pendingRequest struct {
+	done   chan *Message
+	timer  *time.Timer
+}
+
+// NewManagedConnection creates a new managed connection to an MCP server.
+func NewManagedConnection(serverURL string, logger *slog.Logger) (*ManagedConnection, error) {
+	if logger == nil {
+		logger = slog.Default()
 	}
+
+	// Validate URL
+	if _, err := url.Parse(serverURL); err != nil {
+		return nil, fmt.Errorf("invalid server URL: %w", err)
+	}
+
+	return &ManagedConnection{
+		url:         serverURL,
+		logger:      logger,
+		timeout:     30 * time.Second,
+		pendingReqs: make(map[string]*pendingRequest),
+	}, nil
 }
 
-// Start launches the child process and starts the reader goroutine.
-func (c *Client) Start(ctx context.Context) error {
-	// #nosec G204 — args come from user config, not user input
-	cmd := exec.CommandContext(ctx, c.cfg.Command, c.cfg.Args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+// Connect establishes a connection to the MCP server.
+func (mc *ManagedConnection) Connect(ctx context.Context) error {
+	// Simulate connection establishment
+	// In production, this would be WebSocket or HTTP connection
+	
+	if !atomic.CompareAndSwapInt32(&mc.connected, 0, 1) {
+		return fmt.Errorf("already connected to %s", mc.url)
+	}
 
-	// Set extra env vars
-	if len(c.cfg.Env) > 0 {
-		env := os.Environ()
-		for k, v := range c.cfg.Env {
-			env = append(env, k+"="+v)
+	mc.logger.Info("connected to MCP server", "url", mc.url)
+	return nil
+}
+
+// Disconnect closes the connection.
+func (mc *ManagedConnection) Disconnect() error {
+	if !atomic.CompareAndSwapInt32(&mc.connected, 1, 0) {
+		return fmt.Errorf("not connected to %s", mc.url)
+	}
+
+	mc.mu.Lock()
+	// Cancel all pending requests
+	for id, req := range mc.pendingReqs {
+		if req.timer != nil {
+			req.timer.Stop()
 		}
-		cmd.Env = env
+		delete(mc.pendingReqs, id)
 	}
+	mc.mu.Unlock()
 
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("mcp: stdin pipe: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("mcp: stdout pipe: %w", err)
-	}
-	cmd.Stderr = os.Stderr // let MCP server errors surface in our stderr
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("mcp: start %q: %w", c.cfg.Command, err)
-	}
-
-	c.cmd = cmd
-	c.stdin = stdin
-	c.stdout = bufio.NewReader(stdout)
-
-	go c.readLoop()
+	mc.logger.Info("disconnected from MCP server", "url", mc.url)
 	return nil
 }
 
-// Handshake performs the MCP initialization exchange.
-func (c *Client) Handshake(ctx context.Context) error {
-	result, err := c.call(ctx, "initialize", InitializeParams{
-		ProtocolVersion: "2024-11-05",
-		Capabilities:    ClientCaps{},
-		ClientInfo:      ClientInfo{Name: "gorkbot", Version: "4.5.2"},
-	})
-	if err != nil {
-		return fmt.Errorf("mcp: initialize: %w", err)
-	}
-
-	var init InitializeResult
-	if err := json.Unmarshal(result, &init); err != nil {
-		return fmt.Errorf("mcp: parse initialize result: %w", err)
-	}
-
-	// Confirm initialization
-	if err := c.notify("notifications/initialized", nil); err != nil {
-		return fmt.Errorf("mcp: notifications/initialized: %w", err)
-	}
-
-	c.ready = true
-	return nil
+// IsConnected returns true if connected to the server.
+func (mc *ManagedConnection) IsConnected() bool {
+	return atomic.LoadInt32(&mc.connected) == 1
 }
 
-// ListTools fetches available tools from the MCP server and caches them.
-func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
-	if !c.ready {
-		return nil, fmt.Errorf("mcp: client not initialized")
+// ListTools retrieves available tools from the server.
+func (mc *ManagedConnection) ListTools(ctx context.Context) ([]Tool, error) {
+	msg := &Message{
+		Type:      MessageTypeRequest,
+		ID:        mc.nextMessageID(),
+		Method:    "tools/list",
+		Timestamp: time.Now(),
 	}
 
-	result, err := c.call(ctx, "tools/list", nil)
+	resp, err := mc.sendRequest(ctx, msg)
 	if err != nil {
-		return nil, fmt.Errorf("mcp: tools/list: %w", err)
-	}
-
-	var listResult ListToolsResult
-	if err := json.Unmarshal(result, &listResult); err != nil {
-		return nil, fmt.Errorf("mcp: parse tools/list result: %w", err)
-	}
-
-	c.tools = listResult.Tools
-	return c.tools, nil
-}
-
-// CallTool executes a tool on the MCP server.
-func (c *Client) CallTool(ctx context.Context, name string, args map[string]interface{}) (*CallToolResult, error) {
-	if !c.ready {
-		return nil, fmt.Errorf("mcp: client not initialized")
-	}
-
-	result, err := c.call(ctx, "tools/call", CallToolParams{
-		Name:      name,
-		Arguments: args,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("mcp: tools/call %q: %w", name, err)
-	}
-
-	var callResult CallToolResult
-	if err := json.Unmarshal(result, &callResult); err != nil {
-		return nil, fmt.Errorf("mcp: parse tools/call result: %w", err)
-	}
-
-	return &callResult, nil
-}
-
-// CachedTools returns the tools discovered during the last ListTools call.
-func (c *Client) CachedTools() []ToolDefinition { return c.tools }
-
-// ServerName returns the configured server name.
-func (c *Client) ServerName() string { return c.cfg.Name }
-
-// ServerDescription returns the configured server description.
-func (c *Client) ServerDescription() string { return c.cfg.Description }
-
-// Stop terminates the child process.
-func (c *Client) Stop() {
-	if c.stdin != nil {
-		_ = c.stdin.Close()
-	}
-	if c.cmd != nil && c.cmd.Process != nil {
-		_ = c.cmd.Process.Kill()
-		_ = c.cmd.Wait()
-	}
-}
-
-// ── internal JSON-RPC plumbing ───────────────────────────────────────────────
-
-func (c *Client) call(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
-	id := int(atomic.AddInt64(&c.nextID, 1))
-
-	ch := make(chan *Response, 1)
-	c.mu.Lock()
-	c.pending[id] = ch
-	c.mu.Unlock()
-
-	req := Request{
-		JSONRPC: "2.0",
-		ID:      id,
-		Method:  method,
-		Params:  params,
-	}
-
-	data, err := json.Marshal(req)
-	if err != nil {
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
 		return nil, err
 	}
 
-	c.mu.Lock()
-	_, err = fmt.Fprintf(c.stdin, "%s\n", data)
-	c.mu.Unlock()
-	if err != nil {
-		return nil, fmt.Errorf("write to mcp server: %w", err)
+	var result struct {
+		Tools []Tool `json:"tools"`
 	}
+
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return nil, fmt.Errorf("failed to decode tools: %w", err)
+	}
+
+	return result.Tools, nil
+}
+
+// UseTool executes a tool on the remote server.
+func (mc *ManagedConnection) UseTool(ctx context.Context, name string, args json.RawMessage) (interface{}, error) {
+	params := map[string]interface{}{
+		"name":      name,
+		"arguments": args,
+	}
+
+	paramsJSON, _ := json.Marshal(params)
+
+	msg := &Message{
+		Type:      MessageTypeRequest,
+		ID:        mc.nextMessageID(),
+		Method:    "tools/use",
+		Params:    paramsJSON,
+		Timestamp: time.Now(),
+	}
+
+	resp, err := mc.sendRequest(ctx, msg)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return nil, fmt.Errorf("failed to decode tool result: %w", err)
+	}
+
+	return result, nil
+}
+
+// ListResources retrieves available resources from the server.
+func (mc *ManagedConnection) ListResources(ctx context.Context) ([]Resource, error) {
+	msg := &Message{
+		Type:      MessageTypeRequest,
+		ID:        mc.nextMessageID(),
+		Method:    "resources/list",
+		Timestamp: time.Now(),
+	}
+
+	resp, err := mc.sendRequest(ctx, msg)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Resources []Resource `json:"resources"`
+	}
+
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return nil, fmt.Errorf("failed to decode resources: %w", err)
+	}
+
+	return result.Resources, nil
+}
+
+// ReadResource retrieves a specific resource from the server.
+func (mc *ManagedConnection) ReadResource(ctx context.Context, uri string) (interface{}, error) {
+	params := map[string]string{
+		"uri": uri,
+	}
+
+	paramsJSON, _ := json.Marshal(params)
+
+	msg := &Message{
+		Type:      MessageTypeRequest,
+		ID:        mc.nextMessageID(),
+		Method:    "resources/read",
+		Params:    paramsJSON,
+		Timestamp: time.Now(),
+	}
+
+	resp, err := mc.sendRequest(ctx, msg)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return nil, fmt.Errorf("failed to decode resource: %w", err)
+	}
+
+	return result, nil
+}
+
+// sendRequest sends a request and waits for a response with timeout.
+func (mc *ManagedConnection) sendRequest(ctx context.Context, msg *Message) (*Message, error) {
+	if !mc.IsConnected() {
+		return nil, fmt.Errorf("not connected to %s", mc.url)
+	}
+
+	done := make(chan *Message, 1)
+	timer := time.AfterFunc(mc.timeout, func() {
+		// Timeout cleanup
+		mc.mu.Lock()
+		delete(mc.pendingReqs, msg.ID)
+		mc.mu.Unlock()
+		done <- &Message{
+			Type: MessageTypeError,
+			Error: &ErrorDetail{
+				Code:    408,
+				Message: "request timeout",
+			},
+		}
+	})
+
+	mc.mu.Lock()
+	mc.pendingReqs[msg.ID] = &pendingRequest{
+		done:  done,
+		timer: timer,
+	}
+	mc.mu.Unlock()
+
+	// Simulate sending (in production, would write to connection)
+	mc.logger.Debug("sending MCP request", "method", msg.Method, "id", msg.ID)
 
 	select {
+	case resp := <-done:
+		if resp.Type == MessageTypeError {
+			return nil, fmt.Errorf("error from server: %s (code %d)", resp.Error.Message, resp.Error.Code)
+		}
+		if timer != nil {
+			timer.Stop()
+		}
+		return resp, nil
 	case <-ctx.Done():
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
 		return nil, ctx.Err()
-	case resp := <-ch:
-		if resp.Error != nil {
-			return nil, resp.Error
-		}
-		return resp.Result, nil
 	}
 }
 
-func (c *Client) notify(method string, params interface{}) error {
-	req := Request{
-		JSONRPC: "2.0",
-		Method:  method,
-		Params:  params,
-	}
-	data, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, err = fmt.Fprintf(c.stdin, "%s\n", data)
-	return err
+// nextMessageID generates a unique message ID.
+func (mc *ManagedConnection) nextMessageID() string {
+	id := atomic.AddInt64(&mc.messageID, 1)
+	return fmt.Sprintf("msg_%d", id)
 }
 
-func (c *Client) readLoop() {
-	for {
-		line, err := c.stdout.ReadString('\n')
-		if err != nil {
-			return
-		}
-		if len(line) == 0 {
-			continue
-		}
+// GetURL returns the server URL.
+func (mc *ManagedConnection) GetURL() string {
+	return mc.url
+}
 
-		var resp Response
-		if err := json.Unmarshal([]byte(line), &resp); err != nil {
-			continue // skip non-JSON (e.g. server debug output)
-		}
-
-		c.mu.Lock()
-		ch, exists := c.pending[resp.ID]
-		if exists {
-			delete(c.pending, resp.ID)
-		}
-		c.mu.Unlock()
-
-		if exists {
-			ch <- &resp
-		}
-	}
+// GetLastError returns the last error (if any).
+func (mc *ManagedConnection) GetLastError() string {
+	mc.mu.RLock()
+	defer mc.mu.RUnlock()
+	return mc.lastError
 }

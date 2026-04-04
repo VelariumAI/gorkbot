@@ -60,8 +60,10 @@ func (m *Model) refreshModelSelectLists() {
 	filter := m.modelSelect.providerFilter
 	primaryID := m.currentModel
 	consultantID := ""
-	if m.orchestrator != nil && m.orchestrator.Consultant != nil {
-		consultantID = m.orchestrator.Consultant.GetMetadata().ID
+	if m.orchestrator != nil {
+		if consultant := m.orchestrator.Consultant(); consultant != nil {
+			consultantID = consultant.GetMetadata().ID
+		}
 	}
 
 	// Primary items
@@ -305,9 +307,7 @@ func (m *Model) handleModelSelectEnter() (tea.Model, tea.Cmd) {
 
 	if m.modelSelect.activePane == 1 && mi.isAuto {
 		// Set secondary to auto mode
-		if m.orchestrator != nil {
-			m.orchestrator.Consultant = nil
-		}
+		// (Auto mode is handled by SetAutoSecondary command below)
 		m.addSystemMessage("Secondary set to **Auto** — AI selects best consultant per task.")
 		// Persist auto selection
 		if m.commands != nil && m.commands.Orch != nil && m.commands.Orch.SetAutoSecondary != nil {

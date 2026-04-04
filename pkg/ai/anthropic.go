@@ -224,7 +224,18 @@ func (a *AnthropicProvider) WithModel(model string) AIProvider {
 		Model:            model,
 		client:           a.client,
 		supportsThinking: anthropicModelSupportsThinking(model),
+		ThinkingBudget:   a.ThinkingBudget, // PRESERVE thinking budget
 	}
+}
+
+// SetThinkingBudget implements ThinkingBudgetProvider.
+func (a *AnthropicProvider) SetThinkingBudget(budget int) {
+	a.ThinkingBudget = budget
+}
+
+// GetThinkingBudget implements ThinkingBudgetProvider.
+func (a *AnthropicProvider) GetThinkingBudget() int {
+	return a.ThinkingBudget
 }
 
 // Ping validates the Anthropic key with a single lightweight GET /v1/models request.

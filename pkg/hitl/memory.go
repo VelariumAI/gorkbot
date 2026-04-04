@@ -40,14 +40,14 @@ type DecisionRecord struct {
 
 // ApprovalStats tracks approval/rejection statistics for a tool
 type ApprovalStats struct {
-	ToolName        string
-	TotalCount      int
-	ApprovedCount   int
-	RejectedCount   int
-	AmendedCount    int
-	ApprovalRate    float64 // 0.0-1.0
-	LastDecision    time.Time
-	AverageRiskLevel float64
+	ToolName          string
+	TotalCount        int
+	ApprovedCount     int
+	RejectedCount     int
+	AmendedCount      int
+	ApprovalRate      float64 // 0.0-1.0
+	LastDecision      time.Time
+	AverageRiskLevel  float64
 	AverageConfidence float64
 }
 

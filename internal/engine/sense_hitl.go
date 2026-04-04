@@ -49,11 +49,15 @@ type HITLRequest struct {
 	Plan     string
 
 	// Enhanced HITL fields for intelligent approval
-	RiskLevel      hitl.RiskLevel // Classified risk (Low/Medium/High/Critical)
-	RiskReason     string         // Explanation of risk classification
+	RiskLevel       hitl.RiskLevel // Classified risk (Low/Medium/High/Critical)
+	RiskReason      string         // Explanation of risk classification
 	ConfidenceScore int            // AI confidence 0-100
-	Context        string         // Why this tool is needed
-	Precedent      int            // Count of similar previously approved operations
+	Context         string         // Why this tool is needed
+	Precedent       int            // Count of similar previously approved operations
+
+	// ForcedApproval means this operation CANNOT be auto-approved regardless of
+	// confidence/precedent scores. Always requires explicit user review.
+	ForcedApproval bool
 
 	// Note: routing uses HITLCallback, not an inline channel.
 }
@@ -69,7 +73,6 @@ var highStakesTools = map[string]bool{
 	"bash":         true,
 	"delete_file":  true,
 	"git_push":     true,
-	"git_commit":   true,
 	"pkg_install":  true,
 	"db_migrate":   true,
 	"http_request": true,
@@ -83,12 +86,17 @@ var highStakesBashKeywords = []string{
 	"sudo", "apt", "pkg install",
 	"curl -X POST", "curl -X PUT", "curl -X DELETE",
 	"dd if=", "> /dev/",
+	"git commit --force", "git commit --amend",
 }
 
 // HITLGuard decides when HITL is required and builds structured plans.
 type HITLGuard struct {
 	// Enabled can be set to false to bypass HITL entirely (e.g., for tests).
 	Enabled bool
+
+	// PowerUserSettings allows fine-grained HITL override for advanced users.
+	// Loaded from AppState preferences. Can be nil (use defaults).
+	PowerUserSettings interface{} // Will be config.HITLSettings
 
 	// Intelligent HITL components
 	RiskClassifier    *hitl.RiskClassifier
@@ -114,16 +122,43 @@ func (g *HITLGuard) SetMemory(memory *hitl.HITLMemory) {
 }
 
 // IsHighStakes returns true when the given tool+params require HITL approval.
+// Respects power user override settings (risk level, whitelist, confidence threshold).
 func (g *HITLGuard) IsHighStakes(toolName string, params map[string]interface{}) bool {
 	if !g.Enabled {
 		return false
 	}
+
+	// Check power user settings (if configured)
+	if g.PowerUserSettings != nil {
+		settings, ok := g.PowerUserSettings.(map[string]interface{})
+		if ok {
+			// Check master toggle first
+			if enabled, exists := settings["enabled"].(bool); exists && !enabled {
+				return false // Power user disabled HITL entirely
+			}
+
+			// Check whitelist
+			if whitelisted, exists := settings["whitelisted_tools"].([]interface{}); exists {
+				for _, tool := range whitelisted {
+					if toolStr, ok := tool.(string); ok && toolStr == toolName {
+						return false // Tool is whitelisted
+					}
+				}
+			}
+		}
+	}
+
 	// Check tool-level gate.
 	if highStakesTools[toolName] {
-		// For http_request, only gate non-GET methods.
+		// For http_request, only gate non-GET methods (but allow localhost).
 		if toolName == "http_request" {
 			method, _ := params["method"].(string)
 			if method == "" || strings.ToUpper(method) == "GET" {
+				return false
+			}
+			// Bypass HITL for localhost (non-exfiltration capable)
+			url, _ := params["url"].(string)
+			if isLocalhost(url) {
 				return false
 			}
 			return true
@@ -147,6 +182,15 @@ func isBashHighStakes(cmd string) bool {
 		}
 	}
 	return false
+}
+
+// isLocalhost returns true if a URL targets localhost (non-exfiltration capable).
+func isLocalhost(url string) bool {
+	lower := strings.ToLower(url)
+	return strings.Contains(lower, "localhost") ||
+		strings.Contains(lower, "127.0.0.1") ||
+		strings.Contains(lower, "[::1]") ||
+		strings.Contains(lower, "::1")
 }
 
 // EnhanceHITLRequest augments a basic HITLRequest with intelligent components.
@@ -262,32 +306,73 @@ type TextGenerator interface {
 }
 
 // CanAutoApprove returns true if the request meets criteria for automatic approval.
-// Factors: high confidence (>85), high precedent (>2), and low/medium risk only.
-func (req *HITLRequest) CanAutoApprove() bool {
-	// High confidence AND high precedent = auto-approve
-	if req.ConfidenceScore >= 85 && req.Precedent >= 2 {
-		return true
+// Factors: high confidence (>85), precedent (>1), and low/medium risk only.
+// powerUserSettings can override these thresholds (pass nil to use defaults).
+func (req *HITLRequest) CanAutoApprove(powerUserSettings interface{}) bool {
+	// Forced approval means this operation CANNOT be auto-approved
+	// regardless of confidence or precedent scores.
+	if req.ForcedApproval {
+		return false
 	}
 
-	// Medium confidence with very high precedent (>5) = auto-approve
-	if req.ConfidenceScore >= 70 && req.Precedent >= 5 {
-		return true
-	}
-
-	// Never auto-approve critical risk operations
+	// Never auto-approve critical risk operations (default safeguard)
 	if req.RiskLevel == hitl.RiskCritical {
 		return false
+	}
+
+	// Parse power user settings if provided
+	var confidenceThreshold int = 85
+	var minRiskLevel string = ""
+	if settings, ok := powerUserSettings.(map[string]interface{}); ok {
+		if threshold, exists := settings["confidence_threshold"].(float64); exists && threshold > 0 {
+			confidenceThreshold = int(threshold)
+		}
+		if riskLevel, exists := settings["min_risk_level"].(string); exists {
+			minRiskLevel = riskLevel
+		}
+	}
+
+	// Risk-level bypass: if min_risk_level is set, bypass HITL for lower risks
+	if minRiskLevel != "" {
+		if shouldBypassByRisk(req.RiskLevel, minRiskLevel) {
+			return true
+		}
+	}
+
+	// High confidence AND precedent = auto-approve
+	if req.ConfidenceScore >= confidenceThreshold && req.Precedent >= 1 {
+		return true
+	}
+
+	// Medium confidence with good precedent = auto-approve
+	if req.ConfidenceScore >= (confidenceThreshold-15) && req.Precedent >= 3 {
+		return true
 	}
 
 	return false
 }
 
+// shouldBypassByRisk returns true if actual risk is below the minimum risk level.
+func shouldBypassByRisk(actual hitl.RiskLevel, minLevel string) bool {
+	levelMap := map[string]hitl.RiskLevel{
+		"low":      hitl.RiskLow,
+		"medium":   hitl.RiskMedium,
+		"high":     hitl.RiskHigh,
+		"critical": hitl.RiskCritical,
+	}
+	threshold, ok := levelMap[strings.ToLower(minLevel)]
+	if !ok {
+		return false // Invalid level
+	}
+	return actual < threshold
+}
+
 // RequestHITLApproval suspends execution, emits the plan to the HITL callback,
-// and waits for the user's decision.  Returns (true, notes) if approved/amended,
-// (false, reason) if rejected.
-func RequestHITLApproval(ctx context.Context, callback HITLCallback, req HITLRequest) (bool, string) {
-	// Check for auto-approval first
-	if req.CanAutoApprove() {
+// and waits for the user's decision. powerUserSettings allows override configuration.
+// Returns (true, notes) if approved/amended, (false, reason) if rejected.
+func RequestHITLApproval(ctx context.Context, callback HITLCallback, req HITLRequest, powerUserSettings interface{}) (bool, string) {
+	// Check for auto-approval first (respecting power user settings)
+	if req.CanAutoApprove(powerUserSettings) {
 		return true, "auto-approved (high confidence + precedent)"
 	}
 
@@ -326,8 +411,8 @@ func (o *Orchestrator) GateToolExecution(
 	}
 	// Build an execution plan to surface to the user.
 	var consultant TextGenerator
-	if o.Consultant != nil {
-		consultant = o.Consultant
+	if cons := o.Consultant(); cons != nil {
+		consultant = cons
 	}
 	plan := hitl.BuildPlan(ctx, consultant, req.ToolName, req.Parameters, aiReasoning)
 	hitlReq := HITLRequest{
@@ -336,12 +421,17 @@ func (o *Orchestrator) GateToolExecution(
 		Plan:     plan,
 	}
 
+	// Force mandatory HITL approval for dangerous meta-tools (no auto-approval)
+	if req.ToolName == "create_tool" || req.ToolName == "modify_tool" {
+		hitlReq.ForcedApproval = true
+	}
+
 	// Enhance with intelligent scoring
 	if hitl.RiskClassifier != nil {
 		_ = hitl.EnhanceHITLRequest(ctx, &hitlReq, aiReasoning)
 	}
 
-	return RequestHITLApproval(ctx, hitlCallback, hitlReq)
+	return RequestHITLApproval(ctx, hitlCallback, hitlReq, hitl.PowerUserSettings)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

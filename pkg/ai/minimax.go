@@ -69,6 +69,7 @@ func (m *MiniMaxProvider) WithModel(model string) AIProvider {
 		Model:            model,
 		client:           m.inner.client,
 		supportsThinking: minimaxModelSupportsThinking(model),
+		ThinkingBudget:   m.inner.ThinkingBudget, // PRESERVE thinking budget
 		bearerAuth:       true,
 	}
 	return &MiniMaxProvider{inner: newInner}
@@ -128,6 +129,16 @@ func (m *MiniMaxProvider) Stream(ctx context.Context, prompt string, out io.Writ
 
 func (m *MiniMaxProvider) StreamWithHistory(ctx context.Context, history *ConversationHistory, out io.Writer) error {
 	return m.inner.StreamWithHistory(ctx, history, out)
+}
+
+// SetThinkingBudget implements ThinkingBudgetProvider.
+func (m *MiniMaxProvider) SetThinkingBudget(budget int) {
+	m.inner.SetThinkingBudget(budget)
+}
+
+// GetThinkingBudget implements ThinkingBudgetProvider.
+func (m *MiniMaxProvider) GetThinkingBudget() int {
+	return m.inner.GetThinkingBudget()
 }
 
 // minimaxModelSupportsThinking returns true for MiniMax models that support extended thinking.

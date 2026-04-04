@@ -8,17 +8,14 @@ import (
 	"strings"
 )
 
-// ValidateInput hardens string inputs by rejecting control characters
-// and adversarial URI characters (?, #, %).
+// ValidateInput hardens string inputs by rejecting control characters.
+// Does NOT reject punctuation like ?, #, % since user input (queries, messages)
+// naturally contains these characters. Resource-specific validation is done elsewhere.
 func ValidateInput(input string) error {
 	for _, r := range input {
-		// Reject control characters
-		if r < 0x20 {
+		// Reject control characters (but allow \t, \n, \r)
+		if r < 0x20 && r != '\t' && r != '\n' && r != '\r' {
 			return fmt.Errorf("invalid character: control character detected (0x%02X)", r)
-		}
-		// Reject adversarial URI characters
-		if r == '?' || r == '#' || r == '%' {
-			return fmt.Errorf("invalid character: adversarial URI character detected (%c)", r)
 		}
 	}
 	return nil

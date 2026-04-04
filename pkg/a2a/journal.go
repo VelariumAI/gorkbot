@@ -3,9 +3,9 @@
 // PendingJournal provides crash-safe persistence for outbound A2A messages
 // using the same atomic-write pattern from build-your-own-openclaw Step 09:
 //
-//  Write path:  content → <dir>/<id>.tmp  → fsync → rename to <dir>/<id>.json
-//  Read path:   scan <dir> for *.json files on startup and re-dispatch them.
-//  Delete path: remove <dir>/<id>.json after confirmed delivery.
+//	Write path:  content → <dir>/<id>.tmp  → fsync → rename to <dir>/<id>.json
+//	Read path:   scan <dir> for *.json files on startup and re-dispatch them.
+//	Delete path: remove <dir>/<id>.json after confirmed delivery.
 //
 // The atomic rename guarantees that every file in the pending directory is
 // either fully written or absent — no partial writes survive a crash.

@@ -350,6 +350,98 @@ func channelHint(channel string) string {
 // helper
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ToolSuppressionLayer enforces intelligent tool filtering to prevent unsolicited
+// system monitoring from derailing the LLM's reasoning process.
+// It injects directives to:
+//   - Never suggest system_monitor or sensor_read without user request
+//   - Only mention diagnostic tools when the query is about system status
+//   - Keep tool suggestions context-aware and minimal
+type ToolSuppressionLayer struct {
+	// DetectDiagnosticQuery, when true, classifies the user query to determine
+	// whether diagnostic tools should be mentioned.
+	DetectDiagnosticQuery bool
+	// UserQuery is the current user's input (used for classification).
+	UserQuery string
+}
+
+func (l *ToolSuppressionLayer) Name() string { return "tool_suppression" }
+
+func (l *ToolSuppressionLayer) Build(ctx BuildContext) string {
+	var sb strings.Builder
+
+	sb.WriteString("## Tool Usage Discipline & Reasoning Preservation\n\n")
+
+	sb.WriteString("**CRITICAL PRINCIPLE:**\n")
+	sb.WriteString("Unsolicited system monitoring (battery checks, resource monitoring, health diagnostics) **derails your chain-of-thought reasoning**.\n")
+	sb.WriteString("When you interrupt an answer to check system state, the user's actual question gets buried under diagnostic output.\n")
+	sb.WriteString("This is SUPPRESSED to help you reason clearly and answer what the user ACTUALLY asked.\n\n")
+
+	// Core rule: Never suggest diagnostic tools unsolicited
+	sb.WriteString("**CRITICAL: Diagnostic tools are INTENTIONALLY HIDDEN to preserve reasoning.**\n\n")
+	sb.WriteString("The following tools are SUPPRESSED from your tool list and will cause detriment to the user experience:\n")
+	sb.WriteString("- `system_monitor`: Checks CPU, memory, disk, processes (30-minute cooldown). CRITICAL: NEVER write bash scripts or Python plugins to bypass this cooldown or replicate this functionality. Bypassing cooldowns is a severe violation.\n")
+	sb.WriteString("- `sensor_read`: Reads battery, GPS, WiFi, cellular data\n")
+	sb.WriteString("- `termux_api_bridge`: Has battery-status API — DO NOT use to check battery\n\n")
+
+	sb.WriteString("**When these tools are appropriate:**\n")
+	sb.WriteString("- The USER explicitly asks: \"Check my battery\", \"Show system health\", \"What's my location?\", etc.\n")
+	sb.WriteString("- NEVER call them proactively or automatically\n")
+	sb.WriteString("- NEVER insert them into your chain-of-thought for unrelated queries\n\n")
+
+	// Detect if this is a diagnostic query
+	isDiagnostic := false
+	if l.DetectDiagnosticQuery && l.UserQuery != "" {
+		lower := strings.ToLower(l.UserQuery)
+		diagKeywords := []string{
+			"status", "monitor", "health", "diagnostics", "battery",
+			"cpu", "memory", "disk", "processes", "system info",
+			"show stats", "show state", "how are you", "what's running",
+		}
+		for _, kw := range diagKeywords {
+			if strings.Contains(lower, kw) {
+				isDiagnostic = true
+				break
+			}
+		}
+	}
+
+	if isDiagnostic {
+		sb.WriteString("**EXCEPTION: This query is about system diagnostics.**\n")
+		sb.WriteString("- You MAY call `system_monitor` or `gorkbot_status` if the user asks for system info\n")
+		sb.WriteString("- Call them ONLY once per request\n")
+		sb.WriteString("- Suppress the raw output — summarize key info in 1-2 lines\n\n")
+	} else {
+		sb.WriteString("**This is a normal query (not about system status).**\n")
+		sb.WriteString("- NEVER call diagnostic tools\n")
+		sb.WriteString("- NEVER TRY WORKAROUNDS: Do not use bash to run termux-battery-status, termux-sensor, or similar commands\n")
+		sb.WriteString("- Do NOT attempt to infer system state from other tools (no 'cat /proc/...' tricks)\n")
+		sb.WriteString("- Do NOT ask the user to run diagnostic commands\n")
+		sb.WriteString("- Answer the user's question directly\n\n")
+	}
+
+	sb.WriteString("**Anti-Workaround Rules (for ALL queries):**\n")
+	sb.WriteString("- Blocked system state checks: battery status, CPU/memory/disk usage, running processes, system health\n")
+	sb.WriteString("- These are suppressed to PRESERVE YOUR CHAIN-OF-THOUGHT and prevent context derailment\n")
+	sb.WriteString("- Do NOT attempt to:\n")
+	sb.WriteString("  • Run `termux-battery-status`, `termux-sensor`, `ps`, `top`, `free`, `df` via bash\n")
+	sb.WriteString("  • Parse `/proc/`, `/sys/`, or `/dev/` filesystem for system info\n")
+	sb.WriteString("  • Use python_execute or structured_bash to indirectly query system state\n")
+	sb.WriteString("  • Ask the user to provide system information (\"What's your battery?\", \"Can you check CPU?\", etc.)\n")
+	sb.WriteString("- If you feel compelled to check system state: STOP. Focus on the user's actual question.\n")
+	sb.WriteString("- **WHY?** System monitoring interrupts your reasoning chain. The user's question is more important than knowing system state.\n\n")
+
+	sb.WriteString("**If you catch yourself trying to work around this:**\n")
+	sb.WriteString("- Recognize the impulse: \"I should check if the system can handle this\" or \"I need to monitor resources\"\n")
+	sb.WriteString("- Redirect: \"The user didn't ask about system state. I'll answer their actual question.\"\n")
+	sb.WriteString("- Trust: The user will tell you if there's a problem. Don't assume you need to check.\n\n")
+
+	sb.WriteString("**Tool output suppression:**\n")
+	sb.WriteString("- Always suppress tool output for normal queries unless user asks to \"show results\"\n")
+	sb.WriteString("- If a tool runs (bash, curl, etc), show only the essential answer, not the raw output\n")
+
+	return sb.String()
+}
+
 // readPromptFile reads a file for use in a prompt layer. Returns "" on error or
 // if the file is empty after trimming.
 func readPromptFile(path string) string {

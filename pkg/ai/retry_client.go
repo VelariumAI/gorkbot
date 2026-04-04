@@ -5,6 +5,8 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -63,9 +65,32 @@ func NewFetchClient() *http.Client {
 	}
 }
 
+// parseRetryAfter extracts the Retry-After header value and converts it to a duration.
+// Supports both seconds format ("30") and HTTP-date format ("Wed, 21 Oct 2025 07:28:00 GMT").
+// Returns 0 if header is empty or unparseable.
+func parseRetryAfter(header string) time.Duration {
+	if header == "" {
+		return 0
+	}
+
+	// Try parsing as seconds (integer format)
+	if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+
+	// Try parsing as HTTP date
+	if t, err := http.ParseTime(header); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+
+	return 0
+}
+
 // RoundTrip executes the request with retry logic for:
 //  1. Transient network errors (EOF, TLS MAC, RST) → fresh-connection retry
-//  2. HTTP 429 Too Many Requests → backoff retry
+//  2. HTTP 429 Too Many Requests → backoff retry (respects Retry-After header)
 //  3. HTTP 5xx Server Error → backoff retry
 //
 // Non-retryable 4xx errors (except 429) are returned immediately with the
@@ -137,6 +162,14 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		delay := t.BaseDelayBase * time.Duration(math.Pow(2, float64(attempt)))
 		if delay > t.MaxDelay {
 			delay = t.MaxDelay
+		}
+
+		// For 429 responses, check for Retry-After header
+		if lastResp != nil && lastResp.StatusCode == http.StatusTooManyRequests {
+			serverDelay := parseRetryAfter(lastResp.Header.Get("Retry-After"))
+			if serverDelay > 0 {
+				delay = serverDelay
+			}
 		}
 
 		select {

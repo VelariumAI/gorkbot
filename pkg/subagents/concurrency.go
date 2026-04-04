@@ -12,11 +12,11 @@
 //
 // Default limits (overridable via SubagentConfig):
 //
-//   reasoning: 2   (heavy LLM calls; keep low)
-//   speed:     4
-//   coding:    3
-//   general:   4
-//   *:         2   (fallback for unknown categories)
+//	reasoning: 2   (heavy LLM calls; keep low)
+//	speed:     4
+//	coding:    3
+//	general:   4
+//	*:         2   (fallback for unknown categories)
 //
 // Usage:
 //

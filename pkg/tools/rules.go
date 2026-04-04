@@ -179,9 +179,11 @@ func (re *RuleEngine) Format() string {
 // matchRule returns true if the pattern matches the given tool call.
 // Pattern forms:
 //
-//	"tool_name"             → tool name match only
-//	"tool_name(arg_glob)"   → tool name + argument glob
-//	"tool_name(domain:x)"   → tool name + domain match on url param
+//	"tool_name"                          → tool name match only
+//	"tool_name(arg_glob)"                → tool name + argument glob
+//	"tool_name(domain:x)"                → tool name + domain match on url param
+//	"tool_name(param:value)"             → tool name + typed parameter match (Task 5.4)
+//	"write_file(path:/etc/*)"            → parameter glob matching
 func matchRule(pattern, toolName string, params map[string]interface{}) bool {
 	// Split pattern into tool part and argument part
 	pTool := pattern
@@ -202,6 +204,11 @@ func matchRule(pattern, toolName string, params map[string]interface{}) bool {
 		return true
 	}
 
+	// Per-parameter rule matching: "param:value" (Task 5.4)
+	if strings.Contains(pArg, ":") && !strings.HasPrefix(pArg, "domain:") {
+		return matchParamRule(pArg, params)
+	}
+
 	// Domain match: "web_fetch(domain:github.com)"
 	if strings.HasPrefix(pArg, "domain:") {
 		domain := strings.TrimPrefix(pArg, "domain:")
@@ -214,6 +221,46 @@ func matchRule(pattern, toolName string, params map[string]interface{}) bool {
 	// Build a flat "command string" from all string params for glob matching
 	cmdStr := flattenParams(params)
 	return globMatch(pArg, cmdStr)
+}
+
+// matchParamRule matches "param:pattern" syntax for per-parameter rules (Task 5.4).
+// Examples:
+//   - "path:/etc/*" matches params["path"] against /etc/* glob
+//   - "filename:*.tmp" matches params["filename"] against *.tmp glob
+func matchParamRule(argPattern string, params map[string]interface{}) bool {
+	parts := strings.SplitN(argPattern, ":", 2)
+	if len(parts) != 2 {
+		return false
+	}
+
+	paramName := parts[0]
+	paramPattern := parts[1]
+
+	// Get the parameter value
+	paramValue, ok := params[paramName]
+	if !ok {
+		return false
+	}
+
+	// Convert value to string
+	paramStr := ""
+	switch v := paramValue.(type) {
+	case string:
+		paramStr = v
+	case []string:
+		// For array params, check if any element matches
+		for _, elem := range v {
+			if globMatch(paramPattern, elem) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+
+	// Glob match the parameter value
+	return globMatch(paramPattern, paramStr)
 }
 
 // flattenParams concatenates all string parameter values separated by spaces.
@@ -233,24 +280,45 @@ func globMatch(pattern, text string) bool {
 	if pattern == text {
 		return true
 	}
+	// No wildcards — substring match
+	if !strings.Contains(pattern, "*") {
+		return strings.Contains(text, pattern)
+	}
+
+	// Handle wildcards
 	// Prefix glob: "git *" matches "git status"
-	if strings.HasSuffix(pattern, "*") {
+	if strings.HasSuffix(pattern, "*") && !strings.HasPrefix(pattern, "*") {
 		prefix := strings.TrimSuffix(pattern, "*")
 		return strings.HasPrefix(text, prefix)
 	}
-	// Suffix glob: "*.go"
-	if strings.HasPrefix(pattern, "*") {
+	// Suffix glob: "*.go" matches "file.go"
+	if strings.HasPrefix(pattern, "*") && !strings.HasSuffix(pattern, "*") {
 		suffix := strings.TrimPrefix(pattern, "*")
 		return strings.HasSuffix(text, suffix)
 	}
-	// Contains check: "*rm*"
+	// Contains check: "*rm*" matches "rm -rf /var" (contains "rm")
+	if strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*") {
+		contained := strings.Trim(pattern, "*")
+		return strings.Contains(text, contained)
+	}
+	// Contains check: "*middle*" pattern
 	if strings.Contains(pattern, "*") {
 		parts := strings.SplitN(pattern, "*", 2)
 		if len(parts) == 2 {
-			return strings.Contains(text, parts[0]) || strings.Contains(text, parts[1])
+			prefix := parts[0]
+			rest := parts[1]
+			// Check prefix match
+			if !strings.HasPrefix(text, prefix) {
+				return false
+			}
+			// Check rest recursively
+			if rest == "" {
+				return true
+			}
+			return globMatch(rest, strings.TrimPrefix(text, prefix))
 		}
 	}
-	// Substring match for simple patterns
+	// Fallback: substring match
 	return strings.Contains(text, pattern)
 }
 

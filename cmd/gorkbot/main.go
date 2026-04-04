@@ -30,8 +30,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/velariumai/gorkbot/internal/designsystem"
 	"github.com/velariumai/gorkbot/internal/engine"
 	"github.com/velariumai/gorkbot/internal/engine/consultation"
+	engprov "github.com/velariumai/gorkbot/internal/engine/providers"
+	"github.com/velariumai/gorkbot/internal/events"
 	"github.com/velariumai/gorkbot/internal/inline"
 	"github.com/velariumai/gorkbot/internal/llm"
 	"github.com/velariumai/gorkbot/internal/platform"
@@ -40,8 +43,8 @@ import (
 	"github.com/velariumai/gorkbot/pkg/a2a"
 	"github.com/velariumai/gorkbot/pkg/adaptive"
 	"github.com/velariumai/gorkbot/pkg/ai"
+	"github.com/velariumai/gorkbot/pkg/auth"
 	"github.com/velariumai/gorkbot/pkg/billing"
-	gorkenv "github.com/velariumai/gorkbot/pkg/env"
 	"github.com/velariumai/gorkbot/pkg/channels/bridge"
 	"github.com/velariumai/gorkbot/pkg/channels/discord"
 	"github.com/velariumai/gorkbot/pkg/channels/telegram"
@@ -49,16 +52,17 @@ import (
 	"github.com/velariumai/gorkbot/pkg/commands"
 	"github.com/velariumai/gorkbot/pkg/config"
 	"github.com/velariumai/gorkbot/pkg/discovery"
+	gorkenv "github.com/velariumai/gorkbot/pkg/env"
 	"github.com/velariumai/gorkbot/pkg/memory"
 	"github.com/velariumai/gorkbot/pkg/persist"
 	"github.com/velariumai/gorkbot/pkg/process"
 	"github.com/velariumai/gorkbot/pkg/providers"
 	"github.com/velariumai/gorkbot/pkg/registry"
+	"github.com/velariumai/gorkbot/pkg/research"
 	"github.com/velariumai/gorkbot/pkg/router"
 	"github.com/velariumai/gorkbot/pkg/scheduler"
 	"github.com/velariumai/gorkbot/pkg/schema"
 	"github.com/velariumai/gorkbot/pkg/security"
-	"github.com/velariumai/gorkbot/pkg/auth"
 	"github.com/velariumai/gorkbot/pkg/sense"
 	"github.com/velariumai/gorkbot/pkg/skills"
 	"github.com/velariumai/gorkbot/pkg/subagents"
@@ -69,6 +73,18 @@ import (
 	"github.com/velariumai/gorkbot/pkg/vectorstore"
 	"github.com/velariumai/gorkbot/pkg/webhook"
 )
+
+func hasConfiguredProviderKey(raw string) bool {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	if v == "" {
+		return false
+	}
+	switch v {
+	case "placeholder", "changeme", "your_api_key", "your-api-key", "api_key_here", "replace-me", "replace_with_api_key", "<api-key>":
+		return false
+	}
+	return true
+}
 
 // loadEnv loads environment variables from .env file, supporting encryption
 func loadEnv(configDir string) {
@@ -152,6 +168,7 @@ func main() {
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 	logger.Info("Gorkbot initialized", "os", env.OS, "arch", env.Arch, "termux", env.IsTermux)
+	platform.LogFeatures(logger)
 
 	// 3. CLI Configuration
 	fs := flag.NewFlagSet("gorkbot", flag.ContinueOnError)
@@ -168,6 +185,7 @@ func main() {
 	timeoutFlag := fs.Duration("timeout", 60*time.Second, "Timeout for the operation")
 	verboseThoughts := fs.Bool("verbose-thoughts", false, "Enable verbose output of consultant thinking")
 	watchdogFlag := fs.Bool("watchdog", false, "Enable orchestrator watchdog for state debugging")
+	evolveFlag := fs.Bool("evolve", false, "Enable autonomous self-improvement drive on startup")
 	traceFlag := fs.Bool("trace", false, "Write a JSONL execution trace to ~/.gorkbot/traces/")
 	shareFlag := fs.Bool("share", false, "Start a relay server and share this session")
 	joinFlag := fs.String("join", "", "Observe a shared session at host:port")
@@ -228,41 +246,102 @@ func main() {
 	providers.SetGlobalProviderManager(provMgr)
 	engine.SetProviderManager(provMgr)
 
-	// Convenience vars for backward-compat with the router and discovery code below.
+	// Provider Agnosticism: Load ALL available API keys
 	grokKey, _ := keyStore.Get(providers.ProviderXAI)
 	geminiKey, _ := keyStore.Get(providers.ProviderGoogle)
+	anthropicKey, _ := keyStore.Get(providers.ProviderAnthropic)
+	openaiKey, _ := keyStore.Get(providers.ProviderOpenAI)
+	minimaxKey, _ := keyStore.Get(providers.ProviderMiniMax)
+	openrouterKey, _ := keyStore.Get(providers.ProviderOpenRouter)
+	moonshotKey, _ := keyStore.Get(providers.ProviderMoonshot)
 
-	// Read Model Overrides
-	primaryOverride := os.Getenv("GORKBOT_PRIMARY_MODEL")
-	consultantOverride := os.Getenv("GORKBOT_CONSULTANT_MODEL")
+	// Read Provider Selection (Provider Agnosticism)
+	primaryOverride := os.Getenv("GORKBOT_PRIMARY")
+	consultantOverride := os.Getenv("GORKBOT_CONSULTANT")
+	// Legacy support for model overrides (deprecated)
+	primaryModelOverride := os.Getenv("GORKBOT_PRIMARY_MODEL")
+	consultantModelOverride := os.Getenv("GORKBOT_CONSULTANT_MODEL")
 
-	if grokKey == "" {
-		logger.Warn("XAI_API_KEY missing")
+	keyState := map[string]string{
+		"XAI_API_KEY":        grokKey,
+		"GEMINI_API_KEY":     geminiKey,
+		"ANTHROPIC_API_KEY":  anthropicKey,
+		"OPENAI_API_KEY":     openaiKey,
+		"MINIMAX_API_KEY":    minimaxKey,
+		"OPENROUTER_API_KEY": openrouterKey,
+		"MOONSHOT_API_KEY":   moonshotKey,
 	}
 
-	// Initialize Base Providers (Factories) via Manager (ensures they are WrappedProviders)
-	baseGrok, _ := provMgr.GetBase(providers.ProviderXAI)
-	if baseGrok == nil {
-		baseGrok = ai.NewGrokProvider(grokKey, primaryOverride)
+	var configured []string
+	var placeholder []string
+	for envName, keyVal := range keyState {
+		trimmed := strings.TrimSpace(keyVal)
+		if trimmed == "" {
+			continue
+		}
+		if hasConfiguredProviderKey(trimmed) {
+			configured = append(configured, envName)
+			continue
+		}
+		placeholder = append(placeholder, envName)
 	}
-	baseGemini, _ := provMgr.GetBase(providers.ProviderGoogle)
-	if baseGemini == nil {
-		baseGemini = ai.NewGeminiProvider(geminiKey, consultantOverride, *verboseThoughts)
+
+	if len(configured) == 0 {
+		logger.Warn("No valid AI provider API keys configured. Set at least one provider API key before model calls.")
+		logger.Info("Provider key env vars", "supported", strings.Join([]string{
+			"XAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "MINIMAX_API_KEY", "OPENROUTER_API_KEY", "MOONSHOT_API_KEY",
+		}, ", "))
+	}
+	if len(placeholder) > 0 {
+		logger.Warn("Placeholder provider API keys detected; these providers will be treated as unavailable",
+			"env_vars", strings.Join(placeholder, ", "))
 	}
 
 	// Initialize Registry
 	reg := registry.NewModelRegistry(logger)
 	startupCtx := context.Background()
 
-	// Register Providers
-	if grokKey != "" && baseGrok != nil {
+	// Register ALL providers that have API keys (Provider Agnosticism)
+	if grokKey != "" {
+		baseGrok := ai.NewGrokProvider(grokKey, primaryModelOverride)
 		if err := reg.RegisterProvider(startupCtx, baseGrok); err != nil {
 			logger.Error("Failed to register Grok provider", "error", err)
 		}
 	}
-	if geminiKey != "" && baseGemini != nil {
+	if geminiKey != "" {
+		baseGemini := ai.NewGeminiProvider(geminiKey, consultantModelOverride, *verboseThoughts)
 		if err := reg.RegisterProvider(startupCtx, baseGemini); err != nil {
 			logger.Error("Failed to register Gemini provider", "error", err)
+		}
+	}
+	if anthropicKey != "" {
+		baseAnthropic := ai.NewAnthropicProvider(anthropicKey, "")
+		if err := reg.RegisterProvider(startupCtx, baseAnthropic); err != nil {
+			logger.Error("Failed to register Anthropic provider", "error", err)
+		}
+	}
+	if openaiKey != "" {
+		baseOpenAI := ai.NewOpenAIProvider(openaiKey, "")
+		if err := reg.RegisterProvider(startupCtx, baseOpenAI); err != nil {
+			logger.Error("Failed to register OpenAI provider", "error", err)
+		}
+	}
+	if minimaxKey != "" {
+		baseMiniMax := ai.NewMiniMaxProvider(minimaxKey, "")
+		if err := reg.RegisterProvider(startupCtx, baseMiniMax); err != nil {
+			logger.Error("Failed to register MiniMax provider", "error", err)
+		}
+	}
+	if openrouterKey != "" {
+		baseOpenRouter := ai.NewOpenRouterProvider(openrouterKey, "")
+		if err := reg.RegisterProvider(startupCtx, baseOpenRouter); err != nil {
+			logger.Error("Failed to register OpenRouter provider", "error", err)
+		}
+	}
+	if moonshotKey != "" {
+		baseMoonshot := ai.NewMoonshotProvider(moonshotKey, "")
+		if err := reg.RegisterProvider(startupCtx, baseMoonshot); err != nil {
+			logger.Error("Failed to register Moonshot provider", "error", err)
 		}
 	}
 
@@ -278,77 +357,54 @@ func main() {
 		r.ConsultantBiasProvider = init.SecondaryProvider
 	}
 
-	// Select System Models (Dynamic Configuration)
+	// Select Providers (Provider Agnosticism)
+	// This uses provider-agnostic selection: explicit override > first available > error
 	var primary ai.AIProvider
 	var consultant ai.AIProvider
-	var sysConfig *router.SystemConfiguration // Declare here
-	primaryModelName := "Primary AI (Default)"
+	var sysConfig *router.SystemConfiguration
+	primaryModelName := "Primary AI"
 	consultantModelName := ""
 
-	// Check if user has explicit preferences via ENV vars first
-	if primaryOverride != "" && consultantOverride != "" {
-		logger.Info("Using explicit model overrides from environment",
-			"primary", primaryOverride, "consultant", consultantOverride)
+	// Use the new agnostic provider selection
+	var primaryErr error
+	primary, consultant, primaryErr = SelectProviders(
+		reg,
+		primaryOverride,    // GORKBOT_PRIMARY env var (provider name)
+		consultantOverride, // GORKBOT_CONSULTANT env var (provider name)
+		logger,
+	)
 
-		primary = baseGrok.WithModel(primaryOverride)
-		consultant = baseGemini.WithModel(consultantOverride)
+	if primaryErr != nil {
+		logger.Error("Provider selection failed", "error", primaryErr)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", primaryErr)
+		os.Exit(1)
+	}
 
-		primaryModelName = primaryOverride
-		consultantModelName = consultantOverride
+	// Validate provider configuration
+	if err := ValidateProviderConfig(primary, consultant, logger); err != nil {
+		logger.Error("Invalid provider configuration", "error", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
-		// Create a dummy sysConfig for display purposes if needed
-		sysConfig = &router.SystemConfiguration{
-			Reasoning: "Explicit environment variable override",
-		}
+	// Update display names
+	if primary != nil {
+		primaryModelName = primary.GetMetadata().Name
+	}
+	if consultant != nil {
+		consultantModelName = consultant.GetMetadata().Name
+	}
+
+	// Attempt Dynamic Model Selection (optional optimization)
+	sysConfig, err = r.SelectSystemModels()
+	if err == nil {
+		logger.Info("Dynamic Model Selection Successful",
+			"primary", sysConfig.PrimaryModel.ID,
+			"specialist", sysConfig.SpecialistModel.ID,
+			"reason", sysConfig.Reasoning)
 	} else {
-		// Attempt Dynamic Selection
-		sysConfig, err = r.SelectSystemModels()
-		if err == nil {
-			logger.Info("Dynamic Model Selection Successful",
-				"primary", sysConfig.PrimaryModel.ID,
-				"specialist", sysConfig.SpecialistModel.ID,
-				"reason", sysConfig.Reasoning)
-
-			primaryModelName = sysConfig.PrimaryModel.Name
-			consultantModelName = sysConfig.SpecialistModel.Name
-
-			// Instantiate Primary
-			if p, ok := reg.GetProvider(sysConfig.PrimaryModel.Provider); ok {
-				if factory, ok := p.(ai.AIProvider); ok {
-					primary = factory.WithModel(string(sysConfig.PrimaryModel.ID))
-				}
-			}
-
-			// Instantiate Consultant
-			if p, ok := reg.GetProvider(sysConfig.SpecialistModel.Provider); ok {
-				if factory, ok := p.(ai.AIProvider); ok {
-					consultant = factory.WithModel(string(sysConfig.SpecialistModel.ID))
-				}
-			}
-		} else {
-			logger.Warn("Dynamic Model Selection Failed - Falling back to defaults/overrides", "error", err)
-		}
-	}
-
-	// Fallback / Default Initialization if dynamic failed or only partial overrides
-	if primary == nil {
-		if primaryOverride != "" {
-			primary = baseGrok.WithModel(primaryOverride)
-			primaryModelName = primaryOverride
-		} else {
-			primary = baseGrok
-		}
-	}
-	if consultant == nil && geminiKey != "" {
-		if consultantOverride != "" {
-			consultant = baseGemini.WithModel(consultantOverride)
-			consultantModelName = consultantOverride
-		} else {
-			consultant = baseGemini
-			if consultantModelName == "" {
-				consultantModelName = baseGemini.GetMetadata().Name
-			}
-		}
+		logger.Debug("Dynamic Model Selection unavailable, using default models", "error", err)
+		// This is not a critical error - providers will use their defaults
 	}
 
 	// 4.2 Initialize Process Manager (For Advanced Shell Execution)
@@ -414,6 +470,13 @@ func main() {
 	logger.Info("SENSE tracer active", "trace_dir", senseTraceDir)
 	// SENSETracer is also stored on the orchestrator (set after orch is created
 	// below) so streaming can emit context-overflow and provider-error events.
+
+	// ── Research Engine (context-efficient web browsing) ──────────────────────
+	// Initialize the Deep Research Engine for browser_search/open/find tools.
+	// Document content stays in a ring buffer and never enters conversation.
+	researchEngine := research.NewEngine(10, logger)
+	toolRegistry.SetResearchEngine(researchEngine)
+	logger.Info("Research engine initialized", "max_documents", 10)
 
 	if err := toolRegistry.RegisterDefaultTools(); err != nil {
 		logger.Error("Failed to register default tools", "error", err)
@@ -513,8 +576,35 @@ func main() {
 		}
 	}
 
-	// 6. Orchestration Engine
-	orch := engine.NewOrchestrator(primary, consultant, toolRegistry, logger, *watchdogFlag)
+	// 6. Orchestration Engine with ProviderCoordinator
+	provCoord := engprov.NewProviderCoordinator(provMgr, primary, consultant, discMgr, events.NewBus(), logger)
+	orch := engine.NewOrchestrator(provCoord, toolRegistry, logger, *watchdogFlag)
+
+	// 6a. Free Will Engine for self-evolution
+	freeWillEng := engine.NewFreeWillEngine()
+	// Configure from saved app state
+	evolutionSettings := appState.GetEvolutionSettings()
+	if evolutionSettings.FreeWillEngineEnabled != nil && *evolutionSettings.FreeWillEngineEnabled {
+		freeWillSettingsMap := map[string]interface{}{
+			"engine_enabled":                  true,
+			"max_autonomous_risk":             evolutionSettings.MaxAutonomousRisk,
+			"auto_apply_confidence_threshold": evolutionSettings.ConfidenceThreshold,
+			"proposal_frequency":              evolutionSettings.ProposalFrequency,
+			"loop_guard_sensitivity":          evolutionSettings.LoopGuardSensitivity,
+			"rollback_window_size":            float64(evolutionSettings.RollbackWindowSize),
+		}
+		freeWillEng.Configure(freeWillSettingsMap)
+		// Start autonomous heartbeat for continuous self-evolution
+		freeWillEng.StartAutonomousHeartbeat(ctx)
+	}
+
+	// Wire AppStateManager for HITL override settings and other preferences
+	orch.AppStateManager = appState
+	orch.RefreshHITLSettings()
+
+	// Initialize message suppression middleware with verbose mode setting
+	verboseMode := appState.IsVerboseMode()
+	orch.MessageSuppressor = engine.NewMessageSuppressionMiddleware(verboseMode, logger)
 
 	// Wire SENSE tracer onto orchestrator so streaming can emit
 	// context-overflow and provider-error events (complementing tool-layer tracing).
@@ -549,6 +639,21 @@ func main() {
 	orch.StartConfigWatcher(ctx)
 	logger.Info("Enhanced systems initialized", "version", platform.Version)
 
+	// 6.2a Skills registry/loader wiring.
+	skillsDir := filepath.Join(env.ConfigDir, "skills")
+	if err := os.MkdirAll(skillsDir, 0700); err != nil {
+		logger.Warn("Failed to prepare skills directory", "dir", skillsDir, "error", err)
+	} else {
+		skillRegistry := skills.NewPersistentRegistry(skillsDir, logger)
+		skillLoader := skills.NewLoader(skillRegistry, logger)
+		if loaded, loadErr := skillLoader.LoadDirectory(skillsDir); loadErr != nil {
+			logger.Warn("Skills load failed", "dir", skillsDir, "error", loadErr)
+		} else if loaded > 0 {
+			logger.Info("Skills loaded", "count", loaded, "dir", skillsDir)
+		}
+		orch.SkillLoader = skillLoader
+	}
+
 	// 6.3 Intelligence layer (ARC Router + MEL Meta-Experience Learning)
 	orch.InitIntelligence(env.ConfigDir)
 	logger.Info("Intelligence layer initialized (ARC + MEL)")
@@ -557,8 +662,12 @@ func main() {
 	// (CacheAdvisor, IngressFilter, IngressGuard, MELValidator).
 	// geminiKey is already resolved above; geminiModel from consultant if set.
 	companionGeminiModel := ""
-	if baseGemini != nil {
-		companionGeminiModel = baseGemini.GetMetadata().ID
+	if geminiKey != "" && consultant != nil {
+		// Check if consultant is Gemini by checking its metadata
+		consultantMeta := consultant.GetMetadata()
+		if strings.Contains(strings.ToLower(consultantMeta.ID), "gemini") {
+			companionGeminiModel = consultantMeta.ID
+		}
 	}
 	orch.InitCompanions(env.ConfigDir, geminiKey, companionGeminiModel)
 	logger.Info("Companion systems initialized (CacheAdvisor + IngressFilter + MELValidator)")
@@ -575,6 +684,21 @@ func main() {
 		orch.StartSPARK(ctx)
 		logger.Info("SPARK: autonomous reasoning daemon started", "config_dir", env.ConfigDir)
 	}
+
+	// 6.3b-SI: Self-Improvement autonomous drive
+	orch.SetConfigDir(env.ConfigDir)
+	if err := orch.InitSelfImprove(); err != nil {
+		logger.Warn("Self-improve init failed", "error", err)
+	}
+	if *evolveFlag || appState.IsSelfImproveEnabled() {
+		if err := orch.StartSelfImprove(); err != nil {
+			logger.Warn("Self-improve start failed", "error", err)
+		} else {
+			logger.Info("Self-improvement drive started")
+		}
+	}
+	// Ensure SI driver stops on shutdown
+	defer orch.StopSelfImprove()
 
 	// 6.3b Goal Ledger (prospective cross-session memory)
 	if gl, err := memory.NewGoalLedger(env.ConfigDir); err != nil {
@@ -600,10 +724,11 @@ func main() {
 		if !ok {
 			return "", fmt.Errorf("unknown agent type: %s", agentType)
 		}
-		if orch.Primary == nil {
+		primary := orch.Primary()
+		if primary == nil {
 			return "", fmt.Errorf("no primary AI provider available")
 		}
-		return agent.Execute(ctx, task, orch.Primary, toolRegistry)
+		return agent.Execute(ctx, task, primary, toolRegistry)
 	})
 
 	// 6.3c Unified Memory — wraps AgeMem + Engrams + MEL
@@ -616,14 +741,15 @@ func main() {
 
 	// 6.3a Colony debate — wire orchestrator primary provider as the runner
 	toolRegistry.SetColonyRunner(func(ctx context.Context, sys, prompt string) (string, error) {
-		if orch.Primary == nil {
+		primary := orch.Primary()
+		if primary == nil {
 			return "", fmt.Errorf("no primary provider")
 		}
 		combined := prompt
 		if sys != "" {
 			combined = sys + "\n\n" + prompt
 		}
-		return orch.Primary.Generate(ctx, combined)
+		return primary.Generate(ctx, combined)
 	})
 	logger.Info("Colony debate tool registered")
 
@@ -632,7 +758,7 @@ func main() {
 	// SetVectorStore is called there once the store is ready; the mediator runs
 	// in gracefully-degraded mode (lexical-only context, no engram cache) until then.
 	consultMediator := consultation.NewMediator(consultation.MediatorConfig{
-		Secondary:   orch.Consultant,
+		Secondary:   orch.Consultant(),
 		VectorStore: nil, // patched in initEmbedder
 		Embedder:    nil, // patched in initEmbedder
 		AgeMem:      orch.AgeMem,
@@ -732,16 +858,6 @@ func main() {
 		orch.InputSanitizer = senseInputSanitizer
 	}
 
-	// Wire skills loader into orchestrator for <available_skills> index injection.
-	{
-		cwd2, _ := os.Getwd()
-		orchSkillLoader := skills.NewLoader(env.ConfigDir+"/skills", cwd2+"/.gorkbot/skills")
-		orch.SkillLoader = orchSkillLoader
-		// Register skill CRUD tools so the AI can create/patch/delete/view skills.
-		skillTools := tools.NewSkillTools(orchSkillLoader)
-		skillTools.Register(toolRegistry)
-	}
-
 	// Create shared session budget (100 turns across parent + all subagents).
 	sessionBudget := subagents.NewSessionBudget(100)
 	ctx = subagents.WithBudget(ctx, sessionBudget)
@@ -795,14 +911,13 @@ func main() {
 		// Propagate restored selections to the already-initialised orchestrator and
 		// tool registry. NewOrchestrator (and toolRegistry.SetConsultantProvider) ran
 		// before app state was loaded and therefore hold pre-restore values.
-		orch.Primary = primary
+		// Note: Primary/Consultant are now managed via ProviderCoordinator setters
 		toolRegistry.SetAIProvider(primary)
-		orch.Consultant = consultant
 		toolRegistry.SetConsultantProvider(consultant)
 
-		// Restore cascade order.
+		// Restore cascade order (managed by ProviderCoordinator).
 		if len(saved.CascadeOrder) > 0 {
-			orch.CascadeOrder = saved.CascadeOrder
+			orch.SetCascadeOrder(saved.CascadeOrder)
 		}
 		// Restore pinned compression provider.
 		if saved.CompressionProvider != "" {
@@ -1016,8 +1131,8 @@ func main() {
 	orch.Feedback = router.NewFeedbackManager(env.ConfigDir, logger)
 	defer orch.Feedback.Close()
 
-	// 6.5.3 Wire discovery manager into orchestrator (used by spawn_sub_agent + Cloud Brains tab).
-	orch.Discovery = discMgr
+	// 6.5.3 Discovery manager is already wired into ProviderCoordinator during initialization
+	// (used by spawn_sub_agent + Cloud Brains tab, accessed via orch.ProviderCoord.Discovery())
 
 	// 6.5.4 SQLite persistence store — conversation history + tool call analytics.
 	sessionID := fmt.Sprintf("session-%d", time.Now().UnixNano())
@@ -1142,12 +1257,12 @@ func main() {
 
 		if *inlineFlag || *irFlag {
 			// CRITICAL: Inline REPL mode bypasses TUI
-			wireCommandRegistry(ctx, cmdReg, orch, extras, appState, themeMgr, mcpMgr, envProbe, googleAuthClient)
+			wireCommandRegistry(ctx, cmdReg, orch, extras, appState, themeMgr, mcpMgr, envProbe, freeWillEng, googleAuthClient)
 			inline.RunREPL(orch, cmdReg, env)
 		} else {
 			// Standard TUI mode (absolute default)
 			runTUI(ctx, orch, processManager, reg, primaryModelName, consultantModelName, sysConfig, themeMgr, mcpMgr, appState,
-				extras, cmdReg, envProbe, discMgr)
+				extras, cmdReg, envProbe, freeWillEng, discMgr)
 		}
 	}
 
@@ -1381,7 +1496,7 @@ func initEmbedder(orch *engine.Orchestrator, consultMed *consultation.Consultati
 	slog.Default().Info("semantic embedder: ready", "model", llm.EmbedModelFile)
 }
 
-func wireCommandRegistry(ctx context.Context, cmdReg *commands.Registry, orch *engine.Orchestrator, extras *tuiExtras, appState *config.AppStateManager, themeMgr *theme.Manager, mcpMgr *orchestrator.ManagedManager, envProbeInst *gorkenv.EnvProbe, googleAuth ...*auth.Client) {
+func wireCommandRegistry(ctx context.Context, cmdReg *commands.Registry, orch *engine.Orchestrator, extras *tuiExtras, appState *config.AppStateManager, themeMgr *theme.Manager, mcpMgr *orchestrator.ManagedManager, envProbeInst *gorkenv.EnvProbe, freeWillEng *engine.FreeWillEngine, googleAuth ...*auth.Client) {
 	// Wire orchestrator adapter into command registry so new commands work.
 	if cmdReg == nil {
 		return
@@ -1416,8 +1531,8 @@ func wireCommandRegistry(ctx context.Context, cmdReg *commands.Registry, orch *e
 				return "Feedback manager not available."
 			}
 			modelID := ""
-			if orch.Primary != nil {
-				modelID = orch.Primary.GetMetadata().ID
+			if primary := orch.Primary(); primary != nil {
+				modelID = primary.GetMetadata().ID
 			}
 			// Normalize 1–5 → 0.0–1.0 and treat ≥3 as success.
 			orch.Feedback.RecordOutcome(router.ClassifyQuery(""), modelID, (score-1)/4.0, score >= 3)
@@ -1462,8 +1577,8 @@ func wireCommandRegistry(ctx context.Context, cmdReg *commands.Registry, orch *e
 			return fmt.Sprintf("Secondary switched to **%s** (%s)", modelID, providerName)
 		},
 		SetAutoSecondary: func() string {
-			orch.Consultant = nil
-			// Clear registry cache so ResolveConsultantProvider auto-selects.
+			// Clear registry cache so ResolveConsultantProvider auto-selects
+			// (Consultant provider itself is managed by ProviderCoordinator)
 			if orch.Registry != nil {
 				orch.Registry.SetConsultantProvider(nil)
 			}
@@ -1556,6 +1671,91 @@ func wireCommandRegistry(ctx context.Context, cmdReg *commands.Registry, orch *e
 		SandboxEnabled: func() bool {
 			return orch.SandboxEnabled()
 		},
+		GetHITLSettings: func() interface{} {
+			return appState.GetHITLSettings()
+		},
+		SetHITLSettings: func(s interface{}) error {
+			settings, ok := s.(config.HITLSettings)
+			if !ok {
+				return fmt.Errorf("invalid HITL settings type")
+			}
+			if err := appState.SetHITLSettings(settings); err != nil {
+				return err
+			}
+			// Refresh the guard with new settings
+			orch.RefreshHITLSettings()
+			return nil
+		},
+		GetEvolutionSettings: func() interface{} {
+			return appState.GetEvolutionSettings()
+		},
+		SetEvolutionSettings: func(s interface{}) error {
+			settings, ok := s.(config.EvolutionSettings)
+			if !ok {
+				return fmt.Errorf("invalid evolution settings type")
+			}
+			if err := appState.SetEvolutionSettings(settings); err != nil {
+				return err
+			}
+			// Refresh FreeWillEngine with new settings (if available)
+			if freeWillEng != nil {
+				settingsMap := map[string]interface{}{
+					"engine_enabled":                  *settings.FreeWillEngineEnabled,
+					"max_autonomous_risk":             settings.MaxAutonomousRisk,
+					"auto_apply_confidence_threshold": settings.ConfidenceThreshold,
+					"proposal_frequency":              settings.ProposalFrequency,
+					"loop_guard_sensitivity":          settings.LoopGuardSensitivity,
+					"rollback_window_size":            float64(settings.RollbackWindowSize),
+				}
+				freeWillEng.Configure(settingsMap)
+			}
+			return nil
+		},
+		GetSREEnabled: func() bool {
+			st := appState.Get()
+			return st.SREEnabled == nil || *st.SREEnabled
+		},
+		SetSREEnabled: func(enabled bool) error {
+			return appState.SetSREEnabled(enabled)
+		},
+		GetEnsembleEnabled: func() bool {
+			st := appState.Get()
+			return st.EnsembleEnabled == nil || *st.EnsembleEnabled
+		},
+		SetEnsembleEnabled: func(enabled bool) error {
+			return appState.SetEnsembleEnabled(enabled)
+		},
+		GetVerboseMode: func() bool {
+			return appState.IsVerboseMode()
+		},
+		SetVerboseMode: func(enabled bool) error {
+			if err := appState.SetVerboseMode(enabled); err != nil {
+				return err
+			}
+			// Update message suppressor with new verbose setting
+			if orch.MessageSuppressor != nil {
+				orch.MessageSuppressor.SetVerboseMode(enabled)
+			}
+			return nil
+		},
+		GetSystemMonitorSettings: func() interface{} {
+			return appState.GetSystemMonitorSettings()
+		},
+		SetSystemMonitorSettings: func(s interface{}) error {
+			settings, ok := s.(config.SystemMonitorSettings)
+			if !ok {
+				return fmt.Errorf("invalid system monitor settings type")
+			}
+			return appState.SetSystemMonitorSettings(settings)
+		},
+		ToggleSelfImprove: func() bool {
+			enabled := orch.ToggleSelfImprove()
+			_ = appState.SetSelfImproveEnabled(enabled)
+			return enabled
+		},
+		GetSISnapshot: func() interface{} {
+			return orch.SISnapshot()
+		},
 	}
 
 	// Wire extras: scheduler, telegram, user-defined commands.
@@ -1601,24 +1801,11 @@ func wireCommandRegistry(ctx context.Context, cmdReg *commands.Registry, orch *e
 		}
 	}
 
-	// Wire skills loader.
-	cwd, _ := os.Getwd()
-	configDir := os.Getenv("XDG_CONFIG_HOME")
-	if configDir == "" {
-		home, _ := os.UserHomeDir()
-		configDir = home + "/.config/gorkbot"
-	}
-	skillsLoader := skills.NewLoader(
-		configDir+"/skills",
-		cwd+"/.gorkbot/skills",
-	)
-	cmdReg.SkillsFormat = skillsLoader.Format
-	cmdReg.SkillsGet = func(name, argsStr string) (string, bool) {
-		def, ok := skillsLoader.Get(name)
-		if !ok {
-			return "", false
-		}
-		return def.Render(argsStr), true
+	// Wire rule engine and other commands.
+	if orch != nil && orch.SkillLoader != nil {
+		sl := orch.SkillLoader
+		cmdReg.SkillsFormat = sl.FormatList
+		cmdReg.SkillsGet = sl.RenderInvocation
 	}
 
 	// Wire rule engine into commands.
@@ -1692,9 +1879,14 @@ func wireCommandRegistry(ctx context.Context, cmdReg *commands.Registry, orch *e
 	}
 }
 
-func runTUI(ctx context.Context, orch *engine.Orchestrator, pm *process.Manager, reg *registry.ModelRegistry, modelName, consultantName string, sysConfig *router.SystemConfiguration, themeMgr *theme.Manager, mcpMgr *orchestrator.ManagedManager, appState *config.AppStateManager, extras *tuiExtras, cmdReg *commands.Registry, envProbeInst *gorkenv.EnvProbe, discMgr ...*discovery.Manager) {
+func runTUI(ctx context.Context, orch *engine.Orchestrator, pm *process.Manager, reg *registry.ModelRegistry, modelName, consultantName string, sysConfig *router.SystemConfiguration, themeMgr *theme.Manager, mcpMgr *orchestrator.ManagedManager, appState *config.AppStateManager, extras *tuiExtras, cmdReg *commands.Registry, envProbeInst *gorkenv.EnvProbe, freeWillEng *engine.FreeWillEngine, discMgr ...*discovery.Manager) {
 	if mcpMgr != nil {
 		defer mcpMgr.StopAll()
+	}
+
+	// Initialize design system for TUI token bridge (Phase 3)
+	if err := designsystem.Init(slog.Default()); err != nil {
+		slog.Default().Warn("Failed to initialize design system", "error", err)
 	}
 
 	model, err := tui.NewModel(orch, pm, modelName, consultantName, cmdReg)
@@ -1755,7 +1947,7 @@ func runTUI(ctx context.Context, orch *engine.Orchestrator, pm *process.Manager,
 	if extras != nil {
 		gac = extras.googleAuth
 	}
-	wireCommandRegistry(ctx, cmdReg, orch, extras, appState, themeMgr, mcpMgr, envProbeInst, gac)
+	wireCommandRegistry(ctx, cmdReg, orch, extras, appState, themeMgr, mcpMgr, envProbeInst, freeWillEng, gac)
 
 	pr, pw := io.Pipe()
 
@@ -1860,7 +2052,7 @@ func handleSetup(configDir string) {
 	minimaxKey = strings.TrimSpace(minimaxKey)
 
 	fmt.Println("\n--- MCP & Extension Credentials ---")
-	
+
 	fmt.Print("6. GitHub Personal Access Token (for mcp_github): ")
 	githubToken, _ := reader.ReadString('\n')
 	githubToken = strings.TrimSpace(githubToken)
@@ -2220,6 +2412,7 @@ func printHelp() {
 	fmt.Println("  -timeout <duration> Timeout for the operation (default: 60s)")
 	fmt.Println("  -verbose-thoughts  Enable verbose output of consultant thinking")
 	fmt.Println("  -watchdog          Enable orchestrator watchdog for debugging")
+	fmt.Println("  -evolve            Enable autonomous self-improvement drive on startup")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  gorkbot setup                    # Configure API keys")

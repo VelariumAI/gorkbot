@@ -1,401 +1,438 @@
-// Package skills loads user-defined skill definitions from markdown files
-// with YAML frontmatter and makes them available as slash commands.
-//
-// Skill files live in:
-//
-//	~/.config/gorkbot/skills/          (user-global)
-//	<project>/.gorkbot/skills/         (project-level)
-//
-// Format example (.gorkbot/skills/code-review.md):
-//
-//	---
-//	name: code-review
-//	description: Thorough code review with security focus
-//	aliases: [cr, review]
-//	tools: [read_file, grep_content, bash]
-//	model: grok-3
-//	---
-//
-//	Review {{target}} for security issues, logic errors, and code quality.
 package skills
 
 import (
-	"embed"
 	"fmt"
+	"io/ioutil"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
-//go:embed builtin/*.md
-var builtinSkills embed.FS
+var semverPattern = regexp.MustCompile(`^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.\-]+)?$`)
+var schemaVersionPattern = regexp.MustCompile(`^\d+\.\d+$`)
 
-// Definition holds a parsed skill definition.
-type Definition struct {
-	Name        string   // Canonical slash command name
-	Description string   // Short description
-	Aliases     []string // Alternative names
-	Tools       []string // Allowed tools (empty = all)
-	Model       string   // Override model (empty = default)
-	Template    string   // Prompt template body
-	SourceFile  string   // Path to the .md file
-}
-
-// Loader discovers and parses skill definitions from configured directories.
+// Loader handles loading and parsing skill manifests.
 type Loader struct {
-	dirs []string
+	registry Registry
+	logger   *slog.Logger
 }
 
-// NewLoader creates a Loader that searches the given directories.
-// Typical usage: NewLoader(globalConfigDir+"/skills", projectRoot+"/.gorkbot/skills")
-func NewLoader(dirs ...string) *Loader {
-	return &Loader{dirs: dirs}
+// NewLoader creates a new skill loader.
+func NewLoader(registry Registry, logger *slog.Logger) *Loader {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	return &Loader{
+		registry: registry,
+		logger:   logger,
+	}
 }
 
-// LoadAll returns all skill definitions found across all configured directories.
-// Project-level skills override global skills with the same name.
-func (l *Loader) LoadAll() []Definition {
-	byName := map[string]Definition{}
+// LoadManifest parses a .gorkskill.yaml file.
+func (l *Loader) LoadManifest(filePath string) (*SkillManifest, error) {
+	// Read file
+	data, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read manifest: %w", err)
+	}
 
-	// 1. Load built-in skills
-	if entries, err := builtinSkills.ReadDir("builtin"); err == nil {
-		for _, e := range entries {
-			if !strings.HasSuffix(e.Name(), ".md") {
-				continue
+	// Parse YAML
+	var manifest SkillManifest
+	if err := yaml.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML: %w", err)
+	}
+
+	// Validate
+	if err := l.validate(&manifest); err != nil {
+		return nil, fmt.Errorf("validation failed: %w", err)
+	}
+
+	// Set timestamps if not provided
+	if manifest.Created.IsZero() {
+		manifest.Created = time.Now()
+	}
+	manifest.Modified = time.Now()
+	if manifest.SchemaVersion == "" {
+		manifest.SchemaVersion = "1.0"
+	}
+
+	// Default enabled to true
+	if !manifest.Enabled {
+		manifest.Enabled = true
+	}
+
+	return &manifest, nil
+}
+
+// LoadDirectory scans a directory for .gorkskill.yaml files and loads them.
+func (l *Loader) LoadDirectory(dirPath string) (int, error) {
+	entries, err := ioutil.ReadDir(dirPath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read directory: %w", err)
+	}
+
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			// Recursively check subdirectories
+			skillFile := filepath.Join(entry.Name(), ".gorkskill.yaml")
+			fullPath := filepath.Join(dirPath, skillFile)
+			if _, err := os.Stat(fullPath); err == nil {
+				manifest, err := l.LoadManifest(fullPath)
+				if err != nil {
+					l.logger.Warn("failed to load skill", "file", fullPath, "error", err)
+					continue
+				}
+
+				if err := l.registry.Register(manifest, fullPath); err != nil {
+					l.logger.Warn("failed to register skill", "name", manifest.Name, "error", err)
+					continue
+				}
+
+				count++
 			}
-			path := "builtin/" + e.Name()
-			data, err := builtinSkills.ReadFile(path)
+		} else if entry.Name() == ".gorkskill.yaml" {
+			fullPath := filepath.Join(dirPath, entry.Name())
+			manifest, err := l.LoadManifest(fullPath)
 			if err != nil {
+				l.logger.Warn("failed to load skill", "file", fullPath, "error", err)
 				continue
 			}
-			def, err := parseSkillContent(data, path)
-			if err == nil && def.Name != "" {
-				byName[def.Name] = def
-			}
-		}
-	}
 
-	// 2. Load user/project skills (overrides built-ins)
-	for _, dir := range l.dirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			if err := l.registry.Register(manifest, fullPath); err != nil {
+				l.logger.Warn("failed to register skill", "name", manifest.Name, "error", err)
 				continue
 			}
-			path := filepath.Join(dir, e.Name())
-			def, err := parseSkillFile(path)
-			if err != nil || def.Name == "" {
-				continue
+
+			count++
+		}
+	}
+
+	l.logger.Info("loaded skills from directory", "dir", dirPath, "count", count)
+	return count, nil
+}
+
+// validate checks required fields.
+func (l *Loader) validate(manifest *SkillManifest) error {
+	if manifest.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if manifest.Version == "" {
+		return fmt.Errorf("version is required")
+	}
+	if !semverPattern.MatchString(manifest.Version) {
+		return fmt.Errorf("version must be semantic version (e.g. 1.2.3)")
+	}
+	if manifest.SchemaVersion != "" && !schemaVersionPattern.MatchString(manifest.SchemaVersion) {
+		return fmt.Errorf("schema_version must be in major.minor format (e.g. 1.0)")
+	}
+	if manifest.Description == "" {
+		return fmt.Errorf("description is required")
+	}
+
+	// Validate workflows
+	for _, wf := range manifest.Workflows {
+		if wf.Name == "" {
+			return fmt.Errorf("workflow name is required")
+		}
+		if len(wf.Steps) == 0 {
+			return fmt.Errorf("workflow %s has no steps", wf.Name)
+		}
+
+		// Validate steps
+		for _, step := range wf.Steps {
+			if step.ID == "" {
+				return fmt.Errorf("step ID is required in workflow %s", wf.Name)
 			}
-			byName[def.Name] = def
-		}
-	}
-
-	result := make([]Definition, 0, len(byName))
-	for _, def := range byName {
-		result = append(result, def)
-	}
-	return result
-}
-
-// Get returns the named skill (checking canonical name and aliases).
-func (l *Loader) Get(name string) (Definition, bool) {
-	for _, def := range l.LoadAll() {
-		if def.Name == name {
-			return def, true
-		}
-		for _, alias := range def.Aliases {
-			if alias == name {
-				return def, true
+			if step.Type == "" {
+				return fmt.Errorf("step type is required in workflow %s", wf.Name)
 			}
 		}
 	}
-	return Definition{}, false
+
+	return nil
 }
 
-// Render expands template variables in a skill definition's template.
-// Variables: {{target}}, {{args}}, {{date}}
-func (def *Definition) Render(args string) string {
-	t := def.Template
-	t = strings.ReplaceAll(t, "{{target}}", args)
-	t = strings.ReplaceAll(t, "{{args}}", args)
-	return t
+// List returns enabled skills currently registered by the loader.
+func (l *Loader) List() []*SkillMetadata {
+	if l == nil || l.registry == nil {
+		return nil
+	}
+	return l.registry.List()
 }
 
-// Format returns a human-readable list of all skills.
-func (l *Loader) Format() string {
-	skills := l.LoadAll()
+// Get returns a single skill by name.
+func (l *Loader) Get(name string) *SkillMetadata {
+	if l == nil || l.registry == nil || name == "" {
+		return nil
+	}
+	return l.registry.Get(name)
+}
+
+// FormatList renders a concise Markdown list for /skills and API surfaces.
+func (l *Loader) FormatList() string {
+	skills := l.List()
 	if len(skills) == 0 {
-		return fmt.Sprintf(
-			"No skills installed.\n\nCreate skill files in:\n  ~/.config/gorkbot/skills/\n  .gorkbot/skills/\n\nSee `/skills help` for the file format.\n",
-		)
+		return "# Skills\n\nNo skills loaded."
 	}
+
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("# Skills (%d installed)\n\n", len(skills)))
-	for _, s := range skills {
-		sb.WriteString(fmt.Sprintf("**/%s**", s.Name))
-		if len(s.Aliases) > 0 {
-			aliases := make([]string, len(s.Aliases))
-			for i, a := range s.Aliases {
-				aliases[i] = "/" + a
-			}
-			sb.WriteString(fmt.Sprintf(" (also: %s)", strings.Join(aliases, ", ")))
-		}
-		sb.WriteString(fmt.Sprintf("\n  %s\n", s.Description))
-		if s.Model != "" {
-			sb.WriteString(fmt.Sprintf("  Model: `%s`\n", s.Model))
-		}
-		sb.WriteString(fmt.Sprintf("  Source: `%s`\n\n", s.SourceFile))
+	sb.WriteString("# Skills\n\n")
+	for _, sm := range skills {
+		sb.WriteString(fmt.Sprintf("- **%s** (%s): %s\n",
+			sm.Manifest.Name,
+			sm.Manifest.Version,
+			sm.Manifest.Description,
+		))
 	}
-	sb.WriteString("---\n**Usage:** `/<skill-name> [arguments]`\n")
 	return sb.String()
 }
 
-// CreateExample writes a template skill file.
-func CreateExample(dir, name string) error {
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
+// FormatIndexForPrompt renders a compact, model-friendly index used in system prompt injection.
+func (l *Loader) FormatIndexForPrompt() string {
+	skills := l.List()
+	if len(skills) == 0 {
+		return ""
 	}
-	path := filepath.Join(dir, name+".md")
-	content := fmt.Sprintf(`---
-name: %s
-description: Describe what this skill does
-aliases: []
-tools: []
-model: ""
----
 
-# %s Skill
-
-Analyze {{target}} and provide:
-1. A structured summary
-2. Key findings
-3. Actionable recommendations
-`, name, strings.Title(name))
-	return os.WriteFile(path, []byte(content), 0644)
+	var sb strings.Builder
+	sb.WriteString("\n<available_skills>\n")
+	for _, sm := range skills {
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", sm.Manifest.Name, sm.Manifest.Description))
+	}
+	sb.WriteString("</available_skills>\n\n")
+	return sb.String()
 }
 
-// validSkillName is the compiled regexp for skill name validation.
-var validSkillName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
-
-// FirstUserDir returns the first configured user directory (or "" if none).
-// This is the preferred target for writing new skill files.
-func (l *Loader) FirstUserDir() string {
-	for _, d := range l.dirs {
-		return d
-	}
-	return ""
-}
-
-// Create writes a new skill file to the first writable user directory.
-// name must match ^[a-z0-9][a-z0-9._-]{0,63}$ and must not already exist.
-// If content is empty a minimal template is generated from name and description.
-func (l *Loader) Create(name, description, content string, tags, platforms []string) error {
-	if !validSkillName.MatchString(name) {
-		return fmt.Errorf("invalid skill name %q: must match ^[a-z0-9][a-z0-9._-]{0,63}$", name)
-	}
-	if strings.Contains(name, "..") || strings.Contains(name, "/") {
-		return fmt.Errorf("invalid skill name %q: must not contain '..' or '/'", name)
+// RenderInvocation returns a best-effort prompt expansion for slash-command skill invocation.
+func (l *Loader) RenderInvocation(name, args string) (string, bool) {
+	skill := l.Get(name)
+	if skill == nil || skill.Manifest == nil || !skill.Manifest.Enabled {
+		return "", false
 	}
 
-	// Determine target directory — first existing dir or create it.
-	dir := l.FirstUserDir()
-	if dir == "" {
-		return fmt.Errorf("no user skill directories configured")
-	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("cannot create skill directory %q: %w", dir, err)
-	}
-
-	destPath := filepath.Join(dir, name+".md")
-	if _, err := os.Stat(destPath); err == nil {
-		return fmt.Errorf("skill %q already exists at %s", name, destPath)
-	}
-
-	if content == "" {
-		// Generate minimal frontmatter template.
-		tagsYAML := "[]"
-		if len(tags) > 0 {
-			tagsYAML = "[" + strings.Join(tags, ", ") + "]"
+	manifest := skill.Manifest
+	if len(manifest.Prompts) > 0 {
+		tpl := manifest.Prompts[0].Template
+		if args != "" {
+			tpl = strings.ReplaceAll(tpl, "{{args}}", args)
 		}
-		platformsYAML := "[]"
-		if len(platforms) > 0 {
-			platformsYAML = "[" + strings.Join(platforms, ", ") + "]"
-		}
-		if description == "" {
-			description = name + " skill"
-		}
-		content = fmt.Sprintf("---\nname: %s\ndescription: %s\ntags: %s\nplatforms: %s\n---\n\n%s skill template.\n",
-			name, description, tagsYAML, platformsYAML, name)
+		return tpl, true
 	}
 
-	return os.WriteFile(destPath, []byte(content), 0644)
-}
-
-// Patch finds skill 'name' and does a find-and-replace of oldText→newText.
-// Returns an error if the skill is not found or oldText is not present.
-func (l *Loader) Patch(name, oldText, newText string) error {
-	def, ok := l.Get(name)
-	if !ok {
-		return fmt.Errorf("skill %q not found", name)
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Use skill '%s' (%s).\n", manifest.Name, manifest.Description))
+	if args != "" {
+		sb.WriteString(fmt.Sprintf("User input: %s\n", args))
 	}
-	if def.SourceFile == "" {
-		return fmt.Errorf("skill %q has no source file (built-in skills cannot be patched)", name)
-	}
-
-	data, err := os.ReadFile(def.SourceFile)
-	if err != nil {
-		return fmt.Errorf("cannot read skill file %q: %w", def.SourceFile, err)
-	}
-
-	original := string(data)
-	if !strings.Contains(original, oldText) {
-		return fmt.Errorf("old_text %q not found in skill %q", oldText, name)
-	}
-
-	// Replace only the first occurrence.
-	updated := strings.Replace(original, oldText, newText, 1)
-	return os.WriteFile(def.SourceFile, []byte(updated), 0644)
-}
-
-// Delete removes skill 'name' from the filesystem.
-// Only deletes skills whose SourceFile is under one of the configured dirs.
-// Built-in (embedded) skills cannot be deleted.
-func (l *Loader) Delete(name string) error {
-	def, ok := l.Get(name)
-	if !ok {
-		return fmt.Errorf("skill %q not found", name)
-	}
-	if def.SourceFile == "" {
-		return fmt.Errorf("skill %q is a built-in skill and cannot be deleted", name)
-	}
-
-	// Verify the source file is under one of our configured dirs.
-	cleanSource := filepath.Clean(def.SourceFile)
-	allowed := false
-	for _, d := range l.dirs {
-		cleanDir := filepath.Clean(d)
-		if !strings.HasSuffix(cleanDir, string(filepath.Separator)) {
-			cleanDir += string(filepath.Separator)
-		}
-		if strings.HasPrefix(cleanSource+string(filepath.Separator), cleanDir) {
-			allowed = true
+	if len(manifest.Workflows) > 0 {
+		sb.WriteString("Follow workflow steps:\n")
+		for _, wf := range manifest.Workflows {
+			sb.WriteString(fmt.Sprintf("- %s\n", wf.Name))
+			for _, step := range wf.Steps {
+				sb.WriteString(fmt.Sprintf("  - [%s] %s\n", step.Type, step.ID))
+			}
 			break
 		}
 	}
-	if !allowed {
-		return fmt.Errorf("skill %q source file %q is outside configured skill directories", name, def.SourceFile)
-	}
-
-	return os.Remove(cleanSource)
+	return strings.TrimSpace(sb.String()), true
 }
 
-// View returns the full raw content of skill 'name'.
-// For user-defined skills it reads the source file; for built-in skills it
-// reads from the embedded filesystem.
-func (l *Loader) View(name string) (string, error) {
-	def, ok := l.Get(name)
-	if !ok {
-		return "", fmt.Errorf("skill %q not found", name)
+// Format returns a human-readable list of installed skills.
+func (l *Loader) Format() string {
+	return l.FormatList()
+}
+
+// Create writes a new skill manifest and registers it.
+func (l *Loader) Create(name, description, content string, tags, platforms []string) error {
+	name = strings.TrimSpace(name)
+	description = strings.TrimSpace(description)
+	if name == "" || description == "" {
+		return fmt.Errorf("name and description are required")
+	}
+	if l.Get(name) != nil {
+		return fmt.Errorf("skill already exists: %s", name)
 	}
 
-	// Built-in skills have SourceFile set to "builtin/<name>.md" (embed path).
-	if def.SourceFile != "" && !filepath.IsAbs(def.SourceFile) {
-		// Likely an embedded path — try the embedded FS.
-		data, err := builtinSkills.ReadFile(def.SourceFile)
-		if err == nil {
-			return string(data), nil
+	skillDir := filepath.Join(l.skillRootDir(), name)
+	manifestPath := filepath.Join(skillDir, ".gorkskill.yaml")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create skill directory: %w", err)
+	}
+
+	var out []byte
+	if strings.TrimSpace(content) != "" {
+		out = []byte(content)
+	} else {
+		now := time.Now()
+		manifest := SkillManifest{
+			Name:          name,
+			SchemaVersion: "1.0",
+			Version:       "1.0.0",
+			Description:   description,
+			Category:      "custom",
+			Tags:          tags,
+			Keywords:      append([]string{}, tags...),
+			Created:       now,
+			Modified:      now,
+			Enabled:       true,
 		}
+		for _, p := range platforms {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				manifest.Keywords = append(manifest.Keywords, "platform:"+p)
+			}
+		}
+		data, err := yaml.Marshal(&manifest)
+		if err != nil {
+			return fmt.Errorf("failed to marshal manifest: %w", err)
+		}
+		out = data
 	}
 
-	if def.SourceFile == "" {
-		// Reconstruct from parsed fields if no source file.
-		return fmt.Sprintf("---\nname: %s\ndescription: %s\n---\n\n%s\n",
-			def.Name, def.Description, def.Template), nil
+	if err := os.WriteFile(manifestPath, out, 0o644); err != nil {
+		return fmt.Errorf("failed to write manifest: %w", err)
 	}
 
-	data, err := os.ReadFile(def.SourceFile)
+	manifest, err := l.LoadManifest(manifestPath)
 	if err != nil {
-		return "", fmt.Errorf("cannot read skill file %q: %w", def.SourceFile, err)
+		return fmt.Errorf("created file is invalid manifest: %w", err)
+	}
+	if err := l.registry.Register(manifest, manifestPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Patch replaces the first occurrence of oldText with newText in the skill file.
+func (l *Loader) Patch(name, oldText, newText string) error {
+	content, err := l.View(name)
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(content, oldText) {
+		return fmt.Errorf("old_text not found in skill %s", name)
+	}
+	updated := strings.Replace(content, oldText, newText, 1)
+	md := l.Get(name)
+	if md == nil {
+		return fmt.Errorf("skill not found: %s", name)
+	}
+	if err := os.WriteFile(md.FilePath, []byte(updated), 0o644); err != nil {
+		return fmt.Errorf("failed to write patched skill: %w", err)
+	}
+	manifest, err := l.LoadManifest(md.FilePath)
+	if err != nil {
+		return fmt.Errorf("patched file is invalid manifest: %w", err)
+	}
+	_ = l.registry.Unregister(name)
+	return l.registry.Register(manifest, md.FilePath)
+}
+
+// Delete removes a user-defined skill file and unregisters it.
+func (l *Loader) Delete(name string) error {
+	md := l.Get(name)
+	if md == nil {
+		return fmt.Errorf("skill not found: %s", name)
+	}
+	if strings.Contains(md.FilePath, string(filepath.Separator)+".system"+string(filepath.Separator)) {
+		return fmt.Errorf("refusing to delete built-in system skill: %s", name)
+	}
+	if err := os.Remove(md.FilePath); err != nil {
+		return fmt.Errorf("failed to remove skill file: %w", err)
+	}
+	_ = l.registry.Unregister(name)
+	return nil
+}
+
+// View returns the raw manifest content for a skill.
+func (l *Loader) View(name string) (string, error) {
+	md := l.Get(name)
+	if md == nil {
+		return "", fmt.Errorf("skill not found: %s", name)
+	}
+	data, err := os.ReadFile(md.FilePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read skill file: %w", err)
 	}
 	return string(data), nil
 }
 
-// parseSkillFile reads a skill markdown file and parses its frontmatter.
-func parseSkillFile(path string) (Definition, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Definition{}, err
+func (l *Loader) skillRootDir() string {
+	if reg, ok := l.registry.(*InMemoryRegistry); ok && reg.dir != "" {
+		return reg.dir
 	}
-	return parseSkillContent(data, path)
+	if v := strings.TrimSpace(os.Getenv("GORKBOT_SKILLS_DIR")); v != "" {
+		return v
+	}
+	return "skills"
 }
 
-func parseSkillContent(data []byte, path string) (Definition, error) {
-	content := string(data)
-	def := Definition{SourceFile: path}
+// LintIssue represents a skill validation issue.
+type LintIssue struct {
+	File    string `json:"file"`
+	Skill   string `json:"skill,omitempty"`
+	Message string `json:"message"`
+}
 
-	// Extract YAML frontmatter between --- delimiters
-	if !strings.HasPrefix(content, "---") {
-		// No frontmatter — use filename as name, whole file as template
-		def.Name = strings.TrimSuffix(filepath.Base(path), ".md")
-		def.Template = strings.TrimSpace(content)
-		return def, nil
+// LintFile validates a manifest file and returns any issues.
+func (l *Loader) LintFile(filePath string) []LintIssue {
+	manifest, err := l.LoadManifest(filePath)
+	if err != nil {
+		return []LintIssue{{File: filePath, Message: err.Error()}}
 	}
+	return l.lintManifest(manifest, filePath)
+}
 
-	parts := strings.SplitN(content, "---", 3)
-	if len(parts) < 3 {
-		return def, fmt.Errorf("invalid frontmatter")
-	}
-
-	yaml := strings.TrimSpace(parts[1])
-	def.Template = strings.TrimSpace(parts[2])
-
-	// Simple YAML parser (no external dependency)
-	for _, line := range strings.Split(yaml, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+// LintDirectory validates all .gorkskill manifests in a directory tree.
+func (l *Loader) LintDirectory(dirPath string) []LintIssue {
+	var issues []LintIssue
+	_ = filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			issues = append(issues, LintIssue{File: path, Message: err.Error()})
+			return nil
 		}
-		kv := strings.SplitN(line, ":", 2)
-		if len(kv) != 2 {
-			continue
+		if info == nil || info.IsDir() {
+			return nil
 		}
-		key := strings.TrimSpace(kv[0])
-		val := strings.TrimSpace(kv[1])
+		if info.Name() != ".gorkskill.yaml" {
+			return nil
+		}
+		issues = append(issues, l.LintFile(path)...)
+		return nil
+	})
+	return issues
+}
 
-		switch key {
-		case "name":
-			def.Name = strings.Trim(val, `"'`)
-		case "description":
-			def.Description = strings.Trim(val, `"'`)
-		case "model":
-			def.Model = strings.Trim(val, `"'`)
-		case "aliases":
-			// Parse: [cr, review] or ["cr", "review"]
-			val = strings.Trim(val, "[]")
-			for _, a := range strings.Split(val, ",") {
-				a = strings.Trim(strings.TrimSpace(a), `"'`)
-				if a != "" {
-					def.Aliases = append(def.Aliases, a)
-				}
-			}
-		case "tools":
-			val = strings.Trim(val, "[]")
-			for _, t := range strings.Split(val, ",") {
-				t = strings.Trim(strings.TrimSpace(t), `"'`)
-				if t != "" {
-					def.Tools = append(def.Tools, t)
-				}
-			}
+func (l *Loader) lintManifest(manifest *SkillManifest, filePath string) []LintIssue {
+	var issues []LintIssue
+	if manifest == nil {
+		return []LintIssue{{File: filePath, Message: "manifest is nil"}}
+	}
+	if len(manifest.Tools) == 0 && len(manifest.Workflows) == 0 && len(manifest.Prompts) == 0 {
+		issues = append(issues, LintIssue{
+			File:    filePath,
+			Skill:   manifest.Name,
+			Message: "skill has no tools, prompts, or workflows",
+		})
+	}
+	for _, perm := range manifest.Permissions {
+		level := strings.ToLower(strings.TrimSpace(perm.Level))
+		switch level {
+		case "", "always", "session", "once", "never":
+		default:
+			issues = append(issues, LintIssue{
+				File:    filePath,
+				Skill:   manifest.Name,
+				Message: fmt.Sprintf("invalid permission level: %s", perm.Level),
+			})
 		}
 	}
-
-	if def.Name == "" {
-		def.Name = strings.TrimSuffix(filepath.Base(path), ".md")
-	}
-	return def, nil
+	return issues
 }

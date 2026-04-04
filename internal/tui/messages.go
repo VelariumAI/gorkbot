@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/velariumai/gorkbot/internal/engine"
 	"github.com/velariumai/gorkbot/pkg/commands"
+	"github.com/velariumai/gorkbot/pkg/selfimprove"
 	"github.com/velariumai/gorkbot/pkg/tools"
 )
 
@@ -52,6 +53,12 @@ type ModelSwitchMsg struct {
 // ThemeSwitchMsg indicates the theme has been switched
 type ThemeSwitchMsg struct {
 	Theme string
+}
+
+// ProviderNamesUpdatedMsg signals provider name changes (Phase 3)
+type ProviderNamesUpdatedMsg struct {
+	PrimaryName    string
+	ConsultantName string
 }
 
 // StartGenerationMsg signals the start of AI generation
@@ -233,6 +240,18 @@ func planningTick() tea.Cmd {
 func discoveryPollTick() tea.Cmd {
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 		return DiscoveryPollTickMsg{}
+	})
+}
+
+// EvolveTickMsg carries a snapshot of self-improvement state for dashboard display.
+type EvolveTickMsg struct {
+	Snapshot selfimprove.SISnapshot
+}
+
+// evolveTick schedules SI snapshot polls every 5 seconds (for dashboard updates).
+func evolveTick(snapshot selfimprove.SISnapshot) tea.Cmd {
+	return tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
+		return EvolveTickMsg{Snapshot: snapshot}
 	})
 }
 

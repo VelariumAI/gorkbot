@@ -234,11 +234,11 @@ func (c *Client) SaveClientConfig(cfg ClientConfig) error {
 
 // EnsureTokenResult conveys the outcome of EnsureToken.
 type EnsureTokenResult struct {
-	Token         *TokenSet
-	AuthRequired  bool   // true when user interaction is needed
-	Instructions  string // human-readable auth steps (set when AuthRequired)
-	DeviceCode    string // set during device flow — caller should poll CompleteDeviceFlow
-	PollInterval  time.Duration
+	Token        *TokenSet
+	AuthRequired bool   // true when user interaction is needed
+	Instructions string // human-readable auth steps (set when AuthRequired)
+	DeviceCode   string // set during device flow — caller should poll CompleteDeviceFlow
+	PollInterval time.Duration
 }
 
 // EnsureToken returns a valid access token, refreshing or initiating the Device

@@ -1,153 +1,108 @@
-// Package mcp implements the Model Context Protocol (MCP) client.
-//
-// MCP is a standard protocol for connecting AI models to external tool servers.
-// Each MCP server exposes a set of tools over a JSON-RPC 2.0 transport (stdio or SSE).
-// This client discovers servers from a config file, starts them as child processes,
-// and wraps their tools as standard Gorkbot tools so they appear alongside built-in ones.
+// Package mcp implements the Model Context Protocol (MCP) for Gorkbot.
+// MCP enables Gorkbot to act as both a server (exposing capabilities) and a client (consuming resources).
 package mcp
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
+	"time"
 )
 
-// Transport describes how to connect to an MCP server.
-type Transport string
+// MessageType identifies the MCP message type.
+type MessageType string
 
 const (
-	TransportStdio Transport = "stdio" // spawn a child process, communicate over stdin/stdout
-	TransportSSE   Transport = "sse"   // HTTP Server-Sent Events (for remote servers)
+	MessageTypeRequest      MessageType = "request"
+	MessageTypeResponse     MessageType = "response"
+	MessageTypeNotification MessageType = "notification"
+	MessageTypeError        MessageType = "error"
 )
 
-// ServerConfig describes one MCP server in the config file.
-type ServerConfig struct {
-	Name        string            `json:"name"`
-	Transport   Transport         `json:"transport"`
-	Command     string            `json:"command,omitempty"` // for stdio: executable path
-	Args        []string          `json:"args,omitempty"`    // for stdio: arguments
-	URL         string            `json:"url,omitempty"`     // for SSE: server URL
-	Env         map[string]string `json:"env,omitempty"`     // extra environment variables
-	Disabled    bool              `json:"disabled,omitempty"`
-	Description string            `json:"description,omitempty"` // human-readable description
+// Message is the base MCP message format.
+type Message struct {
+	Type      MessageType     `json:"type"`
+	ID        string          `json:"id"`
+	Method    string          `json:"method,omitempty"`
+	Params    json.RawMessage `json:"params,omitempty"`
+	Result    json.RawMessage `json:"result,omitempty"`
+	Error     *ErrorDetail    `json:"error,omitempty"`
+	Timestamp time.Time       `json:"timestamp"`
 }
 
-// Config is the top-level config file structure (~/.config/gorkbot/mcp.json).
-type Config struct {
-	Servers []ServerConfig `json:"servers"`
-	Version string         `json:"version"`
-}
-
-// ── JSON-RPC 2.0 wire types ──────────────────────────────────────────────────
-
-// Request is a JSON-RPC 2.0 request sent to an MCP server.
-type Request struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      int         `json:"id"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
-}
-
-// Response is a JSON-RPC 2.0 response received from an MCP server.
-type Response struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      int             `json:"id"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *RPCError       `json:"error,omitempty"`
-}
-
-// RPCError represents a JSON-RPC error object.
-type RPCError struct {
+// ErrorDetail provides error information.
+type ErrorDetail struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Data    string `json:"data,omitempty"`
 }
 
-func (e *RPCError) Error() string {
-	return fmt.Sprintf("rpc error %d: %s", e.Code, e.Message)
+// ServerCapabilities describes what the MCP server can do.
+type ServerCapabilities struct {
+	Tools     ToolCapability     `json:"tools"`
+	Resources ResourceCapability `json:"resources"`
+	Prompts   PromptCapability   `json:"prompts"`
 }
 
-// ── MCP-specific protocol types ──────────────────────────────────────────────
-
-// InitializeParams is sent during the MCP handshake.
-type InitializeParams struct {
-	ProtocolVersion string     `json:"protocolVersion"`
-	Capabilities    ClientCaps `json:"capabilities"`
-	ClientInfo      ClientInfo `json:"clientInfo"`
+// ToolCapability describes available tools.
+type ToolCapability struct {
+	ListChanged bool `json:"listChanged"`
+	Count       int  `json:"count"`
 }
 
-// ClientCaps describes what the client supports.
-type ClientCaps struct {
-	Sampling *struct{} `json:"sampling,omitempty"`
+// ResourceCapability describes available resources.
+type ResourceCapability struct {
+	Subscribe   bool `json:"subscribe"`
+	ListChanged bool `json:"listChanged"`
+	Count       int  `json:"count"`
 }
 
-// ClientInfo identifies this MCP client to the server.
-type ClientInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+// PromptCapability describes available prompts.
+type PromptCapability struct {
+	ListChanged bool `json:"listChanged"`
+	Count       int  `json:"count"`
 }
 
-// InitializeResult is the server's response to Initialize.
-type InitializeResult struct {
-	ProtocolVersion string     `json:"protocolVersion"`
-	Capabilities    ServerCaps `json:"capabilities"`
-	ServerInfo      ServerInfo `json:"serverInfo"`
-}
-
-// ServerCaps describes what the server supports.
-type ServerCaps struct {
-	Tools     *ToolsCap     `json:"tools,omitempty"`
-	Prompts   *PromptsCap   `json:"prompts,omitempty"`
-	Resources *ResourcesCap `json:"resources,omitempty"`
-}
-
-// ToolsCap indicates the server exposes callable tools.
-type ToolsCap struct {
-	ListChanged bool `json:"listChanged,omitempty"`
-}
-
-// PromptsCap indicates the server exposes prompt templates.
-type PromptsCap struct {
-	ListChanged bool `json:"listChanged,omitempty"`
-}
-
-// ResourcesCap indicates the server exposes readable resources.
-type ResourcesCap struct {
-	Subscribe   bool `json:"subscribe,omitempty"`
-	ListChanged bool `json:"listChanged,omitempty"`
-}
-
-// ServerInfo identifies the MCP server.
-type ServerInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-// ToolDefinition is returned by tools/list.
-type ToolDefinition struct {
+// Tool describes an available tool.
+type Tool struct {
 	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"inputSchema"`
 }
 
-// ListToolsResult is the result of a tools/list RPC call.
-type ListToolsResult struct {
-	Tools  []ToolDefinition `json:"tools"`
-	Cursor string           `json:"nextCursor,omitempty"`
+// Resource describes an available resource.
+type Resource struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	MimeType    string `json:"mimeType,omitempty"`
 }
 
-// CallToolParams is the params for a tools/call RPC call.
-type CallToolParams struct {
-	Name      string                 `json:"name"`
-	Arguments map[string]interface{} `json:"arguments,omitempty"`
+// Prompt describes an available prompt template.
+type Prompt struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
-// ToolContent is one element in a tool call result.
-type ToolContent struct {
-	Type string `json:"type"` // "text", "image", "resource"
-	Text string `json:"text,omitempty"`
-}
+// ServerHandler defines the interface for MCP server implementations.
+type ServerHandler interface {
+	// Initialize handles the initial handshake.
+	Initialize(ctx context.Context) error
 
-// CallToolResult is the result of a tools/call RPC call.
-type CallToolResult struct {
-	Content []ToolContent `json:"content"`
-	IsError bool          `json:"isError,omitempty"`
+	// ListTools returns available tools.
+	ListTools(ctx context.Context) ([]Tool, error)
+
+	// UseTool executes a tool.
+	UseTool(ctx context.Context, name string, args json.RawMessage) (interface{}, error)
+
+	// ListResources returns available resources.
+	ListResources(ctx context.Context) ([]Resource, error)
+
+	// ReadResource retrieves a resource.
+	ReadResource(ctx context.Context, uri string) (interface{}, error)
+
+	// ListPrompts returns available prompts.
+	ListPrompts(ctx context.Context) ([]Prompt, error)
+
+	// GetPrompt retrieves a prompt.
+	GetPrompt(ctx context.Context, name string, args map[string]string) (interface{}, error)
 }

@@ -39,7 +39,7 @@ func NewManager(keys *KeyStore, logger *slog.Logger) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	
+
 	// Initialize semantic cache backed by Ollama Nomic embedder.
 	// configDir is derived from the KeyStore so no extra parameter is needed.
 	embedder := embeddings.NewOllamaEmbedder("", "")

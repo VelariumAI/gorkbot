@@ -32,7 +32,7 @@ func NewMoonshotProvider(apiKey, model string) *MoonshotProvider {
 	}
 }
 
-func (m *MoonshotProvider) Name() string { return "Moonshot" }
+func (m *MoonshotProvider) Name() string            { return "Moonshot" }
 func (m *MoonshotProvider) ID() registry.ProviderID { return "moonshot" }
 func (m *MoonshotProvider) GetMetadata() ProviderMetadata {
 	ctxSize := 8192
@@ -44,7 +44,7 @@ func (m *MoonshotProvider) GetMetadata() ProviderMetadata {
 	} else if strings.Contains(lower, "256k") || strings.Contains(lower, "k2.5") {
 		ctxSize = 131072 // Safe assumption for k2.5
 	}
-	
+
 	return ProviderMetadata{
 		ID:          m.Model,
 		Name:        "Moonshot (" + m.Model + ")",

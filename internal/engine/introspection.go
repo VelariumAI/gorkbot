@@ -155,13 +155,13 @@ func (o *Orchestrator) GetRuntimeStatus() string {
 	}
 
 	// Active models — exact model IDs prevent the AI guessing model names.
-	if o.Primary != nil {
-		meta := o.Primary.GetMetadata()
-		sb.WriteString(fmt.Sprintf("**Primary Model**: %s (via %s)\n", meta.ID, o.Primary.Name()))
+	if primary := o.Primary(); primary != nil {
+		meta := primary.GetMetadata()
+		sb.WriteString(fmt.Sprintf("**Primary Model**: %s (via %s)\n", meta.ID, primary.Name()))
 	}
-	if o.Consultant != nil {
-		meta := o.Consultant.GetMetadata()
-		sb.WriteString(fmt.Sprintf("**Consultant Model**: %s (via %s)\n", meta.ID, o.Consultant.Name()))
+	if consultant := o.Consultant(); consultant != nil {
+		meta := consultant.GetMetadata()
+		sb.WriteString(fmt.Sprintf("**Consultant Model**: %s (via %s)\n", meta.ID, consultant.Name()))
 	}
 
 	// Session-disabled providers.

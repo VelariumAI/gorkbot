@@ -146,7 +146,7 @@ func (e *Engine) Execute(ctx context.Context, p Pipeline) (map[string]string, er
 				mu.Lock()
 				outputs[s.Name] = fmt.Sprintf("ERROR: %v", runErr)
 				mu.Unlock()
-				
+
 				errCh <- fmt.Errorf("step %q failed: %w", s.Name, runErr)
 				cancel() // Abort other steps
 			} else {
@@ -154,7 +154,7 @@ func (e *Engine) Execute(ctx context.Context, p Pipeline) (map[string]string, er
 				outputs[s.Name] = result
 				mu.Unlock()
 			}
-			
+
 			close(dones[s.Name])
 		}(step)
 	}

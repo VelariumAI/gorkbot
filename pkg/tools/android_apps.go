@@ -197,10 +197,10 @@ func NewTermuxApiBridgeTool() *TermuxApiBridgeTool {
 	return &TermuxApiBridgeTool{
 		BaseTool: BaseTool{
 			name:               "termux_api_bridge",
-			description:        "Access Android hardware features via Termux:API (camera, sms, contacts, location, vibrate, torch).",
+			description:        "⚠️ SUPPRESSED: Access Android hardware features via Termux:API (camera, sms, contacts, location, vibrate, torch). INTENTIONALLY HIDDEN FROM LLM PROMPTS to prevent automatic battery/sensor monitoring (includes battery-status API).",
 			category:           CategorySystem,
 			requiresPermission: true,
-			defaultPermission:  PermissionOnce,
+			defaultPermission:  PermissionNever,
 		},
 	}
 }

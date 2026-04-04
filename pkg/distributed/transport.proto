@@ -1,0 +1,116 @@
+syntax = "proto3";
+
+package distributed;
+
+option go_package = "github.com/velariumai/gorkbot/pkg/distributed";
+
+// RemoteEvent wraps any bus event for network transmission
+message RemoteEvent {
+  string type = 1;           // event type name (e.g., "ProviderEvent")
+  string correlation_id = 2; // correlation ID for tracing
+  int64 timestamp_ms = 3;    // milliseconds since epoch
+  bytes payload = 4;         // JSON-encoded event data
+  string request_id = 5;     // unique request ID for RPC correlation
+  string source_node = 6;    // originating node ID
+}
+
+// ProviderEvent wire format
+message ProviderEventProto {
+  string correlation_id = 1;
+  int64 timestamp_ms = 2;
+  string provider_id = 3;    // "xai", "google", etc.
+  string action = 4;         // "init", "ready", "error"
+  string error = 5;
+}
+
+// ProviderHealthEvent wire format
+message ProviderHealthEventProto {
+  string correlation_id = 1;
+  int64 timestamp_ms = 2;
+  string provider_id = 3;
+  bool healthy = 4;
+  int64 latency_ms = 5;
+  string error = 6;
+}
+
+// ProviderFailoverEvent wire format
+message ProviderFailoverEventProto {
+  string correlation_id = 1;
+  int64 timestamp_ms = 2;
+  string from_provider = 3;
+  string to_provider = 4;
+  string reason = 5;
+}
+
+// ToolRequestEvent wire format
+message ToolRequestEventProto {
+  string correlation_id = 1;
+  int64 timestamp_ms = 2;
+  string tool_name = 3;
+  string request_id = 4;
+  bytes parameters_json = 5;
+}
+
+// ToolResultEvent wire format
+message ToolResultEventProto {
+  string correlation_id = 1;
+  int64 timestamp_ms = 2;
+  string tool_name = 3;
+  string request_id = 4;
+  bool success = 5;
+  string output = 6;
+  string error = 7;
+  int64 duration_ms = 8;
+}
+
+// EventStoreEntry for event sourcing
+message EventStoreEntry {
+  string event_id = 1;
+  int64 sequence = 2;
+  int64 timestamp_ms = 3;
+  string event_type = 4;
+  string correlation_id = 5;
+  bytes payload = 6;
+  string source_node = 7;
+  string hash = 8; // sha256 hash for tamper detection
+}
+
+// ServiceDiscoveryEntry advertises a node's capabilities
+message ServiceDiscoveryEntry {
+  string node_id = 1;
+  string node_address = 2; // host:port
+  int64 started_at_ms = 3;
+  repeated string capabilities = 4; // ["provider_coordinator", "tool_coordinator", etc.]
+  int64 heartbeat_ms = 5;
+  string status = 6; // "healthy", "degraded", "unhealthy"
+}
+
+// RPC service for coordinator-to-coordinator communication
+service DistributedBus {
+  // PublishEvent publishes an event to a remote coordinator
+  rpc PublishEvent(RemoteEvent) returns (RemoteEvent);
+
+  // GetServiceDirectory returns all known nodes and their capabilities
+  rpc GetServiceDirectory(ServiceDirectoryRequest) returns (ServiceDirectoryResponse);
+
+  // Health check endpoint
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message ServiceDirectoryRequest {
+  string requester_node_id = 1;
+}
+
+message ServiceDirectoryResponse {
+  repeated ServiceDiscoveryEntry entries = 1;
+}
+
+message HealthRequest {
+  string node_id = 1;
+}
+
+message HealthResponse {
+  bool healthy = 1;
+  string status = 2;
+  int64 uptime_ms = 3;
+}

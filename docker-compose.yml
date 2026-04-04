@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  nats:
+    image: nats:latest
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: "-js -sd /data/nats --max_payload=50000000"
+    volumes:
+      - nats_data:/data/nats
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  node1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "9090:9090"
+    environment:
+      GORKBOT_NODE_ID: node1
+      GORKBOT_LISTEN_ADDR: "0.0.0.0:9090"
+      GORKBOT_NATS_URL: "nats://nats:4222"
+      GORKBOT_PEER_ADDRS: "node2:9091,node3:9092"
+      GORKBOT_TRANSPORT_TYPE: "nats"
+      GORKBOT_EVENT_SOURCE_TYPE: "sqlite"
+      GORKBOT_SQLITE_PATH: "/data/events.db"
+    depends_on:
+      nats:
+        condition: service_healthy
+    volumes:
+      - node1_data:/data
+    networks:
+      - distributed_net
+
+  node2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "9091:9091"
+    environment:
+      GORKBOT_NODE_ID: node2
+      GORKBOT_LISTEN_ADDR: "0.0.0.0:9091"
+      GORKBOT_NATS_URL: "nats://nats:4222"
+      GORKBOT_PEER_ADDRS: "node1:9090,node3:9092"
+      GORKBOT_TRANSPORT_TYPE: "nats"
+      GORKBOT_EVENT_SOURCE_TYPE: "sqlite"
+      GORKBOT_SQLITE_PATH: "/data/events.db"
+    depends_on:
+      nats:
+        condition: service_healthy
+    volumes:
+      - node2_data:/data
+    networks:
+      - distributed_net
+
+  node3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "9092:9092"
+    environment:
+      GORKBOT_NODE_ID: node3
+      GORKBOT_LISTEN_ADDR: "0.0.0.0:9092"
+      GORKBOT_NATS_URL: "nats://nats:4222"
+      GORKBOT_PEER_ADDRS: "node1:9090,node2:9091"
+      GORKBOT_TRANSPORT_TYPE: "nats"
+      GORKBOT_EVENT_SOURCE_TYPE: "sqlite"
+      GORKBOT_SQLITE_PATH: "/data/events.db"
+    depends_on:
+      nats:
+        condition: service_healthy
+    volumes:
+      - node3_data:/data
+    networks:
+      - distributed_net
+
+volumes:
+  nats_data:
+  node1_data:
+  node2_data:
+  node3_data:
+
+networks:
+  distributed_net:
+    driver: bridge

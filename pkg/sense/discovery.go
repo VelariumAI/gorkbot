@@ -26,37 +26,38 @@ const DiscoveryVersion = "1.0.0"
 // SENSEVersion is the semantic version of the SENSE middleware layer.
 //
 // History:
-//   1.0.0 — initial release: InputSanitizer, SENSETracer, TraceAnalyzer, SkillEvolver,
-//            Discovery, AgeMem (3-tier STM/LTM), Engrams, LIE reward model,
-//            Stabilizer (4-dim quality critic), Compression (4-stage pipeline)
-//   1.1.0 — refinements across discovery, input_sanitizer, lie, skill_evolver,
-//            trace_analyzer, tracer; sense_self_tools updated
-//   1.2.0 — performance overhaul: tracer sync→async 512-slot buffered channel + drainLoop;
-//            InputSanitizer atomic counters + package-level keyword slices (no alloc hot-path)
-//   1.3.0 — cognitive consolidation (v4.5.0): AgeMem, Engrams, LIE, Stabilizer updated;
-//            sense_hitl engine integration; sense_evolve MCP plugin added
-//   1.4.0 — context scanning: InputSanitizer.ScanContextContent for brain files,
-//            GORKBOT.md, and skill content (19 injection patterns + base64 + HTML entity decode)
-//   1.5.0 — privilege & parsing (v4.7.0): Module 1 (env probe UID/IsRoot/escalation in
-//            system prompt), Module 2 (EAL — privileged_execute auto-escalation router),
-//            Module 4 (UPE — structured_bash with heuristic JSON/tabular/keyvalue parser)
-//   1.6.0 — sandbox toggle (v4.8.0): runtime /sandbox command to bypass or restore the
-//            InputSanitizer without restart; AppState-persisted SandboxEnabled preference
-//   1.7.0 — SPARK TII/IDL/FRC/MotivationalCore/ResearchModule (v4.9.0)
-//   1.7.1 — path sandbox expanded allowlist (v4.9.1): InputSanitizer now permits
-//            $HOME, /tmp, /var/tmp, /sdcard, /storage, /data/local/tmp, $TMPDIR
-//            in addition to CWD — prevents false rejections of screenshot/OCR/storage ops
-//   1.8.0 — companion augmentation layer (v5.0.0): IngressFilter (token pruning + sentence
-//            dedup before ARC routing), IngressGuard (Jaccard semantic evasion protection),
-//            MELValidator (BLAKE2b bloom filter + entropy gate + injection scan for VectorStore),
-//            VectorProjector (RAM-aware 128/256/full dim reduction wrapping Embedder),
-//            CacheAdvisor (multi-provider cache: Anthropic model-aware floors, Gemini
-//            cachedContents lifecycle, Grok x-grok-conv-id sticky routing, OpenAI structural
-//            optimizer, MiniMax/OpenRouter passthrough, Moonshot best-effort, app-layer LRU)
-//   1.9.0 — TUI status line redesign (v5.2.0): single authoritative "G ▶ " status line with
-//            SRE phase labeling, token counting, grounding status, and proper lifecycle tracking;
-//            eliminates duplicate thinking/reasoning messages and ensures honest status updates
-//            only after LLM work actually begins (no premature labeling)
+//
+//	1.0.0 — initial release: InputSanitizer, SENSETracer, TraceAnalyzer, SkillEvolver,
+//	         Discovery, AgeMem (3-tier STM/LTM), Engrams, LIE reward model,
+//	         Stabilizer (4-dim quality critic), Compression (4-stage pipeline)
+//	1.1.0 — refinements across discovery, input_sanitizer, lie, skill_evolver,
+//	         trace_analyzer, tracer; sense_self_tools updated
+//	1.2.0 — performance overhaul: tracer sync→async 512-slot buffered channel + drainLoop;
+//	         InputSanitizer atomic counters + package-level keyword slices (no alloc hot-path)
+//	1.3.0 — cognitive consolidation (v4.5.0): AgeMem, Engrams, LIE, Stabilizer updated;
+//	         sense_hitl engine integration; sense_evolve MCP plugin added
+//	1.4.0 — context scanning: InputSanitizer.ScanContextContent for brain files,
+//	         GORKBOT.md, and skill content (19 injection patterns + base64 + HTML entity decode)
+//	1.5.0 — privilege & parsing (v4.7.0): Module 1 (env probe UID/IsRoot/escalation in
+//	         system prompt), Module 2 (EAL — privileged_execute auto-escalation router),
+//	         Module 4 (UPE — structured_bash with heuristic JSON/tabular/keyvalue parser)
+//	1.6.0 — sandbox toggle (v4.8.0): runtime /sandbox command to bypass or restore the
+//	         InputSanitizer without restart; AppState-persisted SandboxEnabled preference
+//	1.7.0 — SPARK TII/IDL/FRC/MotivationalCore/ResearchModule (v4.9.0)
+//	1.7.1 — path sandbox expanded allowlist (v4.9.1): InputSanitizer now permits
+//	         $HOME, /tmp, /var/tmp, /sdcard, /storage, /data/local/tmp, $TMPDIR
+//	         in addition to CWD — prevents false rejections of screenshot/OCR/storage ops
+//	1.8.0 — companion augmentation layer (v5.0.0): IngressFilter (token pruning + sentence
+//	         dedup before ARC routing), IngressGuard (Jaccard semantic evasion protection),
+//	         MELValidator (BLAKE2b bloom filter + entropy gate + injection scan for VectorStore),
+//	         VectorProjector (RAM-aware 128/256/full dim reduction wrapping Embedder),
+//	         CacheAdvisor (multi-provider cache: Anthropic model-aware floors, Gemini
+//	         cachedContents lifecycle, Grok x-grok-conv-id sticky routing, OpenAI structural
+//	         optimizer, MiniMax/OpenRouter passthrough, Moonshot best-effort, app-layer LRU)
+//	1.9.0 — TUI status line redesign (v5.2.0): single authoritative "G ▶ " status line with
+//	         SRE phase labeling, token counting, grounding status, and proper lifecycle tracking;
+//	         eliminates duplicate thinking/reasoning messages and ensures honest status updates
+//	         only after LLM work actually begins (no premature labeling)
 const SENSEVersion = "1.9.0"
 
 // ToolDescriptor is the minimal, JSON-safe description of one registered tool.

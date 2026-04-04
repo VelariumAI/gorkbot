@@ -32,7 +32,12 @@ func (o *Orchestrator) InitSPARK(configDir string) bool {
 	// Construct TraceAnalyzer using the SENSE trace directory layout.
 	ta := sense.NewTraceAnalyzer(filepath.Join(configDir, "sense", "traces"))
 
-	daemon := spark.New(cfg, o.LIE, ta, o.AgeMem, o.Primary, o.Logger)
+	primary := o.Primary()
+	if primary == nil {
+		o.Logger.Warn("SPARK: primary provider not available, disabling")
+		return false
+	}
+	daemon := spark.New(cfg, o.LIE, ta, o.AgeMem, primary, o.Logger)
 	// Note: o.HITLGuard does not implement spark.HITLFacade (different interface);
 	// SPARK operates without HITL gating unless a compatible facade is wired later.
 

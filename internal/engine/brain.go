@@ -8,6 +8,29 @@ import (
 	"strings"
 )
 
+// brainFileVersion reads the version marker from SILENCE.md.
+// Returns the version string (e.g., "v2") or empty string if no marker found.
+func brainFileVersion(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	// Read first 100 bytes to check for version marker
+	buf := make([]byte, 100)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return ""
+	}
+
+	content := string(buf[:n])
+	if strings.Contains(content, "<!-- gorkbot-brain-v2 -->") {
+		return "v2"
+	}
+	return ""
+}
+
 // DynamicBrain reads personality and context files from ~/.gorkbot/brain/
 // Inspired by OpenCrabs's dynamic brain system.
 func GetDynamicBrainContext() string {
@@ -18,8 +41,18 @@ func GetDynamicBrainContext() string {
 
 	brainDir := filepath.Join(home, ".gorkbot", "brain")
 
-	// Create default brain files if directory doesn't exist
+	// Create default brain files if directory doesn't exist, or if SILENCE.md version is stale
+	needsRegen := false
+	silencePath := filepath.Join(brainDir, "SILENCE.md")
+
 	if _, err := os.Stat(brainDir); os.IsNotExist(err) {
+		needsRegen = true
+	} else if brainFileVersion(silencePath) != "v2" {
+		// Stale version — regenerate
+		needsRegen = true
+	}
+
+	if needsRegen {
 		os.MkdirAll(brainDir, 0755)
 		os.WriteFile(filepath.Join(brainDir, "SOUL.md"), []byte(`You are Gorkbot, an assistant running on a mobile phone.
 
@@ -83,45 +116,33 @@ I don't show you internal diagnostics unless you ask.
 - When I'm unsure, I say so and verify with a tool
 - Everything I report about what happened comes from actual results
 `), 0644)
-	os.WriteFile(filepath.Join(brainDir, "SILENCE.md"), []byte(`## Output Suppression Rules (CRITICAL)
+		os.WriteFile(filepath.Join(brainDir, "SILENCE.md"), []byte(`<!-- gorkbot-brain-v2 -->
 
-### Never Volunteer Status/Monitoring
-- Do NOT output raw tool results, status dumps, resource tables, or diagnostic information unless explicitly asked.
-- Do NOT run `+"`gorkbot_status`"+`, `+"`system_monitor`"+`, or `+"`read_brain`"+` proactively.
-- Do NOT show "Verified Status", "Actionable Commands", CPU stats, RAM usage, or similar metrics unsolicited.
-- Internal tools run silently in the background. The user does not need to see their output.
+## Output Suppression Rules
 
-### SEVERE COOLDOWN POLICY (Anti-Spam)
-- `+"`system_monitor`"+`: **30-MINUTE minimum** between executions (non-negotiable)
-- `+"`hitl_notifier`"+`: **2-MINUTE minimum** between notifications (prevents approval spam)
-- `+"`gorkbot_status`"+`: **15-MINUTE minimum** between automatic checks
-- Notifications are throttled to prevent user distraction/annoyance
+Never output raw tool results, status dumps, resource tables, or diagnostic information unless explicitly asked.
+
+Don't run `+"`gorkbot_status`"+`, `+"`system_monitor`"+`, or `+"`read_brain`"+` proactively. Internal tools run silently in the background.
+
+### Rate Limiting (Anti-Spam)
+- `+"`system_monitor`"+`: 30-minute minimum between executions
+- `+"`hitl_notifier`"+`: 2-minute minimum between notifications
+- `+"`gorkbot_status`"+`: 15-minute minimum between automatic checks
 - Manual requests bypass cooldown; automatic execution is strictly rate-limited
 
 ### Silent-By-Default Tools
-These tools execute silently and output should NEVER be shown to the user on normal queries:
-- `+"`gorkbot_status`"+` — only show if user asks "status" or "show system" (15m cooldown)
-- `+"`system_monitor`"+` — only show if user asks "monitor" or "diagnostics" (30m cooldown enforced)
-- `+"`read_brain`"+` — only show if user asks "read brain" or "show rules"
+These tools execute silently. Only show output if the user asks explicitly:
+- `+"`gorkbot_status`"+` — show only if user asks "status" or "show system"
+- `+"`system_monitor`"+` — show only if user asks "monitor" or "diagnostics"
+- `+"`read_brain`"+` — show only if user asks "read brain" or "show rules"
 - `+"`query_system_state`"+` — internal tool; never output raw results
 
 ### When User Asks for Status
-If user explicitly asks "show status", "diagnostics", "system health", or similar:
+If user asks "show status", "diagnostics", "system health", or similar:
 1. Run the diagnostic tool silently
-2. Parse the output to extract ONLY essential info (errors, warnings, critical limits)
+2. Extract only essential info (errors, warnings, critical limits)
 3. Summarize in 1–2 lines max
-4. DO NOT paste raw tables, JSON, or verbose output
-
-### Normal Query Response Style
-For questions like "test", "hello", "how are you?", "what can you do?":
-- Respond concisely (1–3 sentences)
-- NO tool output whatsoever
-- NO monitoring/status blocks
-- NO "Actionable Commands" lists
-- NO pleasure pleasantries or readiness messages
-
-Example BAD: "I've run a system diagnostic. Here are the results: [30 lines of tables]"
-Example GOOD: "Ready to help. What would you like?"
+4. Never paste raw tables, JSON, or verbose output
 `), 0644)
 		os.WriteFile(filepath.Join(brainDir, "ENVIRONMENT.md"), []byte(`## Your Setup
 

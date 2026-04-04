@@ -26,10 +26,10 @@ type SPARK struct {
 	mc           *MotivationalCore
 	rm           *ResearchModule
 	metrics      *Metrics
-	hitl         HITLFacade             // nil-safe
-	lie          *sense.LIEEvaluator    // nil-safe
-	analyzer     *sense.TraceAnalyzer   // nil-safe
-	ageMem       ageMemReader           // nil-safe
+	hitl         HITLFacade           // nil-safe
+	lie          *sense.LIEEvaluator  // nil-safe
+	analyzer     *sense.TraceAnalyzer // nil-safe
+	ageMem       ageMemReader         // nil-safe
 	callbacks    DirectiveCallbacks
 	triggerCh    chan struct{} // buffered(1)
 	stopCh       chan struct{}
@@ -406,11 +406,11 @@ func (s *SPARK) runOneCycle(ctx context.Context) {
 		Time: time.Now(),
 		Kind: EventCycleEnd,
 		Payload: map[string]interface{}{
-			"cycle":        newCycles,
-			"duration_ms":  dur.Milliseconds(),
-			"applied":      applied,
-			"idl_size":     s.idl.Len(),
-			"drive_score":  driveScore,
+			"cycle":       newCycles,
+			"duration_ms": dur.Milliseconds(),
+			"applied":     applied,
+			"idl_size":    s.idl.Len(),
+			"drive_score": driveScore,
 		},
 	})
 }
@@ -422,6 +422,15 @@ func (s *SPARK) DriveScore() float64 {
 		return 0.5
 	}
 	return s.mc.DriveScore()
+}
+
+// GetLastState returns a read-only snapshot of the last SPARK state.
+// Used by the self-improvement driver for autonomous decision-making.
+// Returns nil if no cycle has completed yet.
+func (s *SPARK) GetLastState() *SPARKState {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.lastState
 }
 
 // RecordPhaseDeviation pushes a CatPhaseDeviation IDL debt entry.

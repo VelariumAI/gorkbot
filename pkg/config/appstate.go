@@ -39,6 +39,10 @@ type AppState struct {
 	// EnsembleEnabled controls the multi-trajectory ensemble reasoning.
 	EnsembleEnabled *bool `json:"ensemble_enabled,omitempty"`
 
+	// SecurityMode enables/disables access to security/penetration testing tools.
+	// nil = disabled (default, secure). true = enabled. false = explicitly disabled.
+	SecurityMode *bool `json:"security_mode,omitempty"`
+
 	// VerboseMode controls whether internal system messages are suppressed.
 	// nil/false = silent mode (suppress internal messages)
 	// true = verbose mode (show all messages including system narration)
@@ -47,6 +51,82 @@ type AppState struct {
 	// SuppressionConfig stores output filtering preferences.
 	// These control which categories of internal messages to suppress.
 	SuppressionConfig map[string]bool `json:"suppression_config,omitempty"`
+
+	// HITLSettings controls Human-in-the-Loop approval for tool execution.
+	HITL HITLSettings `json:"hitl,omitempty"`
+
+	// EvolutionSettings controls Self-Evolution and Free Will Engine behavior.
+	Evolution EvolutionSettings `json:"evolution,omitempty"`
+
+	// SystemMonitorSettings controls resource monitoring behavior.
+	SystemMonitor SystemMonitorSettings `json:"system_monitor,omitempty"`
+}
+
+// HITLSettings configures HITL override mechanisms for power users.
+type HITLSettings struct {
+	// Enabled master toggle. nil/true = HITL active (default, safe).
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// MinRiskLevel: bypass HITL for risks below this level.
+	// Values: "low", "medium", "high", "critical". "" = no bypass (default).
+	MinRiskLevel string `json:"min_risk_level,omitempty"`
+
+	// ConfidenceThreshold: auto-approve if AI confidence >= this (0-100).
+	// Default 85. Set to 0 to disable confidence-based override.
+	ConfidenceThreshold int `json:"confidence_threshold,omitempty"`
+
+	// WhitelistedTools: list of tools that bypass HITL even if high-stakes.
+	// Examples: "git_commit", "bash", "write_file"
+	WhitelistedTools []string `json:"whitelisted_tools,omitempty"`
+
+	// DisableWarning: skip confirmation when disabling HITL entirely.
+	DisableWarning bool `json:"disable_warning,omitempty"`
+}
+
+// EvolutionSettings controls Self-Evolution and Free Will Engine behavior.
+type EvolutionSettings struct {
+	// Code Evolution master toggle
+	CodeEvolutionEnabled *bool `json:"code_evolution_enabled,omitempty"`
+
+	// Log retention in days
+	LogRetentionDays int `json:"log_retention_days,omitempty"`
+
+	// Free Will Engine master toggle
+	FreeWillEngineEnabled *bool `json:"free_will_engine_enabled,omitempty"`
+
+	// Max autonomous risk level: "low", "medium", "high", "none"
+	MaxAutonomousRisk string `json:"max_autonomous_risk,omitempty"`
+
+	// Auto-approve confidence threshold (0-100)
+	ConfidenceThreshold int `json:"confidence_threshold,omitempty"`
+
+	// Proposal frequency: "per_command", "per_session", "continuous"
+	ProposalFrequency string `json:"proposal_frequency,omitempty"`
+
+	// Loop guard sensitivity (0.0-1.0)
+	LoopGuardSensitivity float64 `json:"loop_guard_sensitivity,omitempty"`
+
+	// Rollback window size (number of changes to track)
+	RollbackWindowSize int `json:"rollback_window_size,omitempty"`
+
+	// SelfImproveEnabled controls the autonomous self-improvement drive.
+	// nil/false = disabled (default), true = enabled
+	SelfImproveEnabled *bool `json:"self_improve_enabled,omitempty"`
+}
+
+// SystemMonitorSettings controls resource monitoring behavior.
+type SystemMonitorSettings struct {
+	// Enabled master toggle for system_monitor tool
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// ManualOnly: if true, only run system_monitor when explicitly requested
+	ManualOnly *bool `json:"manual_only,omitempty"`
+
+	// CooldownMinutes: cooldown period between auto-runs (default 30)
+	CooldownMinutes int `json:"cooldown_minutes,omitempty"`
+
+	// AlertThreshold: alert if resource below this % (default 50)
+	AlertThreshold int `json:"alert_threshold,omitempty"`
 }
 
 // AppStateManager loads and saves AppState to a JSON file in the config directory.
@@ -176,6 +256,22 @@ func (m *AppStateManager) SetEnsembleEnabled(v bool) error {
 	return m.save()
 }
 
+// IsSecurityModeEnabled returns true when security tools are allowed.
+// Returns false by default (nil means disabled, secure).
+func (m *AppStateManager) IsSecurityModeEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.st.SecurityMode != nil && *m.st.SecurityMode
+}
+
+// SetSecurityMode persists the security mode enabled/disabled preference.
+func (m *AppStateManager) SetSecurityMode(v bool) error {
+	m.mu.Lock()
+	m.st.SecurityMode = &v
+	m.mu.Unlock()
+	return m.save()
+}
+
 // IsVerboseMode returns true when verbose mode is enabled (show all messages).
 // Returns false by default (nil means silent mode, suppression active).
 func (m *AppStateManager) IsVerboseMode() bool {
@@ -212,6 +308,126 @@ func (m *AppStateManager) GetSuppressionConfig() map[string]bool {
 func (m *AppStateManager) SetSuppressionConfig(config map[string]bool) error {
 	m.mu.Lock()
 	m.st.SuppressionConfig = config
+	m.mu.Unlock()
+	return m.save()
+}
+
+// IsHITLEnabled returns true when HITL is active (default true).
+// nil or true = HITL enabled, false = disabled (power user mode).
+func (m *AppStateManager) IsHITLEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.st.HITL.Enabled == nil || *m.st.HITL.Enabled
+}
+
+// SetHITLEnabled persists the master HITL toggle.
+func (m *AppStateManager) SetHITLEnabled(v bool) error {
+	m.mu.Lock()
+	m.st.HITL.Enabled = &v
+	m.mu.Unlock()
+	return m.save()
+}
+
+// GetHITLSettings returns a copy of the current HITL configuration.
+func (m *AppStateManager) GetHITLSettings() HITLSettings {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	settings := m.st.HITL
+	if settings.WhitelistedTools != nil {
+		tools := make([]string, len(settings.WhitelistedTools))
+		copy(tools, settings.WhitelistedTools)
+		settings.WhitelistedTools = tools
+	}
+	return settings
+}
+
+// SetHITLSettings persists the complete HITL configuration.
+func (m *AppStateManager) SetHITLSettings(settings HITLSettings) error {
+	m.mu.Lock()
+	m.st.HITL = settings
+	m.mu.Unlock()
+	return m.save()
+}
+
+// SetHITLMinRiskLevel persists the minimum risk level for HITL bypass.
+func (m *AppStateManager) SetHITLMinRiskLevel(level string) error {
+	m.mu.Lock()
+	m.st.HITL.MinRiskLevel = level
+	m.mu.Unlock()
+	return m.save()
+}
+
+// SetHITLConfidenceThreshold persists the confidence-based auto-approval threshold (0-100).
+func (m *AppStateManager) SetHITLConfidenceThreshold(threshold int) error {
+	if threshold < 0 {
+		threshold = 0
+	} else if threshold > 100 {
+		threshold = 100
+	}
+	m.mu.Lock()
+	m.st.HITL.ConfidenceThreshold = threshold
+	m.mu.Unlock()
+	return m.save()
+}
+
+// SetHITLWhitelistedTools persists the list of tools that bypass HITL.
+func (m *AppStateManager) SetHITLWhitelistedTools(tools []string) error {
+	m.mu.Lock()
+	m.st.HITL.WhitelistedTools = tools
+	m.mu.Unlock()
+	return m.save()
+}
+
+// SetHITLDisableWarning persists the disable-warning preference.
+func (m *AppStateManager) SetHITLDisableWarning(v bool) error {
+	m.mu.Lock()
+	m.st.HITL.DisableWarning = v
+	m.mu.Unlock()
+	return m.save()
+}
+
+// GetEvolutionSettings retrieves the current evolution settings.
+func (m *AppStateManager) GetEvolutionSettings() EvolutionSettings {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.st.Evolution
+}
+
+// SetEvolutionSettings persists the complete evolution configuration.
+func (m *AppStateManager) SetEvolutionSettings(settings EvolutionSettings) error {
+	m.mu.Lock()
+	m.st.Evolution = settings
+	m.mu.Unlock()
+	return m.save()
+}
+
+// IsSelfImproveEnabled returns true when self-improvement drive is enabled.
+// Returns false by default (nil means disabled).
+func (m *AppStateManager) IsSelfImproveEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.st.Evolution.SelfImproveEnabled != nil && *m.st.Evolution.SelfImproveEnabled
+}
+
+// SetSelfImproveEnabled persists the self-improve enabled/disabled preference.
+func (m *AppStateManager) SetSelfImproveEnabled(v bool) error {
+	m.mu.Lock()
+	m.st.Evolution.SelfImproveEnabled = &v
+	m.mu.Unlock()
+	return m.save()
+}
+
+// GetSystemMonitorSettings retrieves the current system monitor settings.
+func (m *AppStateManager) GetSystemMonitorSettings() SystemMonitorSettings {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.st.SystemMonitor
+}
+
+// SetSystemMonitorSettings persists the complete system monitor configuration.
+func (m *AppStateManager) SetSystemMonitorSettings(settings SystemMonitorSettings) error {
+	m.mu.Lock()
+	m.st.SystemMonitor = settings
 	m.mu.Unlock()
 	return m.save()
 }

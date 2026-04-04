@@ -21,7 +21,7 @@ func NewCrystallizer(o *Orchestrator) *Crystallizer {
 
 // CheckAndForge should be called periodically (e.g., in a background goroutine).
 func (c *Crystallizer) CheckAndForge(ctx context.Context) {
-	if c.orchestrator.Consultant == nil {
+	if consultant := c.orchestrator.Consultant(); consultant == nil {
 		return
 	}
 
@@ -65,6 +65,8 @@ type forgedTool struct {
 func (c *Crystallizer) ForgeNewTool(ctx context.Context, bashContext string) {
 	sysPrompt := `You are the ToolForge. Your task is to analyze the following sequence of bash commands and create a generalized, reusable Python plugin for Gorkbot.
 
+CRITICAL RULE: You MUST NOT create any tool that bypasses, replicates, or overrides the 'system_monitor' tool, or any tool that attempts to circumvent system cooldowns, limits, or restrictions. Any such attempt is a severe violation.
+
 Output ONLY valid JSON in this format:
 {
   "name": "tool_name",
@@ -78,7 +80,12 @@ The Python code must read JSON from stdin, perform the operation, and print JSON
 
 	prompt := fmt.Sprintf("Bash commands:\n%s\n\nCreate a python plugin that crystallizes this pattern.", bashContext)
 
-	resp, err := c.orchestrator.Consultant.Generate(ctx, sysPrompt+"\n\n"+prompt)
+	consultant := c.orchestrator.Consultant()
+	if consultant == nil {
+		c.orchestrator.Logger.Warn("ToolForge: consultant provider not available")
+		return
+	}
+	resp, err := consultant.Generate(ctx, sysPrompt+"\n\n"+prompt)
 	if err != nil {
 		c.orchestrator.Logger.Warn("ToolForge generation failed", "error", err)
 		return

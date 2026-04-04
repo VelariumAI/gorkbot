@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/velariumai/gorkbot/pkg/ai"
 	"github.com/velariumai/gorkbot/pkg/providers"
@@ -22,16 +20,6 @@ var providerPriority = []string{
 	providers.ProviderOpenAI,
 	providers.ProviderOpenRouter,
 	providers.ProviderMoonshot,
-}
-
-// effectiveCascade returns the cascade order to use for provider failover.
-// If the orchestrator has a custom CascadeOrder set, it is used; otherwise
-// the hardcoded providerPriority default is returned.
-func (o *Orchestrator) effectiveCascade() []string {
-	if len(o.CascadeOrder) > 0 {
-		return o.CascadeOrder
-	}
-	return providerPriority
 }
 
 // isProviderOutage returns true for errors that warrant trying another provider.
@@ -140,176 +128,15 @@ func secondModelFor(providerID string) string {
 	return string(models[1].ID)
 }
 
-// raceProviderPings fires pings for all candidate providers in parallel and
-// returns the (providerID, modelID) of the first one that responds successfully.
-// Slower winners are cancelled via context. Providers that fail are disabled
-// for the session. Returns ("", "") when every candidate is unreachable.
-func (o *Orchestrator) raceProviderPings(ctx context.Context, pm *providers.Manager, probeOrder []string) (providerID, modelID string) {
-	type result struct {
-		id    string
-		model string
-	}
-
-	winCh := make(chan result, 1)
-	pingCtx, pingCancel := context.WithTimeout(ctx, 8*time.Second)
-	defer pingCancel()
-
-	var wg sync.WaitGroup
-	// priority serialises winner selection so the highest-priority ready
-	// provider wins when two respond within the same scheduler tick.
-	var mu sync.Mutex
-	bestPriority := len(probeOrder) + 1
-
-	for idx, id := range probeOrder {
-		if pm.IsSessionDisabled(id) {
-			continue
-		}
-		base, err := pm.GetBase(id)
-		if err != nil {
-			continue
-		}
-		wg.Add(1)
-		go func(id string, priority int, p ai.AIProvider) {
-			defer wg.Done()
-			if err := p.Ping(pingCtx); err != nil {
-				pm.DisableForSession(id)
-				if o.Logger != nil {
-					o.Logger.Info("Provider ping failed (race)", "provider", id, "error", err)
-				}
-				return
-			}
-			mu.Lock()
-			if priority < bestPriority {
-				bestPriority = priority
-				select {
-				case winCh <- result{id, bestModelFor(id)}:
-				default:
-					// Replace winner if we are higher priority.
-					// Drain and resend.
-					select {
-					case <-winCh:
-					default:
-					}
-					winCh <- result{id, bestModelFor(id)}
-				}
-			}
-			mu.Unlock()
-		}(id, idx, base)
-	}
-
-	// Close winCh after all goroutines finish so we can range-receive.
-	go func() { wg.Wait(); close(winCh) }()
-
-	// Give the race up to the ping deadline.
-	select {
-	case w, ok := <-winCh:
-		if !ok {
-			return "", ""
-		}
-		// Drain remaining wins — we already have the best one.
-		go func() {
-			for range winCh {
-			}
-		}()
-		return w.id, w.model
-	case <-pingCtx.Done():
-		return "", ""
-	}
-}
-
-// RunProviderCascade pings providers in priority order, disables failures,
-// then hot-swaps Primary + Consultant.
+// RunProviderCascade delegates to the provider coordinator's RunCascade method.
 // Returns (retryable, statusMsg).
 func (o *Orchestrator) RunProviderCascade(ctx context.Context, failedID string) (bool, string) {
-	pm := globalProvMgr
-	if pm == nil {
-		return false, "Provider manager not available"
+	if o.ProviderCoord == nil {
+		return false, "Provider coordinator not available"
 	}
-
-	// 1. Disable the failed provider for this session.
-	pm.DisableForSession(failedID)
-	if o.Logger != nil {
-		o.Logger.Info("Provider cascade started", "failed", failedID)
+	retryable, msg, err := o.ProviderCoord.RunCascade(ctx, failedID)
+	if err != nil {
+		return retryable, fmt.Sprintf("%s (error: %v)", msg, err)
 	}
-
-	// 2. Build probe order: start one position after failedID, wrap around.
-	cascade := o.effectiveCascade()
-	startIdx := 0
-	for i, id := range cascade {
-		if id == failedID {
-			startIdx = i + 1
-			break
-		}
-	}
-	probeOrder := make([]string, 0, len(cascade))
-	for i := 0; i < len(cascade); i++ {
-		probeOrder = append(probeOrder, cascade[(startIdx+i)%len(cascade)])
-	}
-
-	// 3. Race all candidate providers in parallel; first ping wins.
-	newPrimary, newPrimaryModel := o.raceProviderPings(ctx, pm, probeOrder)
-
-	if newPrimary == "" {
-		return false, "All providers unreachable — check API keys/credits"
-	}
-
-	// 4. Switch primary provider.
-	if err := o.SetPrimary(ctx, newPrimary, newPrimaryModel); err != nil {
-		return false, fmt.Sprintf("Failed to switch to %s: %v", providers.ProviderName(newPrimary), err)
-	}
-
-	// 5. Find a secondary (next available after newPrimary in probe order).
-	newPrimaryIdx := -1
-	for i, id := range probeOrder {
-		if id == newPrimary {
-			newPrimaryIdx = i
-			break
-		}
-	}
-
-	newSecondary := ""
-	newSecondaryModel := ""
-	for i := newPrimaryIdx + 1; i < len(probeOrder); i++ {
-		id := probeOrder[i]
-		if pm.IsSessionDisabled(id) {
-			continue
-		}
-		base, err := pm.GetBase(id)
-		if err != nil {
-			continue
-		}
-		pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
-		pingErr := base.Ping(pingCtx)
-		pingCancel()
-		if pingErr != nil {
-			pm.DisableForSession(id)
-			continue
-		}
-		newSecondary = id
-		newSecondaryModel = bestModelFor(id)
-		break
-	}
-
-	// Edge case: only one provider works — use 2nd model of the same provider.
-	if newSecondary == "" {
-		newSecondary = newPrimary
-		newSecondaryModel = secondModelFor(newPrimary)
-	}
-
-	_ = o.SetSecondary(ctx, newSecondary, newSecondaryModel)
-
-	primaryName := providers.ProviderName(newPrimary) + "/" + newPrimaryModel
-	secondaryName := providers.ProviderName(newSecondary) + "/" + newSecondaryModel
-	failedName := providers.ProviderName(failedID)
-
-	if o.Logger != nil {
-		o.Logger.Info("Provider cascade complete",
-			"new_primary", primaryName,
-			"new_secondary", secondaryName,
-			"disabled", failedName,
-		)
-	}
-
-	return true, fmt.Sprintf("Switched to %s (secondary: %s). %s disabled for session.",
-		primaryName, secondaryName, failedName)
+	return retryable, msg
 }

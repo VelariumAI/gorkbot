@@ -132,8 +132,8 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		category := router.ClassifyQuery(prompt)
 		if suggested := o.Feedback.SuggestModel(category); suggested != "" {
 			currentModel := ""
-			if o.Primary != nil {
-				currentModel = o.Primary.GetMetadata().ID
+			if primary := o.Primary(); primary != nil {
+				currentModel = primary.GetMetadata().ID
 			}
 			if suggested != currentModel {
 				o.Logger.Info("Adaptive router suggests different model",
@@ -146,8 +146,8 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 	}
 
 	var consultationAdvice string
-	if needsConsult && o.Consultant != nil {
-		o.Logger.Info("Triggering Specialty Consult...", "consultant", o.Consultant.Name())
+	if consultant := o.Consultant(); needsConsult && consultant != nil {
+		o.Logger.Info("Triggering Specialty Consult...", "consultant", consultant.Name())
 		// Fire consultant_invoked hook.
 		if o.Hooks != nil {
 			o.Hooks.FireAsync(ctx, hooks.EventConsultantInvoked, hooks.Payload{
@@ -163,7 +163,7 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		}
 
 		// For consultation, we still use non-streaming since it's quick
-		advice, err := o.Consultant.Generate(ctx, prompt)
+		advice, err := consultant.Generate(ctx, prompt)
 		if err != nil {
 			o.Logger.Error("Consultation failed", "error", err)
 			consultationAdvice = ""
@@ -189,9 +189,16 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 
 	// Add system message with tool context (only on first message if history is empty)
 	if o.ConversationHistory.Count() == 0 {
-		// Layer 0: PromptBuilder preamble (identity, soul, bootstrap, runtime, channel hint).
+		// Layer 0: PromptBuilder preamble (identity, soul, bootstrap, runtime, channel hint, tool suppression).
 		var pbPreamble string
 		if o.PromptBuilder != nil {
+			// Update ToolSuppressionLayer with current user query for intelligent classification
+			for _, layer := range o.PromptBuilder.Layers() {
+				if tsl, ok := layer.(*ToolSuppressionLayer); ok {
+					tsl.UserQuery = prompt // Pass user query for diagnostic classification
+				}
+			}
+
 			cwd, _ := os.Getwd()
 			pbPreamble = o.PromptBuilder.Build(BuildContext{
 				WorkDir:   cwd,
@@ -279,9 +286,9 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 				spawnedIds := []string{}
 				for _, sa := range gateResult.SpawnAgents {
 					// Use Consultant or Primary for background agent
-					bgProv := o.Consultant
+					bgProv := o.Consultant()
 					if bgProv == nil {
-						bgProv = o.Primary
+						bgProv = o.Primary()
 					}
 					id := o.BackgroundAgents.Spawn(ctx, BackgroundAgentSpec{
 						Label:  sa.Label,
@@ -332,25 +339,25 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 	o.ConversationHistory.AddUserMessage(userMessage)
 
 	// ── CacheAdvisor: compute and apply provider-specific caching hints ──────
-	if o.CacheAdvisor != nil && o.Primary != nil {
-		systemPrompt := o.buildSystemPrompt()
-		msgs := o.ConversationHistory.GetMessages()
-		providerID := string(o.Primary.ID())
-		model := o.Primary.GetMetadata().ID
-		hints := o.CacheAdvisor.Advise(providerID, model, systemPrompt, msgs)
+	if o.CacheAdvisor != nil {
+		if primary := o.Primary(); primary != nil {
+			systemPrompt := o.buildSystemPrompt()
+			msgs := o.ConversationHistory.GetMessages()
+			providerID := string(primary.ID())
+			model := primary.GetMetadata().ID
+			hints := o.CacheAdvisor.Advise(providerID, model, systemPrompt, msgs)
 
-		// Apply Gemini cached content name to the GeminiProvider.
-		if hints.GeminiCachedContentName != "" {
-			if gp, ok := o.Primary.(interface{ SetCachedContent(string) }); ok {
-				gp.SetCachedContent(hints.GeminiCachedContentName)
-			}
-		} else if hints.SystemPromptChanged {
-			// System prompt changed — create a new Gemini cache entry async.
-			gc := o.CacheAdvisor.GeminiCacheClient()
-			if gc != nil {
-				// Capture primary before spawning goroutine to avoid race condition
-				prov := o.Primary
-				if prov != nil {
+			// Apply Gemini cached content name to the GeminiProvider.
+			if hints.GeminiCachedContentName != "" {
+				if gp, ok := primary.(interface{ SetCachedContent(string) }); ok {
+					gp.SetCachedContent(hints.GeminiCachedContentName)
+				}
+			} else if hints.SystemPromptChanged {
+				// System prompt changed — create a new Gemini cache entry async.
+				gc := o.CacheAdvisor.GeminiCacheClient()
+				if gc != nil {
+					// Capture primary before spawning goroutine to avoid race condition
+					prov := primary
 					o.eg.Go(func() error {
 						name, err := gc.Create(o.rootCtx, systemPrompt)
 						if err != nil {
@@ -394,8 +401,8 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 
 	// Capture current provider ID for cascade detection.
 	currentProviderID := ""
-	if o.Primary != nil {
-		currentProviderID = string(o.Primary.ID())
+	if primary := o.Primary(); primary != nil {
+		currentProviderID = string(primary.ID())
 	}
 
 	// ── SRE Phase 0: Grounding — must run before any LLM call ────────────────
@@ -501,12 +508,11 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		}
 
 		// Apply thinking budget to provider if supported.
-		primaryForTurn := o.Primary
+		primaryForTurn := o.Primary()
 		if o.ThinkingBudget > 0 {
-			if ap, ok := primaryForTurn.(*ai.AnthropicProvider); ok {
-				clone := *ap
-				clone.ThinkingBudget = o.ThinkingBudget
-				primaryForTurn = &clone
+			// Use interface method if provider supports thinking budget
+			if tbp, ok := primaryForTurn.(ai.ThinkingBudgetProvider); ok {
+				tbp.SetThinkingBudget(o.ThinkingBudget)
 			}
 		}
 
@@ -530,9 +536,9 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		if o.BudgetGuard != nil {
 			provID := ""
 			modelID := ""
-			if o.Primary != nil {
-				provID = string(o.Primary.ID())
-				modelID = o.Primary.GetMetadata().ID
+			if primary := o.Primary(); primary != nil {
+				provID = string(primary.ID())
+				modelID = primary.GetMetadata().ID
 			}
 			histToks := o.ConversationHistory.EstimateTokens()
 			dec := o.BudgetGuard.CheckAndTrack(provID, modelID, histToks, len(prompt)/4)
@@ -546,16 +552,25 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		}
 
 		// Call AI with streaming
+		startTime := time.Now()
 		streamErr := primaryForTurn.StreamWithHistory(ctxWithCancel, o.ConversationHistory, streamWriter)
+		latency := time.Since(startTime)
 		cancel() // Release context resources for this turn immediately
 
 		// ── Context window + billing tracking ────────────────────────────────
 		// Mirror the updateContextMgr() logic from ExecuteTaskWithTools so the
 		// streaming path keeps the ContextManager and Billing in sync.
-		if ur, ok := o.Primary.(ai.UsageReporter); ok {
-			u := ur.LastUsage()
-			provID := string(o.Primary.ID())
-			modelID := o.Primary.GetMetadata().ID
+		if primary := o.Primary(); primary != nil {
+			if ur, ok := primary.(ai.UsageReporter); ok {
+				u := ur.LastUsage()
+				provID := string(primary.ID())
+				modelID := primary.GetMetadata().ID
+
+			// Record provider latency metric
+			if o.Observability != nil {
+				o.Observability.RecordProviderLatency(provID, modelID, latency)
+			}
+
 			if o.ContextMgr != nil {
 				o.ContextMgr.UpdateFromUsage(TokenUsage{
 					InputTokens:  u.PromptTokens,
@@ -565,10 +580,16 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 				})
 			}
 			if o.Billing != nil {
+				cost := o.Billing.CalculateCost(provID, modelID, u.PromptTokens, u.CompletionTokens)
 				o.Billing.TrackTurn(provID, modelID, u.PromptTokens, u.CompletionTokens)
+
+				// Record cost metric
+				if o.Observability != nil {
+					o.Observability.RecordCost(provID, modelID, u.PromptTokens, u.CompletionTokens, cost)
+				}
 			}
 		}
-
+		}
 		// ALWAYS commit whatever was streamed to history, even on partial / error.
 		// Without this, an interrupted response is silently dropped and the model
 		// starts the next turn with no recollection of what it was doing.
@@ -628,8 +649,8 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 				}
 				if retryable {
 					// Update provider ID in case this turn also fails.
-					if o.Primary != nil {
-						currentProviderID = string(o.Primary.ID())
+					if primary := o.Primary(); primary != nil {
+						currentProviderID = string(primary.ID())
 					}
 					fullResponse.Reset()
 					continue
@@ -685,8 +706,8 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 			if o.Feedback != nil {
 				category := router.ClassifyQuery(prompt)
 				modelID := ""
-				if o.Primary != nil {
-					modelID = o.Primary.GetMetadata().ID
+				if primary := o.Primary(); primary != nil {
+					modelID = primary.GetMetadata().ID
 				}
 				o.Feedback.RecordOutcome(category, modelID, 1.0, true)
 			}
@@ -907,13 +928,15 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 		o.ConversationHistory.AddUserMessage(summaryPrompt)
 
 		// Create a non-looping final generation attempt
-		finalResponse, finalErr := o.Primary.GenerateWithHistory(ctx, o.ConversationHistory)
-		if finalErr == nil && finalResponse != "" {
-			if streamCallback != nil {
-				streamCallback("\n\n**[Max Turns Reached — Final Summary]**\n\n")
-				streamCallback(finalResponse)
+		if primary := o.Primary(); primary != nil {
+			finalResponse, finalErr := primary.GenerateWithHistory(ctx, o.ConversationHistory)
+			if finalErr == nil && finalResponse != "" {
+				if streamCallback != nil {
+					streamCallback("\n\n**[Max Turns Reached — Final Summary]**\n\n")
+					streamCallback(finalResponse)
+				}
+				o.ConversationHistory.AddAssistantMessage(finalResponse)
 			}
-			o.ConversationHistory.AddAssistantMessage(finalResponse)
 		}
 	}
 
@@ -926,6 +949,15 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 	o.launchXSkillAccumulation()
 	// ── SPARK Phase 1: trigger improvement cycle ──────────────────────────
 	o.launchSPARKIntrospection()
+	// ── SI Phase 1: feed autonomous self-improvement with task outcome ─────
+	// Get last assistant response from history (populated in both normal and max-turns paths)
+	lastResponse := ""
+	if msgs := o.ConversationHistory.GetMessages(); len(msgs) > 0 {
+		if lastMsg := msgs[len(msgs)-1]; lastMsg.Role == "assistant" {
+			lastResponse = lastMsg.Content
+		}
+	}
+	o.launchSIPostTask(lastResponse)
 
 	// Trigger ToolForge checks asynchronously
 	if o.Crystallizer != nil {
@@ -1054,18 +1086,19 @@ func (w *streamCallbackWriter) Write(p []byte) (n int, err error) {
 		} else if severity == SeverityWarning {
 			// INTELLIGENT CHECK
 			// 1. Ask Consultant if this is valid
-			if w.orchestrator != nil && w.orchestrator.Consultant != nil {
-				// We take a snapshot of recent buffer
-				content := w.buffer.String()
-				sample := content
-				if len(content) > 500 {
-					sample = content[len(content)-500:]
-				}
+			if w.orchestrator != nil {
+				if consultant := w.orchestrator.Consultant(); consultant != nil {
+					// We take a snapshot of recent buffer
+					content := w.buffer.String()
+					sample := content
+					if len(content) > 500 {
+						sample = content[len(content)-500:]
+					}
 
-				prompt := fmt.Sprintf("The following AI output triggered a repetition warning. Is this valid structured output (like a list, log, or code) or a pathological loop? Reply ONLY with 'VALID' or 'LOOP'.\n\nOUTPUT SAMPLE:\n%s", sample)
+					prompt := fmt.Sprintf("The following AI output triggered a repetition warning. Is this valid structured output (like a list, log, or code) or a pathological loop? Reply ONLY with 'VALID' or 'LOOP'.\n\nOUTPUT SAMPLE:\n%s", sample)
 
-				// Use the turn's context so the check is cancelled if the user aborts.
-				verdict, _ := w.orchestrator.Consultant.Generate(w.ctx, prompt)
+					// Use the turn's context so the check is cancelled if the user aborts.
+					verdict, _ := consultant.Generate(w.ctx, prompt)
 
 				if strings.Contains(strings.ToUpper(verdict), "LOOP") {
 					// Confirmed loop. Escalate to User.
@@ -1087,6 +1120,7 @@ func (w *streamCallbackWriter) Write(p []byte) (n int, err error) {
 						}
 					}
 				}
+			}
 			}
 		}
 	}
@@ -1111,8 +1145,10 @@ func (w *streamCallbackWriter) Write(p []byte) (n int, err error) {
 		w.firstTokenTime = time.Now()
 
 		// Get model ID from orchestrator if available
-		if w.orchestrator != nil && w.orchestrator.Primary != nil {
-			w.modelID = w.orchestrator.Primary.GetMetadata().ID
+		if w.orchestrator != nil {
+			if primary := w.orchestrator.Primary(); primary != nil {
+				w.modelID = primary.GetMetadata().ID
+			}
 		}
 
 		if w.orchestrator != nil {

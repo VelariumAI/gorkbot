@@ -60,6 +60,23 @@ const (
 	PolicyUnicodeControl SanitizerPolicy = "unicode_control"
 )
 
+// criticalToolsSanitize lists tools that must ALWAYS be sanitized regardless
+// of any bypass request. These are the highest-risk tools where injection attacks
+// are most catastrophic.
+var criticalToolsSanitize = map[string]bool{
+	"bash":           true,
+	"write_file":     true,
+	"create_tool":    true,
+	"modify_tool":    true,
+	"code_exec":      true,
+	"privileged_exec": true,
+}
+
+// IsCriticalTool returns true if a tool must always have its parameters sanitized.
+func IsCriticalTool(name string) bool {
+	return criticalToolsSanitize[name]
+}
+
 // InputSanitizer is the SENSE stabilization middleware.  It validates the
 // full parameter map of any tool call before execution is permitted.
 //
@@ -119,10 +136,10 @@ func NewInputSanitizer() (*InputSanitizer, error) {
 	// need to access outside the CWD.  All entries are resolved through
 	// EvalSymlinks so symlink-based escapes are still blocked.
 	allowed := []string{
-		"/tmp",          // POSIX standard temp dir
-		"/var/tmp",      // persistent temp dir
-		"/sdcard",       // Android external storage (symlink to /storage/emulated/0)
-		"/storage",      // Android storage root (all volumes)
+		"/tmp",            // POSIX standard temp dir
+		"/var/tmp",        // persistent temp dir
+		"/sdcard",         // Android external storage (symlink to /storage/emulated/0)
+		"/storage",        // Android storage root (all volumes)
 		"/data/local/tmp", // Android ADB temp dir
 	}
 
@@ -389,6 +406,12 @@ var pathKeywords = []string{
 	"filename", "filepath", "pathname",
 }
 
+var userInputKeywords = []string{
+	"query", "prompt", "message", "input", "text", "content",
+	"description", "title", "body", "markdown", "html", "json",
+	"data", "value", "question",
+}
+
 var nameKeywords = []string{
 	"name", "_id", "id", "tool_name", "resource", "handle",
 	"slug", "identifier", "key", "label", "tag",
@@ -409,8 +432,20 @@ func isPathParam(key string) bool {
 
 // isNameParam returns true when the key conventionally holds a resource name
 // or identifier that should be free of adversarial URI characters.
+// User input fields (queries, messages, content, etc.) are EXCLUDED from this
+// check since users naturally use ?, #, % in questions and text.
 func isNameParam(key string) bool {
 	lower := strings.ToLower(key)
+
+	// Exclude user input fields from URI character validation.
+	// These naturally contain punctuation like ?, #, % (e.g., "What is X?", "#hashtag", "50% off").
+	for _, kw := range userInputKeywords {
+		if lower == kw || strings.HasSuffix(lower, kw) {
+			return false
+		}
+	}
+
+	// Check if it's a resource/identifier name that should be strict.
 	for _, kw := range nameKeywords {
 		if lower == kw || strings.HasSuffix(lower, kw) {
 			return true

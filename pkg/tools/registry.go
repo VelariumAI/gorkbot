@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/velariumai/gorkbot/pkg/persist"
+	"github.com/velariumai/gorkbot/pkg/research"
 	"github.com/velariumai/gorkbot/pkg/scheduler"
 	"github.com/velariumai/gorkbot/pkg/sense"
 	"github.com/velariumai/gorkbot/pkg/usercommands"
@@ -23,9 +25,23 @@ var registryContextKey = &contextKey{"registry"}
 // orchestratorContextKey is the context key for the orchestrator.
 var orchestratorContextKey = &contextKey{"orchestrator"}
 
+// auditDBContextKey is the context key for the audit database.
+var auditDBContextKey = &contextKey{"auditDB"}
+
+// observabilityHubContextKey is the context key for the observability hub.
+var observabilityHubContextKey = &contextKey{"observability"}
+
+// bypassSanitizerKey is the context key for requesting sanitizer bypass (legacy).
+var bypassSanitizerKey = &contextKey{"bypassSanitizer"}
+
 // OrchestratorContextKey returns the context key for the orchestrator.
 func OrchestratorContextKey() interface{} {
 	return orchestratorContextKey
+}
+
+// ObservabilityContextKey returns the context key for the observability hub.
+func ObservabilityContextKey() interface{} {
+	return observabilityHubContextKey
 }
 
 // PermissionHandler is a callback for requesting permission from the user
@@ -59,6 +75,10 @@ type Registry struct {
 	// auditDB is the structured SQLite audit log (nil = disabled).
 	auditDB *AuditDB
 
+	// securityModeEnabled gates access to security/pentesting tools.
+	// Protected by mu. Default: false (disabled).
+	securityModeEnabled bool
+
 	// senseTracer is the SENSE event tracer (nil = disabled).
 	// When set, every tool execution produces a SENSETrace event.
 	senseTracer senseTracerIface
@@ -75,6 +95,10 @@ type Registry struct {
 	// persistStore is the SQLite conversation store (nil = disabled).
 	// Used by session_search to query past conversation history.
 	persistStore *persist.Store
+
+	// researchEngine is the shared deep-research engine for browser_* tools.
+	// Document content lives here and never enters conversation history.
+	researchEngine *research.Engine
 
 	DryRun bool // If true, validation succeeds but tool execution returns a mocked success
 }
@@ -180,6 +204,20 @@ func (r *Registry) GetAuditDB() *AuditDB {
 	return r.auditDB
 }
 
+// SetSecurityMode enables or disables access to security/pentesting tools.
+func (r *Registry) SetSecurityMode(enabled bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.securityModeEnabled = enabled
+}
+
+// IsSecurityModeEnabled returns true if security tools are allowed.
+func (r *Registry) IsSecurityModeEnabled() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.securityModeEnabled
+}
+
 // SetSENSETracer wires the SENSE event tracer into the registry.
 // After this call every tool execution emits a SENSETrace event.
 func (r *Registry) SetSENSETracer(t senseTracerIface) {
@@ -241,6 +279,21 @@ func (r *Registry) SetPersistStore(store *persist.Store) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.persistStore = store
+}
+
+// SetResearchEngine wires the deep-research engine into the registry so that
+// browser_search, browser_open, and browser_find tools can access it via context.
+func (r *Registry) SetResearchEngine(e *research.Engine) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.researchEngine = e
+}
+
+// GetResearchEngine returns the research engine (nil when not configured).
+func (r *Registry) GetResearchEngine() *research.Engine {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.researchEngine
 }
 
 // SetAIProvider sets the AI provider for tools that need it (e.g., Task tool)
@@ -427,7 +480,21 @@ func (r *Registry) Register(tool Tool) error {
 	if ra, ok := tool.(registryAware); ok {
 		ra.setRegistry(r)
 	}
+
 	return nil
+}
+
+// RegisterPlugin registers all tools from a plugin instance (Task 5.4).
+// The plugin must implement the Tool interface from this package.
+func (r *Registry) RegisterPlugin(pi interface{}, executor interface{}) error {
+	// Attempt to cast the plugin value to Tool interface
+	tool, ok := pi.(Tool)
+	if !ok {
+		return fmt.Errorf("plugin value does not implement tools.Tool interface")
+	}
+
+	// Register the tool using the standard Register method
+	return r.Register(tool)
 }
 
 // RegisterOrReplace adds or replaces a tool in the registry (used for dynamic tools).
@@ -444,6 +511,64 @@ func (r *Registry) Get(name string) (Tool, bool) {
 
 	tool, exists := r.tools[name]
 	return tool, exists
+}
+
+// Search performs a hybrid lexical search for tools matching the query.
+// It will be upgraded to full BM25 + Vector search in Phase 6.
+func (r *Registry) Search(query string) []Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if query == "" {
+		return r.List()
+	}
+
+	query = strings.ToLower(query)
+	terms := strings.Fields(query)
+
+	type scoredTool struct {
+		tool  Tool
+		score float64
+	}
+
+	var candidates []scoredTool
+	for _, t := range r.tools {
+		name := strings.ToLower(t.Name())
+		desc := strings.ToLower(t.Description())
+
+		score := 0.0
+		for _, term := range terms {
+			if name == term {
+				score += 10.0 // exact match
+			} else if strings.Contains(name, term) {
+				score += 5.0
+			}
+			if strings.Contains(desc, term) {
+				score += 1.0
+			}
+		}
+
+		if score > 0 {
+			candidates = append(candidates, scoredTool{t, score})
+		}
+	}
+
+	// Sort by score descending
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+
+	var results []Tool
+	for _, ct := range candidates {
+		results = append(results, ct.tool)
+	}
+
+	// Limit to top 10
+	if len(results) > 10 {
+		results = results[:10]
+	}
+
+	return results
 }
 
 // List returns all registered tools
@@ -555,11 +680,18 @@ func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, 
 	// Validate all parameters through the input sanitizer BEFORE schema
 	// validation or permission checks.  This enforces the three invariants:
 	// control-char rejection, path sandboxing, and resource-name validation.
+	// Critical tools (bash, write_file, create_tool, etc.) ALWAYS bypass any
+	// sanitizer bypass request for maximum safety.
 	r.mu.RLock()
 	sanitizer := r.inputSanitizer
 	tracer := r.senseTracer
 	r.mu.RUnlock()
-	if sanitizer != nil {
+
+	// Check if sanitizer bypass was requested (legacy capability).
+	bypassSanitizer := ctx.Value(bypassSanitizerKey) != nil
+	forceSanitize := sense.IsCriticalTool(normalizedName)
+
+	if sanitizer != nil && (!bypassSanitizer || forceSanitize) {
 		if sanErr := sanitizer.SanitizeParams(normalizedParams); sanErr != nil {
 			errMsg := sanErr.Error()
 			if tracer != nil {
@@ -616,8 +748,27 @@ func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, 
 		}
 	}
 
+	// Check if this is a security tool and security mode is disabled
+	if isSecurityTool(normalizedName) {
+		r.mu.RLock()
+		secEnabled := r.securityModeEnabled
+		r.mu.RUnlock()
+		if !secEnabled {
+			msg := "Security mode not enabled. Use /security on to enable access to security tools."
+			return &ToolResult{
+				Success: false,
+				Error:   msg,
+			}, fmt.Errorf("security mode required: %s", msg)
+		}
+	}
+
 	// Add registry to context for meta tools that need it
 	ctxWithRegistry := context.WithValue(ctx, registryContextKey, r)
+
+	// Inject audit database if available
+	if r.auditDB != nil {
+		ctxWithRegistry = context.WithValue(ctxWithRegistry, auditDBContextKey, r.auditDB)
+	}
 
 	// Inject scheduler if available
 	if r.schedulerInst != nil {
@@ -638,6 +789,10 @@ func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, 
 	// Inject goal ledger if available
 	if r.goalLedger != nil {
 		ctxWithRegistry = context.WithValue(ctxWithRegistry, GoalLedgerKey, r.goalLedger)
+	}
+	// Inject research engine if available
+	if r.researchEngine != nil {
+		ctxWithRegistry = context.WithValue(ctxWithRegistry, researchEngineContextKey, r.researchEngine)
 	}
 
 	var result *ToolResult
@@ -660,6 +815,15 @@ func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, 
 	success := err == nil && result != nil && result.Success
 	if r.analytics != nil {
 		r.analytics.RecordExecution(normalizedName, success, duration)
+
+		// Record tool execution metric
+		if obsHub := ctx.Value(observabilityHubContextKey); obsHub != nil {
+			if obs, ok := obsHub.(interface {
+				RecordToolExecution(string, bool, time.Duration)
+			}); ok {
+				obs.RecordToolExecution(normalizedName, success, duration)
+			}
+		}
 	}
 
 	// Fire-and-forget audit write: never blocks the caller.
@@ -774,12 +938,19 @@ func (r *Registry) ClearSessionPermissions() {
 }
 
 // GetDefinitions returns tool definitions for AI models
+// EXCLUDES system_monitor, sensor_read, and termux_api_bridge to prevent automatic resource-checking interruptions
 func (r *Registry) GetDefinitions() []ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	definitions := make([]ToolDefinition, 0, len(r.tools))
 	for _, tool := range r.tools {
+		// NEVER include diagnostic/sensor tools in prompts - they derail LLM thinking
+		// Includes: system_monitor, sensor_read, termux_api_bridge (battery-status)
+		if tool.Name() == "system_monitor" || tool.Name() == "sensor_read" || tool.Name() == "termux_api_bridge" {
+			continue
+		}
+
 		definitions = append(definitions, ToolDefinition{
 			Name:        tool.Name(),
 			Description: tool.Description(),
@@ -804,6 +975,7 @@ func (r *Registry) GetSystemPrompt() string {
 	var sb strings.Builder
 
 	// Add tool selection guidance at the top
+	// NOTE: system_monitor, sensor_read, and termux_api_bridge are INTENTIONALLY EXCLUDED to prevent CoT derailment
 	sb.WriteString("### TOOL SELECTION GUIDE:\n")
 	sb.WriteString("Use this guide to choose the right tool for your task:\n")
 	sb.WriteString("- Need to find web resources on a topic? → Use 'web_search'\n")
@@ -815,7 +987,10 @@ func (r *Registry) GetSystemPrompt() string {
 	sb.WriteString("- Need to read a file? → Use 'read_file'\n")
 	sb.WriteString("- Need to search for text in files? → Use 'grep_content'\n")
 	sb.WriteString("- Need to make HTTP requests with custom headers/body? → Use 'http_request'\n")
-	sb.WriteString("- Need to download a file? → Use 'download_file'\n\n")
+	sb.WriteString("- Need to download a file? → Use 'download_file'\n")
+	sb.WriteString("- Need to manage multi-session project progress? → Use 'harness_init', 'harness_boot', 'harness_select', 'harness_complete'\n")
+	sb.WriteString("- Need to research the web without context bloat? → Use 'browser_search' (results only), 'browser_open' (buffer page), 'browser_find' (search buffered page)\n")
+	sb.WriteString("- Need to verify a feature before completion? → Use 'verify_feature'\n\n")
 
 	sb.WriteString("### AVAILABLE TOOLS:\n")
 	for _, def := range definitions {
@@ -882,7 +1057,10 @@ func (r *Registry) GetSystemPromptNative() string {
 	sb.WriteString("- Need to read a file? → Use 'read_file'\n")
 	sb.WriteString("- Need to search for text in files? → Use 'grep_content'\n")
 	sb.WriteString("- Need to make HTTP requests with custom headers/body? → Use 'http_request'\n")
-	sb.WriteString("- Need to download a file? → Use 'download_file'\n\n")
+	sb.WriteString("- Need to download a file? → Use 'download_file'\n")
+	sb.WriteString("- Need to manage multi-session project progress? → Use 'harness_init', 'harness_boot', 'harness_select', 'harness_complete'\n")
+	sb.WriteString("- Need to research the web without context bloat? → Use 'browser_search' (results only), 'browser_open' (buffer page), 'browser_find' (search buffered page)\n")
+	sb.WriteString("- Need to verify a feature before completion? → Use 'verify_feature'\n\n")
 
 	sb.WriteString("### AVAILABLE TOOLS:\n")
 	for _, def := range definitions {
@@ -947,6 +1125,12 @@ func (r *Registry) RegisterDefaultTools() error {
 
 	// Session search tool — requires persist.Store (nil-safe: tool returns error if store absent)
 	RegisterSessionSearchTool(r, r.persistStore)
+
+	// Harness tools — multi-session state tracking + self-verification
+	RegisterHarnessTools(r)
+
+	// Research tools — context-efficient web browsing (browser_search/open/find)
+	RegisterResearchTools(r)
 
 	return nil
 }

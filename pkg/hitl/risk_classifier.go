@@ -57,9 +57,9 @@ func NewRiskClassifier() *RiskClassifier {
 		},
 		sensitivePaths: []string{
 			"/root", "/etc", "/sys", "/proc", "/boot",
-			"/.ssh", "/.aws", "/.gnupg", "/.config/",
-			".env", "secret", "credential", "key",
-			"password", "token", "api_key",
+			"/.ssh", "/.aws", "/.gnupg",
+			".env", "secret", "credential",
+			"password", "api_key",
 		},
 		dangerousPatterns: make(map[string][]string),
 	}
@@ -97,7 +97,7 @@ func (rc *RiskClassifier) initializeToolRiskMap() {
 		"git_commit", "git_rebase", "git_reset",
 		"write_file", "create_file", "append_file",
 		"http_request_post", "http_request_put", "http_request_delete",
-		"spawn_agent", // Especially redteam agents
+		"spawn_agent",    // Especially redteam agents
 		"system_monitor", // System introspection
 		"process_kill", "process_terminate",
 		"service_restart", "service_stop",
@@ -209,9 +209,9 @@ func (rc *RiskClassifier) getBaseToolRisk(toolName string) RiskLevel {
 		return risk
 	}
 
-	// Substring matching (allow flexibility in naming)
+	// Substring matching (check only if mapped tool is in the given tool name)
 	for mappedTool, risk := range rc.toolRiskMap {
-		if strings.Contains(toolName, mappedTool) || strings.Contains(mappedTool, toolName) {
+		if strings.Contains(toolName, mappedTool) {
 			return risk
 		}
 	}
@@ -292,9 +292,10 @@ func (rc *RiskClassifier) containsCredentialPattern(key, value string) bool {
 	lowerKey := strings.ToLower(key)
 	credentialPatterns := []string{
 		"password", "passwd", "pwd",
-		"secret", "key", "token", "auth",
+		"secret", "auth",
 		"credential", "credentials",
-		"api_key", "apikey", "api-key",
+		"api_key", "apikey", "api-key", "secret_key", "private_key",
+		"access_token", "bearer_token",
 		"oauth", "bearer", "jwt",
 		"private", "priv",
 	}
@@ -305,10 +306,11 @@ func (rc *RiskClassifier) containsCredentialPattern(key, value string) bool {
 		}
 	}
 
-	// Check for common credential formats in value
-	if len(value) > 20 {
-		// Looks like a token/key
-		if strings.Contains(lowerKey, "key") || strings.Contains(lowerKey, "token") {
+	// Check for common credential formats in value (longer threshold, anchored key names)
+	if len(value) > 32 {
+		if strings.Contains(lowerKey, "api_key") || strings.Contains(lowerKey, "secret_key") ||
+			strings.Contains(lowerKey, "private_key") || strings.Contains(lowerKey, "access_token") ||
+			strings.Contains(lowerKey, "bearer_token") {
 			return true
 		}
 	}

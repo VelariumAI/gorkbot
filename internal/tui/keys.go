@@ -47,6 +47,16 @@ type KeyMap struct {
 	Down   key.Binding
 	Select key.Binding
 	Back   key.Binding
+
+	// Workspace Navigation (Phase 3)
+	WorkspaceChat      key.Binding
+	WorkspaceTasks     key.Binding
+	WorkspaceTools     key.Binding
+	WorkspaceAgents    key.Binding
+	WorkspaceMemory    key.Binding
+	WorkspaceAnalytics key.Binding
+	WorkspaceSettings  key.Binding
+	ToggleNavRail      key.Binding
 }
 
 // DefaultKeyMap returns the default keybindings
@@ -148,6 +158,39 @@ func DefaultKeyMap() KeyMap {
 		Back: key.NewBinding(
 			key.WithKeys("esc"),
 			key.WithHelp("esc", "back"),
+		),
+		// Workspace Navigation (Phase 3)
+		WorkspaceChat: key.NewBinding(
+			key.WithKeys("ctrl+1"),
+			key.WithHelp("ctrl+1", "chat workspace"),
+		),
+		WorkspaceTasks: key.NewBinding(
+			key.WithKeys("ctrl+2"),
+			key.WithHelp("ctrl+2", "tasks workspace"),
+		),
+		WorkspaceTools: key.NewBinding(
+			key.WithKeys("ctrl+3"),
+			key.WithHelp("ctrl+3", "tools workspace"),
+		),
+		WorkspaceAgents: key.NewBinding(
+			key.WithKeys("ctrl+4"),
+			key.WithHelp("ctrl+4", "agents workspace"),
+		),
+		WorkspaceMemory: key.NewBinding(
+			key.WithKeys("ctrl+5"),
+			key.WithHelp("ctrl+5", "memory workspace"),
+		),
+		WorkspaceAnalytics: key.NewBinding(
+			key.WithKeys("ctrl+6"),
+			key.WithHelp("ctrl+6", "analytics workspace"),
+		),
+		WorkspaceSettings: key.NewBinding(
+			key.WithKeys("ctrl+7"),
+			key.WithHelp("ctrl+7", "settings workspace"),
+		),
+		ToggleNavRail: key.NewBinding(
+			key.WithKeys("ctrl+0"),
+			key.WithHelp("ctrl+0", "toggle nav rail"),
 		),
 	}
 }

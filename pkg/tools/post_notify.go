@@ -27,6 +27,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 )
 
 // TelegramSender is the minimal interface for sending a Telegram message.
@@ -37,15 +39,38 @@ type TelegramSender interface {
 
 // NotificationRouter fans a message out to all configured backends.
 // Fields are optional — nil means "not configured".
+// HARDCODED THROTTLE: Prevents notification spam (user requirement).
 type NotificationRouter struct {
-	Discord           DiscordSender
-	Telegram          TelegramSender
-	DefaultDiscordChan string
+	Discord             DiscordSender
+	Telegram            TelegramSender
+	DefaultDiscordChan  string
 	DefaultTelegramChat int64
+
+	// Throttle: Hard limit on notification frequency
+	throttleMu       sync.RWMutex
+	lastNotification map[string]time.Time // key = notification type/content hash
+
+	// HARD LIMITS (user-specified - DO NOT MODIFY WITHOUT USER APPROVAL)
+	// Minimum time between ANY notifications (global)
+	MinGlobalCooldown time.Duration
+	// Minimum time between notifications of the same type
+	MinTypeCooldown time.Duration
 }
+
+const (
+	// DefaultMinGlobalCooldown: Absolute minimum between ANY two notifications
+	// User said "notifying every several minutes is ridiculous"
+	// This ensures max 8 notifications per hour (1 every 7.5 minutes minimum)
+	DefaultMinGlobalCooldown = 7*time.Minute + 30*time.Second
+
+	// DefaultMinTypeCooldown: Minimum between notifications of same type
+	// Prevents identical warnings from repeated checks
+	DefaultMinTypeCooldown = 30 * time.Minute
+)
 
 // NewNotificationRouter creates a NotificationRouter.
 // Pass nil for any backend that is not configured.
+// Default throttles are HARD LIMITS to prevent notification spam.
 func NewNotificationRouter(
 	discord DiscordSender,
 	telegram TelegramSender,
@@ -57,12 +82,68 @@ func NewNotificationRouter(
 		Telegram:            telegram,
 		DefaultDiscordChan:  defaultDiscordChan,
 		DefaultTelegramChat: defaultTelegramChat,
+		lastNotification:    make(map[string]time.Time),
+		MinGlobalCooldown:   DefaultMinGlobalCooldown, // 7.5 min between ANY notifications
+		MinTypeCooldown:     DefaultMinTypeCooldown,   // 30 min between same-type notifications
 	}
+}
+
+// checkThrottle returns empty string if notification is allowed, or error message if throttled.
+func (r *NotificationRouter) checkThrottle(text string) string {
+	r.throttleMu.Lock()
+	defer r.throttleMu.Unlock()
+
+	now := time.Now()
+
+	// Check global cooldown: ANY notification type
+	if lastGlobal, exists := r.lastNotification["__global__"]; exists {
+		elapsed := now.Sub(lastGlobal)
+		if elapsed < r.MinGlobalCooldown {
+			waitTime := r.MinGlobalCooldown - elapsed
+			return fmt.Sprintf("THROTTLED (global): Next notification allowed in %.0f seconds (limit: 1 per %.0f seconds)",
+				waitTime.Seconds(), r.MinGlobalCooldown.Seconds())
+		}
+	}
+
+	// Check type-specific cooldown: same message content
+	// Hash the message to group similar notifications
+	msgHash := fmt.Sprintf("msg:%d", hashString(text))
+	if lastType, exists := r.lastNotification[msgHash]; exists {
+		elapsed := now.Sub(lastType)
+		if elapsed < r.MinTypeCooldown {
+			waitTime := r.MinTypeCooldown - elapsed
+			return fmt.Sprintf("THROTTLED (type): This notification was recently sent. Next allowed in %.0f seconds",
+				waitTime.Seconds())
+		}
+	}
+
+	// Notification is allowed - update both clocks
+	r.lastNotification["__global__"] = now
+	r.lastNotification[msgHash] = now
+
+	return ""
+}
+
+// hashString returns a simple hash of the string
+func hashString(s string) int {
+	h := 0
+	for _, c := range s {
+		h = h*31 + int(c)
+	}
+	if h < 0 {
+		h = -h
+	}
+	return h
 }
 
 // Send delivers text to all enabled backends. Returns a multi-error string if
 // any backend fails; continues to other backends regardless.
+// THROTTLED: respects global and type-specific cooldowns.
 func (r *NotificationRouter) Send(text string) error {
+	// Check throttle FIRST before doing any work
+	if throttleMsg := r.checkThrottle(text); throttleMsg != "" {
+		return fmt.Errorf("%s", throttleMsg)
+	}
 	var errs []string
 
 	if r.Discord != nil && r.DefaultDiscordChan != "" {
@@ -162,9 +243,19 @@ func (t *PostNotifyTool) Execute(_ context.Context, params map[string]interface{
 	}
 
 	if err := t.router.Send(text); err != nil {
+		// Check if this is a throttle error (not a backend failure)
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "THROTTLED") {
+			// Throttling is not a failure - it's working as designed
+			return &ToolResult{
+				Success: true,
+				Output:  errMsg + " (throttle protection active - this prevents notification spam)",
+			}, nil
+		}
+		// Actual backend failures are reported as errors
 		return &ToolResult{
 			Success: false,
-			Error:   err.Error(),
+			Error:   errMsg,
 		}, nil
 	}
 
@@ -189,4 +280,39 @@ func (r *NotificationRouter) activeBackendNames() []string {
 		return []string{"(none)"}
 	}
 	return names
+}
+
+// SetThrottleLimits configures the notification frequency limits.
+// CAUTION: These are HARD LIMITS to prevent notification spam.
+// globalCooldown: Minimum time between ANY two notifications (across all types)
+// typeCooldown: Minimum time between notifications of the same type
+// Per user request: "notifying every several minutes is ridiculous"
+// Recommended: globalCooldown >= 7 minutes, typeCooldown >= 30 minutes
+func (r *NotificationRouter) SetThrottleLimits(globalCooldown, typeCooldown time.Duration) {
+	r.throttleMu.Lock()
+	defer r.throttleMu.Unlock()
+	r.MinGlobalCooldown = globalCooldown
+	r.MinTypeCooldown = typeCooldown
+}
+
+// GetThrottleStats returns current throttle state for debugging
+func (r *NotificationRouter) GetThrottleStats() map[string]interface{} {
+	r.throttleMu.RLock()
+	defer r.throttleMu.RUnlock()
+
+	globalLast, hasGlobal := r.lastNotification["__global__"]
+	nextGlobal := time.Time{}
+	if hasGlobal {
+		nextGlobal = globalLast.Add(r.MinGlobalCooldown)
+	}
+
+	return map[string]interface{}{
+		"last_notification":        globalLast,
+		"next_allowed":             nextGlobal,
+		"global_cooldown":          r.MinGlobalCooldown.String(),
+		"type_cooldown":            r.MinTypeCooldown.String(),
+		"pending_notifications":    len(r.lastNotification) - 1, // exclude __global__
+		"time_until_next":          time.Until(nextGlobal).String(),
+		"notification_limit_perhr": 60 / (int(r.MinGlobalCooldown.Minutes()) / 60),
+	}
 }

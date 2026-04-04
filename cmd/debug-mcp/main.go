@@ -22,7 +22,7 @@ func main() {
 
 	fmt.Printf("Starting %s %v...\n", cmd, args)
 	sub := exec.CommandContext(ctx, cmd, args...)
-	
+
 	stdin, _ := sub.StdinPipe()
 	stdout, _ := sub.StdoutPipe()
 	stderr, _ := sub.StderrPipe()
@@ -59,7 +59,7 @@ func main() {
 		Params: mcp.InitializeParams{
 			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
 			ClientInfo: mcp.Implementation{
-				Name: "DebugClient",
+				Name:    "DebugClient",
 				Version: "1.0.0",
 			},
 		},

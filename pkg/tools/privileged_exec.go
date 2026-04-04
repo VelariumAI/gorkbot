@@ -23,10 +23,11 @@ const (
 // privilege escalation mechanism discovered at execution time.
 //
 // Escalation priority (SENSE Module 2 — EAL):
-//   uid==0  → native (already root)
-//   su      → su -c
-//   sudo    → sudo bash -c
-//   default → direct exec + clean error on permission denial
+//
+//	uid==0  → native (already root)
+//	su      → su -c
+//	sudo    → sudo bash -c
+//	default → direct exec + clean error on permission denial
 //
 // exec.Command is used with separate args throughout — the command string is
 // never interpolated into a shell string, so there is no injection surface

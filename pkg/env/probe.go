@@ -7,9 +7,9 @@
 // constraints before it attempts any tool calls.
 //
 // Design goals:
-//  - Zero shell glob: uses exec.LookPath + single python3 -c subprocess only.
-//  - No import cycle: pkg/env has no deps on pkg/tools or internal/engine.
-//  - Thread-safe: Probe/Snapshot/SetMCPStatus safe for concurrent callers.
+//   - Zero shell glob: uses exec.LookPath + single python3 -c subprocess only.
+//   - No import cycle: pkg/env has no deps on pkg/tools or internal/engine.
+//   - Thread-safe: Probe/Snapshot/SetMCPStatus safe for concurrent callers.
 package env
 
 import (

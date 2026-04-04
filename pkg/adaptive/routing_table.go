@@ -6,9 +6,9 @@
 //
 // The three tiers (lowest index wins) are:
 //
-//   Tier 0 — Exact match   : pattern contains no regex meta-characters.
-//   Tier 1 — Specific regex: pattern has regex meta-characters but NOT ".*".
-//   Tier 2 — Wildcard      : pattern contains ".*" (catchall).
+//	Tier 0 — Exact match   : pattern contains no regex meta-characters.
+//	Tier 1 — Specific regex: pattern has regex meta-characters but NOT ".*".
+//	Tier 2 — Wildcard      : pattern contains ".*" (catchall).
 //
 // On each Route call, all bindings are evaluated. The match with the lowest
 // tier wins; within the same tier, the first registered binding wins

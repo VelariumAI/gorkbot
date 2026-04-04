@@ -9,13 +9,18 @@ import (
 
 // InitSRE wires all SRE components. Called from InitEnhancements after InitSPARK.
 func (o *Orchestrator) InitSRE(cfg sre.SREConfig) {
+	var senseProvider sre.SENSEProvider
+	if o.SENSETracer != nil {
+		senseProvider = o.SENSETracer
+	}
+
 	// Build the SRE Coordinator (all deps are nil-safe)
 	o.SRE = sre.NewCoordinator(
 		cfg,
-		o.Primary,
+		o.Primary(),
 		o.AgeMem,
 		o.SPARK,
-		o.SENSETracer, // satisfies sre.SENSEProvider via new LogSREXxx methods
+		senseProvider, // pass nil interface when tracer is absent
 		o.Logger,
 	)
 }

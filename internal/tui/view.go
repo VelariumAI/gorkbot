@@ -53,29 +53,8 @@ func (m *Model) View() string {
 		sections = append(sections, zone)
 	}
 
-	// 3. Main Content Area (dynamic based on active tab)
-	var content string
-	switch m.state {
-	case modelSelectView: // also handles modelListView (same const)
-		content = m.renderModelSelectView()
-	case toolsTableView:
-		content = m.toolsTable.View()
-	case discoveryView:
-		content = m.renderDiscoveryView()
-	case analyticsView:
-		content = m.renderAnalyticsView()
-	case diagnosticsView:
-		content = m.renderDiagnosticsView()
-	case dagView:
-		content = m.renderDAGView()
-	default:
-		content = m.renderChatView()
-	}
-
-	// Ensure content fits in remaining height
-	// Header + Tabs + StatusBar are fixed
-	// We need to calculate remaining height for content area
-	// Note: Viewport and Lists handle their own height, but we need to ensure the container fits
+	// 3. Main Content Area (dynamic based on active tab) — including nav rail wrapper (Phase 3)
+	content := m.renderMainContent()
 	sections = append(sections, content)
 
 	// 4. Status Bar (if not in full-screen list modes that have their own)
@@ -147,6 +126,44 @@ func (m *Model) View() string {
 	}
 
 	return view
+}
+
+// renderMainContent returns the main content area, optionally wrapped with nav rail (Phase 3).
+func (m *Model) renderMainContent() string {
+	// Render the active view based on current state
+	var content string
+	switch m.state {
+	case modelSelectView: // also handles modelListView (same const)
+		content = m.renderModelSelectView()
+	case toolsTableView:
+		content = m.toolsTable.View()
+	case discoveryView:
+		content = m.renderDiscoveryView()
+	case analyticsView:
+		content = m.renderAnalyticsView()
+	case diagnosticsView:
+		content = m.renderDiagnosticsView()
+	case dagView:
+		content = m.renderDAGView()
+	case taskView:
+		content = m.renderTaskView()
+	case agentsView:
+		content = m.renderAgentsView()
+	case memoryView:
+		content = m.renderMemoryView()
+	case settingsWorkspaceView:
+		content = m.renderSettingsWorkspace()
+	default:
+		content = m.renderChatView()
+	}
+
+	// Wrap with nav rail if visible (Phase 3)
+	if m.navRailVisible {
+		nav := m.renderWorkspaceNav()
+		return lipgloss.JoinHorizontal(lipgloss.Top, nav, content)
+	}
+
+	return content
 }
 
 // renderHITLPrompt renders the HITL plan-and-execute approval overlay.
@@ -315,7 +332,8 @@ func (m *Model) renderChatView() string {
 
 	chatContent := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
-	if !m.sidePanelOpen {
+	// Narrow terminal fallback: skip sidebar, show full-width chat.
+	if m.sidePanelWidth == 0 {
 		return chatContent
 	}
 	// V.2: Clip chat column to the non-panel width without reflowing glamour content.
@@ -392,7 +410,7 @@ func (m *Model) renderToastLine(t toastItem) string {
 // renderViewport renders the chat viewport
 func (m *Model) renderViewport() string {
 	return m.styles.Viewport.
-		Width(m.width).
+		Width(m.viewport.Width).
 		Height(m.viewport.Height).
 		Render(m.viewport.View())
 }
@@ -447,7 +465,8 @@ func (m *Model) renderLoadingIndicator() string {
 	// Build the complete status line: "G ▶ <status>"
 	phaseLabel := gorkyPrefix + statusText
 
-	spinGlyph := DegradedSigilFrame(m.hookSpinFrame)
+	// Use radiation frame for cosmic visual cohesion with main spinner
+	spinGlyph := DegradedRadiationFrame(m.hookSpinFrame)
 	row := lipgloss.JoinHorizontal(lipgloss.Center, spinGlyph, "   ", loadingPhraseStyle.Render(phaseLabel))
 	return loadingRowWrapper.Render(row)
 }
@@ -517,7 +536,7 @@ func (m *Model) renderThinkingBox() string {
 		Foreground(lipgloss.Color("245")).
 		Italic(true).
 		Padding(0, 1).
-		Width(m.width - 4)
+		Width(m.viewport.Width - 4)
 
 	labelStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("243")).
@@ -565,13 +584,13 @@ func (m *Model) renderSearchBar() string {
 	// Cursor blink — simple block cursor appended to query.
 	queryDisplay := m.searchQuery + "█"
 
-	barStyle := searchBarBase.Width(m.width - 2)
+	barStyle := searchBarBase.Width(m.viewport.Width - 2)
 
 	left := searchIconStyle.Render("🔍 ") + searchQueryStyle.Render(queryDisplay)
 	right := searchCounterStyle.Render(counter)
 
 	// Pad left side to fill width, right-align counter.
-	available := m.width - 4 - lipgloss.Width(left) - lipgloss.Width(right)
+	available := m.viewport.Width - 4 - lipgloss.Width(left) - lipgloss.Width(right)
 	if available < 1 {
 		available = 1
 	}
@@ -603,12 +622,12 @@ func (m *Model) renderHistSearchBar() string {
 
 	queryDisplay := m.histSearchQuery + "█"
 
-	barStyle := searchBarBase.Width(m.width - 2)
+	barStyle := searchBarBase.Width(m.viewport.Width - 2)
 
 	left := searchIconStyle.Render("⏮ ") + searchQueryStyle.Render(queryDisplay)
 	right := searchCounterStyle.Render(counter)
 
-	available := m.width - 4 - lipgloss.Width(left) - lipgloss.Width(right)
+	available := m.viewport.Width - 4 - lipgloss.Width(left) - lipgloss.Width(right)
 	if available < 1 {
 		available = 1
 	}
@@ -630,7 +649,7 @@ func (m *Model) renderAtCompletePopup() string {
 		items = items[:maxVisible]
 	}
 
-	popStyle := atCompleteBase.Width(m.width - 4)
+	popStyle := atCompleteBase.Width(m.viewport.Width - 4)
 
 	var lines []string
 	for i, item := range items {
@@ -722,4 +741,38 @@ func (m *Model) renderAuthWizard() string {
 	sb.WriteString(m.styles.Help.Render("Press Enter to Save | Esc to Cancel"))
 
 	return boxStyle.Render(sb.String())
+}
+
+// ── Phase 3: Workspace Views (Stubs) ──────────────────────────────────────
+
+// renderTaskView renders the Tasks workspace (Phase 3).
+func (m *Model) renderTaskView() string {
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(TextWhite)).
+		Bold(true)
+	return style.Render("📋 TASKS\n\nNo tasks yet. Goals from memory appear here.\n\n[Esc] back to chat")
+}
+
+// renderAgentsView renders the Agents workspace (Phase 3).
+func (m *Model) renderAgentsView() string {
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(TextWhite)).
+		Bold(true)
+	return style.Render("🤖 AGENTS\n\nNo agents running. Background tasks appear here.\n\n[Esc] back to chat")
+}
+
+// renderMemoryView renders the Memory workspace (Phase 3).
+func (m *Model) renderMemoryView() string {
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(TextWhite)).
+		Bold(true)
+	return style.Render("🧠 MEMORY\n\nGoals · Sense Memory · Context\n\n[Esc] back to chat")
+}
+
+// renderSettingsWorkspace renders the Settings workspace (Phase 3).
+func (m *Model) renderSettingsWorkspace() string {
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(TextWhite)).
+		Bold(true)
+	return style.Render("⚙️  SETTINGS\n\nFull settings as workspace\n\n[Esc] back to chat")
 }

@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	cacheSimThreshold = 0.94          // cosine similarity required for a cache hit
+	cacheSimThreshold = 0.94               // cosine similarity required for a cache hit
 	cacheTTL          = 7 * 24 * time.Hour // entries older than 7 days are pruned
-	cacheMaxRows      = 5_000         // hard cap; oldest rows evicted beyond this
-	cacheRecentLimit  = 200           // rows scanned per ANN search
+	cacheMaxRows      = 5_000              // hard cap; oldest rows evicted beyond this
+	cacheRecentLimit  = 200                // rows scanned per ANN search
 )
 
 // SemanticCache provides prompt-level semantic deduplication backed by SQLite
@@ -29,13 +29,13 @@ const (
 // Concurrency: safe for concurrent use.  All writes are async (fire-and-forget)
 // via a 256-slot buffered channel drained by a single background goroutine.
 type SemanticCache struct {
-	db      *sql.DB
+	db       *sql.DB
 	embedder embeddings.Embedder
 	logger   *slog.Logger
 
-	mu       sync.RWMutex // protects nothing currently, reserved for hot-path cache
-	writeCh  chan writeEntry
-	wg       sync.WaitGroup
+	mu      sync.RWMutex // protects nothing currently, reserved for hot-path cache
+	writeCh chan writeEntry
+	wg      sync.WaitGroup
 }
 
 type writeEntry struct {
@@ -87,7 +87,7 @@ func NewSemanticCache(embedder embeddings.Embedder, configDir string) (*Semantic
 	}
 
 	c := &SemanticCache{
-		db:      db,
+		db:       db,
 		embedder: embedder,
 		logger:   slog.Default(),
 		writeCh:  make(chan writeEntry, 256),

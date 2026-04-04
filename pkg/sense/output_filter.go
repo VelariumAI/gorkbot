@@ -94,7 +94,7 @@ func (f *OutputFilter) initializeRules() error {
 		},
 		{
 			Name:           "comprehensive_check",
-			Regex:          regexp.MustCompile(`(?i)I'?ll\s+run.*?to\s+(get|fetch|retrieve|check|analyze)`),
+			Regex:          regexp.MustCompile(`(?i)I'?ll\s+run\s+(the\s+)?\w+\s+tool\s+to\s+(get|fetch|retrieve|check|analyze)`),
 			Category:       CategoryToolNarration,
 			RequireOwnLine: false,
 		},
@@ -146,21 +146,15 @@ func (f *OutputFilter) initializeRules() error {
 		},
 		{
 			Name:           "step_by_step",
-			Regex:          regexp.MustCompile(`(?i)(first,|second,|third,|next,|finally,|then|step\s+\d+:|proceed\s+as\s+follows)`),
-			Category:       CategoryInternalReason,
-			RequireOwnLine: false,
-		},
-		{
-			Name:           "numbered_steps",
-			Regex:          regexp.MustCompile(`^\d+\.\s+[^`+"`"+`]+$`),
+			Regex:          regexp.MustCompile(`(?i)^(step\s+\d+:|proceed\s+as\s+follows):`),
 			Category:       CategoryInternalReason,
 			RequireOwnLine: true,
 		},
 		{
 			Name:           "approach_msg",
-			Regex:          regexp.MustCompile(`(?i)(my approach|this approach|my strategy|here'?s what|let me explain)`),
+			Regex:          regexp.MustCompile(`(?i)^(my approach|my strategy)\s+(is|will be):`),
 			Category:       CategoryInternalReason,
-			RequireOwnLine: false,
+			RequireOwnLine: true,
 		},
 
 		// DEBUG INFO RULES
@@ -186,9 +180,9 @@ func (f *OutputFilter) initializeRules() error {
 		},
 		{
 			Name:           "resources_available",
-			Regex:          regexp.MustCompile(`(?i)(no errors|all.*?ok|everything.*?fine|ready to)`),
+			Regex:          regexp.MustCompile(`(?i)^(all\s+systems\s+(ok|healthy|nominal)|no\s+errors\s+detected|everything\s+(is\s+)?fine\.?)$`),
 			Category:       CategorySystemStatus,
-			RequireOwnLine: false,
+			RequireOwnLine: true,
 		},
 		{
 			Name:           "tools_available",
@@ -334,11 +328,11 @@ func (f *OutputFilter) SetVerbose(verbose bool) {
 func CreateDefaultConfig() OutputFilterConfig {
 	return OutputFilterConfig{
 		Verbose:                false,
-		SuppressToolNarration:  true,
+		SuppressToolNarration:  false,
 		SuppressToolStatus:     true,
-		SuppressInternalReason: true,
+		SuppressInternalReason: false,
 		SuppressDebugInfo:      true,
-		SuppressSystemStatus:   true,
+		SuppressSystemStatus:   false,
 		SuppressCooldownNotice: true,
 		MinimumOutputLength:    0,
 	}

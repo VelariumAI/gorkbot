@@ -30,7 +30,7 @@ import (
 type mutableProvider struct {
 	aiProvider ai.AIProvider
 
-	mu      sync.RWMutex
+	mu       sync.RWMutex
 	embedder embeddings.Embedder // may be swapped after construction
 }
 

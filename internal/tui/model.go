@@ -27,11 +27,11 @@ import (
 	"github.com/velariumai/gorkbot/internal/engine"
 	"github.com/velariumai/gorkbot/internal/platform"
 	"github.com/velariumai/gorkbot/pkg/adaptive"
-	"github.com/velariumai/gorkbot/pkg/ai"
 	"github.com/velariumai/gorkbot/pkg/commands"
 	"github.com/velariumai/gorkbot/pkg/process"
 	"github.com/velariumai/gorkbot/pkg/registry"
 	"github.com/velariumai/gorkbot/pkg/theme"
+	"github.com/velariumai/gorkbot/pkg/selfimprove"
 	"github.com/velariumai/gorkbot/pkg/tools"
 	tui_style "github.com/velariumai/gorkbot/pkg/tui"
 )
@@ -53,7 +53,35 @@ const (
 	diagnosticsView   // system diagnostics (Ctrl+\)
 	stateHITLApproval // SENSE HITL plan-and-execute approval overlay
 	dagView           // DAG task-graph executor view
+	taskView          // Tasks workspace (Phase 3)
+	agentsView        // Agents workspace (Phase 3)
+	memoryView        // Memory workspace (Phase 3)
+	settingsWorkspaceView // Settings as full workspace (Phase 3)
 )
+
+// WorkspaceID uniquely identifies a workspace in the nav rail.
+type WorkspaceID int
+
+const (
+	WorkspaceChat      WorkspaceID = iota
+	WorkspaceTasks
+	WorkspaceTools
+	WorkspaceAgents
+	WorkspaceMemory
+	WorkspaceAnalytics
+	WorkspaceSettings
+)
+
+// workspaceToState maps WorkspaceID to the corresponding sessionState.
+var workspaceToState = map[WorkspaceID]sessionState{
+	WorkspaceChat:      chatView,
+	WorkspaceTasks:     taskView,
+	WorkspaceTools:     toolsTableView,
+	WorkspaceAgents:    agentsView,
+	WorkspaceMemory:    memoryView,
+	WorkspaceAnalytics: analyticsView,
+	WorkspaceSettings:  settingsWorkspaceView,
+}
 
 // hitlPendingItem holds a queued HITL request alongside the response channel
 // that the requesting goroutine is blocking on.
@@ -321,6 +349,16 @@ type Model struct {
 
 	// ── Compact tab bar ──────────────────────────────────────────────────
 	compactTabs bool
+
+	// ── Self-Improvement state ────────────────────────────────────────────
+	// evolveSnapshot holds the latest SI driver state for dashboard rendering.
+	evolveSnapshot selfimprove.SISnapshot
+
+	// ── Workspace Navigation (Phase 3) ────────────────────────────────────
+	// currentWorkspace tracks the active workspace (0-6 for the 7 spaces).
+	currentWorkspace WorkspaceID
+	// navRailVisible controls whether the left nav rail is shown.
+	navRailVisible bool
 }
 
 // ── Activity panel types ───────────────────────────────────────────────────
@@ -493,9 +531,9 @@ func NewModel(orch *engine.Orchestrator, pm *process.Manager, modelName, consult
 	}
 
 	sp := spinner.New()
-	sp.Spinner = BlockGSpinner()
-	// Use GrokBlue for the spinner
-	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(GrokBlue))
+	sp.Spinner = RadiationSpinner()
+	// Use Cyan for the radiation spinner
+	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("51"))
 
 	csp := spinner.New()
 	csp.Spinner = ConsultantSpinner()
@@ -566,6 +604,8 @@ func NewModel(orch *engine.Orchestrator, pm *process.Manager, modelName, consult
 		toolStartTimes:      make(map[string]time.Time),
 		livePanel:           NewLiveToolsPanel(),
 		authInput:           textinput.New(),
+		currentWorkspace:    WorkspaceChat,
+		navRailVisible:      true,
 	}
 	m.authInput.Placeholder = "Enter credential..."
 	m.authInput.Focus()
@@ -582,6 +622,9 @@ func NewModel(orch *engine.Orchestrator, pm *process.Manager, modelName, consult
 	if branch := currentGitBranch(); branch != "" {
 		m.statusBar.SetGitBranch(branch)
 	}
+
+	// Set provider names in status bar (Phase 3)
+	m.statusBar.SetProviders(modelName, consultantName)
 
 	// Connect tool registry if orchestrator has one
 	if orch != nil && orch.Registry != nil {
@@ -640,6 +683,29 @@ func (m *Model) Init() tea.Cmd {
 		m.pollAllConfiguredProviders(), // populate model lists from all keyed providers on startup
 		providerPollTick(),             // schedule periodic re-poll every 5 minutes
 	)
+}
+
+// switchWorkspace changes the active workspace and updates the sessionState (Phase 3).
+func (m *Model) switchWorkspace(w WorkspaceID) {
+	m.currentWorkspace = w
+	if s, ok := workspaceToState[w]; ok {
+		m.state = s
+	}
+	m.recalcViewportWidth()
+	m.recalcViewportHeight()
+}
+
+// recalcViewportWidth recalculates viewport width based on nav rail visibility (Phase 3).
+func (m *Model) recalcViewportWidth() {
+	w := m.width
+	if m.navRailVisible {
+		w -= navRailWidth
+	}
+	if w < 40 {
+		w = 40
+	}
+	m.viewport.Width = w
+	m.textarea.SetWidth(w - 4)
 }
 
 // Helper methods
@@ -1981,6 +2047,12 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		}
 		var sreEnabledSetter func(bool) error
 		var ensembleSetter func(bool) error
+		var hitlSettingsGetter func() interface{}
+		var hitlSettingsSetter func(interface{}) error
+		var evolutionSettingsGetter func() interface{}
+		var evolutionSettingsSetter func(interface{}) error
+		var systemMonitorSettingsGetter func() interface{}
+		var systemMonitorSettingsSetter func(interface{}) error
 		sreEnabled, ensembleEnabled := false, false
 		if m.commands != nil && m.commands.Orch != nil {
 			if m.commands.Orch.SetSREEnabled != nil {
@@ -1995,8 +2067,20 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 			if m.commands.Orch.GetEnsembleEnabled != nil {
 				ensembleEnabled = m.commands.Orch.GetEnsembleEnabled()
 			}
+			if m.commands.Orch.GetHITLSettings != nil {
+				hitlSettingsGetter = m.commands.Orch.GetHITLSettings
+			}
+			if m.commands.Orch.SetHITLSettings != nil {
+				hitlSettingsSetter = m.commands.Orch.SetHITLSettings
+			}
+			if m.commands.Orch.GetEvolutionSettings != nil {
+				evolutionSettingsGetter = m.commands.Orch.GetEvolutionSettings
+			}
+			if m.commands.Orch.SetEvolutionSettings != nil {
+				evolutionSettingsSetter = m.commands.Orch.SetEvolutionSettings
+			}
 		}
-		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn, providerSetter, m.integrationGetter, m.integrationSetter, sreEnabled, ensembleEnabled, sreEnabledSetter, ensembleSetter)
+		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn, providerSetter, m.integrationGetter, m.integrationSetter, sreEnabled, ensembleEnabled, sreEnabledSetter, ensembleSetter, hitlSettingsGetter, hitlSettingsSetter, evolutionSettingsGetter, evolutionSettingsSetter, systemMonitorSettingsGetter, systemMonitorSettingsSetter)
 		return nil
 
 	case strings.HasPrefix(result, "SAVE_SESSION_OK:"):
@@ -2662,7 +2746,40 @@ func (m *Model) callOrchestrator(prompt string) tea.Cmd {
 			}
 		})
 	}
-		// Call orchestrator with streaming support
+
+	// Wire SI notify callback so the TUI can display SI status messages as toasts.
+	if m.orchestrator != nil {
+		m.orchestrator.SetSINotifyCallback(func(msg string) {
+			if prog := m.getProgram(); prog != nil {
+				prog.Send(ToastMsg{
+					Text:     msg,
+					Priority: PriorityInfo,
+				})
+			}
+		})
+		// Wire phase callback for immediate re-render on phase changes (fast path)
+		m.orchestrator.SetEvolvePhaseCallback(func() {
+			if prog := m.getProgram(); prog != nil {
+				prog.Send(EvolveTickMsg{
+					Snapshot: m.orchestrator.SISnapshot(),
+				})
+			}
+		})
+		// Start a ticker for SI snapshots (for dashboard updates, fallback to 5s)
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				if prog := m.getProgram(); prog != nil {
+					prog.Send(EvolveTickMsg{
+						Snapshot: m.orchestrator.SISnapshot(),
+					})
+				}
+			}
+		}()
+	}
+
+	// Call orchestrator with streaming support
 		err := m.orchestrator.ExecuteTaskWithStreaming(ctx, prompt, streamCallback, toolCallback, toolStartCallback, interventionCallback, nil)
 		if err != nil {
 			return ErrorMsg{Err: err}
@@ -2932,15 +3049,17 @@ func (m *Model) switchPrimaryModel(modelID string) error {
 	if !ok {
 		return fmt.Errorf("model not found in registry: %s", modelID)
 	}
-	providerEntry, ok := m.providerRegistry.GetProvider(modelDef.Provider)
+	// Note: We don't need to extract the provider here; SetPrimary will do that.
+	// Just verify the provider exists in the registry.
+	_, ok = m.providerRegistry.GetProvider(modelDef.Provider)
 	if !ok {
 		return fmt.Errorf("provider not found: %s", modelDef.Provider)
 	}
-	factory, ok := providerEntry.(ai.AIProvider)
-	if !ok {
-		return fmt.Errorf("provider does not implement AIProvider interface")
+	if m.orchestrator != nil && m.orchestrator.ProviderCoord != nil {
+		if err := m.orchestrator.ProviderCoord.SetPrimary(context.Background(), string(modelDef.Provider), modelID); err != nil {
+			return fmt.Errorf("failed to set primary provider: %w", err)
+		}
 	}
-	m.orchestrator.Primary = factory.WithModel(modelID)
 	m.currentModel = modelID
 	m.commands.UpdateCurrentPrimary(commands.ModelInfo{
 		ID:       modelID,
@@ -2960,15 +3079,17 @@ func (m *Model) switchConsultantModel(modelID string) error {
 	if !ok {
 		return fmt.Errorf("model not found in registry: %s", modelID)
 	}
-	providerEntry, ok := m.providerRegistry.GetProvider(modelDef.Provider)
+	// Note: We don't need to extract the provider here; SetSecondary will do that.
+	// Just verify the provider exists in the registry.
+	_, ok = m.providerRegistry.GetProvider(modelDef.Provider)
 	if !ok {
 		return fmt.Errorf("provider not found: %s", modelDef.Provider)
 	}
-	factory, ok := providerEntry.(ai.AIProvider)
-	if !ok {
-		return fmt.Errorf("provider does not implement AIProvider interface")
+	if m.orchestrator != nil && m.orchestrator.ProviderCoord != nil {
+		if err := m.orchestrator.ProviderCoord.SetSecondary(context.Background(), string(modelDef.Provider), modelID); err != nil {
+			return fmt.Errorf("failed to set consultant provider: %w", err)
+		}
 	}
-	m.orchestrator.Consultant = factory.WithModel(modelID)
 	m.commands.UpdateCurrentConsultant(commands.ModelInfo{
 		ID:       modelID,
 		Name:     modelDef.Name,

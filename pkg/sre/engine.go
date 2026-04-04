@@ -16,8 +16,8 @@ import (
 type CoSEngine struct {
 	mu              sync.RWMutex
 	phase           SREPhase
-	HypothesisTurns int       // default 3
-	PruneTurns      int       // default 6
+	HypothesisTurns int          // default 3
+	PruneTurns      int          // default 6
 	spark           *spark.SPARK // nil-safe; used for DriveScore quality gate
 	onTransition    func(from, to SREPhase)
 	extendedPrune   int // 0–2 extra turns added

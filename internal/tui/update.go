@@ -114,6 +114,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.statusBar.UpdateState(msg.ModelID, m.analytics.TotalTokens, nil)
 		m.refreshModelSelectLists()
+	case ProviderNamesUpdatedMsg:
+		m.statusBar.SetProviders(msg.PrimaryName, msg.ConsultantName)
 	case ProviderStatusMsg:
 		m.modelSelect.providerKeys = msg.Statuses
 	case ProviderPollTickMsg:
@@ -130,6 +132,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, discoveryPollTick())
 	case DiscoveryUpdateMsg:
 		m.discoveredModels = msg.Models
+	case EvolveTickMsg:
+		m.evolveSnapshot = msg.Snapshot
+		if msg.Snapshot.Enabled {
+			cmds = append(cmds, evolveTick(msg.Snapshot))
+		}
 	case LightGlistenTickMsg:
 		m.glistenPos += 0.025
 		if m.glistenPos >= 1.0 {
@@ -145,8 +152,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// After splash is dismissed, stop scheduling ticks — zero wasted cycles.
 
 	case sidePanelTickMsg:
-		if m.sidePanelOpen {
-			cmds = append(cmds, sidePanelTick()) // keep polling while open
+		if m.sidePanelWidth > 0 {
+			cmds = append(cmds, sidePanelTick()) // keep polling while visible
 		}
 
 	case ToastMsg:
@@ -400,6 +407,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var sreEnabledSetter func(bool) error
 			var ensembleSetter func(bool) error
+			var hitlSettingsGetter func() interface{}
+			var hitlSettingsSetter func(interface{}) error
+			var evolutionSettingsGetter func() interface{}
+			var evolutionSettingsSetter func(interface{}) error
+			var systemMonitorSettingsGetter func() interface{}
+			var systemMonitorSettingsSetter func(interface{}) error
 			sreEnabled, ensembleEnabled := false, false
 			if m.commands != nil && m.commands.Orch != nil {
 				if m.commands.Orch.SetSREEnabled != nil {
@@ -412,10 +425,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					sreEnabled = m.commands.Orch.GetSREEnabled()
 				}
 				if m.commands.Orch.GetEnsembleEnabled != nil {
+			}
+			if m.commands.Orch.GetHITLSettings != nil {
+				hitlSettingsGetter = m.commands.Orch.GetHITLSettings
+			}
+			if m.commands.Orch.SetHITLSettings != nil {
+				hitlSettingsSetter = m.commands.Orch.SetHITLSettings
+			}
+			if m.commands.Orch.GetEvolutionSettings != nil {
+				evolutionSettingsGetter = m.commands.Orch.GetEvolutionSettings
+			}
+			if m.commands.Orch.SetEvolutionSettings != nil {
+				evolutionSettingsSetter = m.commands.Orch.SetEvolutionSettings
 					ensembleEnabled = m.commands.Orch.GetEnsembleEnabled()
 				}
+			if m.commands.Orch.GetSystemMonitorSettings != nil {
+				systemMonitorSettingsGetter = m.commands.Orch.GetSystemMonitorSettings
 			}
-			m.activeOverlay = NewSettingsOverlay(m.width, m.height, orchAdapter, toolReg, appStateSetter, debugOn, providerSetter, m.integrationGetter, m.integrationSetter, sreEnabled, ensembleEnabled, sreEnabledSetter, ensembleSetter)
+			if m.commands.Orch.SetSystemMonitorSettings != nil {
+				systemMonitorSettingsSetter = m.commands.Orch.SetSystemMonitorSettings
+			}
+			}
+			m.activeOverlay = NewSettingsOverlay(m.width, m.height, orchAdapter, toolReg, appStateSetter, debugOn, providerSetter, m.integrationGetter, m.integrationSetter, sreEnabled, ensembleEnabled, sreEnabledSetter, ensembleSetter, hitlSettingsGetter, hitlSettingsSetter, evolutionSettingsGetter, evolutionSettingsSetter, systemMonitorSettingsGetter, systemMonitorSettingsSetter)
 			return m, nil
 		case hotkeys.CmdModelsSelect:
 			m.state = modelListView
@@ -991,7 +1022,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.analytics.ContextMaxToks > 0 {
 				m.analytics.ContextUsedPct = float64(actualUsed) / float64(m.analytics.ContextMaxToks)
 			}
-			
+
 			// Update session total and rate sparkline in real-time
 			// We use the cumulative session total (ContextUsedToks is per-session historically)
 			// totalTokensSum := m.analytics.TotalTokens (already includes previous turns)
@@ -1001,7 +1032,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.generating && liveToks > 0 {
 				m.analytics.RecordTokens(m.analytics.TotalTokens+liveToks, m.analytics.SessionCostUS)
 			}
-			
+
 			liveToks += m.analytics.ContextUsedToks
 		}
 		m.statusBar.UpdateState(
@@ -1127,18 +1158,51 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 		viewportHeight = 10
 	}
 
-	// Update viewport dimensions (account for side panel).
-	if m.sidePanelOpen {
-		m.viewport.Width = m.width - m.sidePanelWidth - 1
-	} else {
-		m.viewport.Width = m.width
+	// ── Adaptive dashboard sidebar (permanent, width-responsive) ─────────────
+	// Portrait mobile / narrow terminal (< 80 cols): hide sidebar.
+	// Compact terminal (80–99 cols): 20% sidebar (~16–19 cols).
+	// Full-width terminal (>= 100 cols): 28% sidebar (≥24 cols).
+	const (
+		sidebarFullMinWidth    = 100
+		sidebarCompactMinWidth = 80
+	)
+	switch {
+	case m.width < sidebarCompactMinWidth:
+		m.sidePanelWidth = 0   // portrait mobile: full-width chat
+	case m.width < sidebarFullMinWidth:
+		m.sidePanelWidth = m.width * 20 / 100
+		if m.sidePanelWidth < 18 {
+			m.sidePanelWidth = 18
+		}
+	default:
+		m.sidePanelWidth = m.width * 28 / 100
+		if m.sidePanelWidth < 24 {
+			m.sidePanelWidth = 24
+		}
 	}
+
+	// Viewport width accounts for active sidebar and nav rail (Phase 3)
+	viewportW := m.width
+	if m.sidePanelWidth > 0 {
+		viewportW -= m.sidePanelWidth + 1
+	}
+	if m.navRailVisible {
+		viewportW -= navRailWidth
+	}
+	if viewportW < 40 {
+		viewportW = 40
+	}
+	m.viewport.Width = viewportW
 	m.viewport.Height = viewportHeight
 	// recalcViewportHeight() uses the same logic; keep in sync via that helper
 	// for any call sites outside of resize (e.g., stream completion, ESC cancel).
 
-	// Update textarea width
-	m.textarea.SetWidth(m.width - 2)
+	// Update textarea width (use viewport width to account for sidebar)
+	textareaW := m.viewport.Width - 2
+	if textareaW < 20 {
+		textareaW = 20
+	}
+	m.textarea.SetWidth(textareaW)
 
 	// Update help width
 	m.help.Width = m.width
@@ -1151,13 +1215,18 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	// WindowSizeMsg (Bubble Tea sends these frequently) caused the primary
 	// performance regression. The renderer word-wrap is the only property that
 	// depends on width, so skip creation when width is unchanged.
-	if m.width != m.rendererWidth || !m.ready {
+	// CRITICAL: Use viewport.Width (accounting for sidebar) not m.width.
+	if m.viewport.Width != m.rendererWidth || !m.ready {
 		var renderer *glamour.TermRenderer
 		var err error
+		wrapWidth := m.viewport.Width - 4
+		if wrapWidth < 40 {
+			wrapWidth = 40
+		}
 		if m.theme == "light" {
 			renderer, err = glamour.NewTermRenderer(
 				glamour.WithStandardStyle("light"),
-				glamour.WithWordWrap(m.width-4),
+				glamour.WithWordWrap(wrapWidth),
 			)
 		} else {
 			// dracula / dark: use CustomGlamourStyle() — NOT WithStandardStyle("dark").
@@ -1165,12 +1234,12 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 			// that bleed via ANSI reset sequences into surrounding unstyled text.
 			renderer, err = glamour.NewTermRenderer(
 				glamour.WithStyles(CustomGlamourStyle()),
-				glamour.WithWordWrap(m.width-4),
+				glamour.WithWordWrap(wrapWidth),
 			)
 		}
 		if err == nil {
 			m.glamour = renderer
-			m.rendererWidth = m.width
+			m.rendererWidth = m.viewport.Width
 		}
 	}
 
@@ -1188,7 +1257,13 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 	m.ready = true
 
-	return m, textarea.Blink
+	// Schedule sidebar refresh if active
+	var cmd tea.Cmd = textarea.Blink
+	if m.sidePanelWidth > 0 {
+		cmd = tea.Batch(textarea.Blink, sidePanelTick())
+	}
+
+	return m, cmd
 }
 
 // handleKeyMsg handles keyboard input
@@ -1379,6 +1454,12 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		var sreEnabledSetter func(bool) error
 		var ensembleSetter func(bool) error
+			var hitlSettingsGetter func() interface{}
+			var hitlSettingsSetter func(interface{}) error
+			var evolutionSettingsGetter func() interface{}
+			var evolutionSettingsSetter func(interface{}) error
+		var systemMonitorSettingsGetter func() interface{}
+		var systemMonitorSettingsSetter func(interface{}) error
 		sreEnabled, ensembleEnabled := false, false
 		if m.commands != nil && m.commands.Orch != nil {
 			if m.commands.Orch.SetSREEnabled != nil {
@@ -1391,10 +1472,28 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				sreEnabled = m.commands.Orch.GetSREEnabled()
 			}
 			if m.commands.Orch.GetEnsembleEnabled != nil {
+			}
+			if m.commands.Orch.GetHITLSettings != nil {
+				hitlSettingsGetter = m.commands.Orch.GetHITLSettings
+			}
+			if m.commands.Orch.SetHITLSettings != nil {
+				hitlSettingsSetter = m.commands.Orch.SetHITLSettings
+			}
+			if m.commands.Orch.GetEvolutionSettings != nil {
+				evolutionSettingsGetter = m.commands.Orch.GetEvolutionSettings
+			}
+			if m.commands.Orch.SetEvolutionSettings != nil {
+				evolutionSettingsSetter = m.commands.Orch.SetEvolutionSettings
 				ensembleEnabled = m.commands.Orch.GetEnsembleEnabled()
 			}
+			if m.commands.Orch.GetSystemMonitorSettings != nil {
+				systemMonitorSettingsGetter = m.commands.Orch.GetSystemMonitorSettings
+			}
+			if m.commands.Orch.SetSystemMonitorSettings != nil {
+				systemMonitorSettingsSetter = m.commands.Orch.SetSystemMonitorSettings
+			}
 		}
-		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn, providerSetter, m.integrationGetter, m.integrationSetter, sreEnabled, ensembleEnabled, sreEnabledSetter, ensembleSetter)
+		m.activeOverlay = NewSettingsOverlay(m.width, m.height, m.commands.Orch, toolReg, appStateSetter, debugOn, providerSetter, m.integrationGetter, m.integrationSetter, sreEnabled, ensembleEnabled, sreEnabledSetter, ensembleSetter, hitlSettingsGetter, hitlSettingsSetter, evolutionSettingsGetter, evolutionSettingsSetter, systemMonitorSettingsGetter, systemMonitorSettingsSetter)
 		return m, nil
 
 	// ctrl+d (0x04) is intercepted by the hotkey manager (CmdDuplicateSess).
@@ -1422,21 +1521,36 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.recalcViewportHeight()
 		return m, nil
 
+	// Workspace Navigation (Phase 3)
+	case key.Matches(msg, m.keymap.WorkspaceChat):
+		m.switchWorkspace(WorkspaceChat)
+		return m, nil
+	case key.Matches(msg, m.keymap.WorkspaceTasks):
+		m.switchWorkspace(WorkspaceTasks)
+		return m, nil
+	case key.Matches(msg, m.keymap.WorkspaceTools):
+		m.switchWorkspace(WorkspaceTools)
+		return m, nil
+	case key.Matches(msg, m.keymap.WorkspaceAgents):
+		m.switchWorkspace(WorkspaceAgents)
+		return m, nil
+	case key.Matches(msg, m.keymap.WorkspaceMemory):
+		m.switchWorkspace(WorkspaceMemory)
+		return m, nil
+	case key.Matches(msg, m.keymap.WorkspaceAnalytics):
+		m.switchWorkspace(WorkspaceAnalytics)
+		return m, nil
+	case key.Matches(msg, m.keymap.WorkspaceSettings):
+		m.switchWorkspace(WorkspaceSettings)
+		return m, nil
+	case key.Matches(msg, m.keymap.ToggleNavRail):
+		m.navRailVisible = !m.navRailVisible
+		m.recalcViewportWidth()
+		m.recalcViewportHeight()
+		return m, nil
+
 	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+|"), key.WithHelp("ctrl+|", "side panel"))):
-		m.sidePanelOpen = !m.sidePanelOpen
-		if m.sidePanelOpen {
-			m.sidePanelWidth = m.width * 28 / 100
-			if m.sidePanelWidth < 24 {
-				m.sidePanelWidth = 24
-			}
-			// V.2: Do NOT change viewport.Width or rendererWidth — keeps glamour
-			// render width fixed so text doesn't reflow when panel opens.
-			m.recalcViewportHeight()
-			return m, sidePanelTick()
-		} else {
-			m.sidePanelWidth = 0
-			m.recalcViewportHeight()
-		}
+		// Sidebar is always-on; no-op (ctrl+| preserved for keybindings compatibility).
 		return m, nil
 
 	case key.Matches(msg, m.keymap.Help):
@@ -1657,17 +1771,20 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		// Input completion using Gemini
 		input := m.textarea.Value()
-		if input != "" && m.orchestrator != nil && m.orchestrator.Consultant != nil {
-			// Trigger completion in background
-			return m, func() tea.Msg {
-				ctx := context.Background()
-				prompt := fmt.Sprintf("Complete the following user input for a chat interface. Provide ONLY the completion suffix, nothing else. If no clear completion is possible, return empty string.\n\nInput: %s", input)
+		if input != "" && m.orchestrator != nil {
+			consultant := m.orchestrator.Consultant()
+			if consultant != nil {
+				// Trigger completion in background
+				return m, func() tea.Msg {
+					ctx := context.Background()
+					prompt := fmt.Sprintf("Complete the following user input for a chat interface. Provide ONLY the completion suffix, nothing else. If no clear completion is possible, return empty string.\n\nInput: %s", input)
 
-				completion, err := m.orchestrator.Consultant.Generate(ctx, prompt)
-				if err == nil && completion != "" {
-					return CompletionMsg{Content: completion}
+					completion, err := consultant.Generate(ctx, prompt)
+					if err == nil && completion != "" {
+						return CompletionMsg{Content: completion}
+					}
+					return nil
 				}
-				return nil
 			}
 		}
 		// Fallback if empty or no consultant
@@ -1935,7 +2052,7 @@ func (m *Model) handleToolExecution(msg ToolExecutionMsg) (tea.Model, tea.Cmd) {
 					Description:  msg.Result.Output,
 					ResponseChan: respChan,
 				})
-				
+
 				// Block until credential received
 				credential := <-respChan
 				if credential != "" {
@@ -1944,7 +2061,7 @@ func (m *Model) handleToolExecution(msg ToolExecutionMsg) (tea.Model, tea.Cmd) {
 					if m.orchestrator != nil {
 						status = m.orchestrator.SetProviderKey(context.Background(), "google", credential)
 					}
-					
+
 					success := !strings.Contains(strings.ToLower(status), "failed")
 					errMsg := ""
 					if !success {

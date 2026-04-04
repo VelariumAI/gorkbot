@@ -21,11 +21,11 @@ const (
 
 // geminiCachedContent is the request body for POST /v1beta/cachedContents.
 type geminiCachedContent struct {
-	Model             string            `json:"model"`
-	Contents          []geminiContent   `json:"contents,omitempty"`
-	SystemInstruction *geminiSysInst    `json:"systemInstruction,omitempty"`
-	TTL               string            `json:"ttl,omitempty"`
-	DisplayName       string            `json:"displayName,omitempty"`
+	Model             string          `json:"model"`
+	Contents          []geminiContent `json:"contents,omitempty"`
+	SystemInstruction *geminiSysInst  `json:"systemInstruction,omitempty"`
+	TTL               string          `json:"ttl,omitempty"`
+	DisplayName       string          `json:"displayName,omitempty"`
 }
 
 type geminiContent struct {

@@ -11,7 +11,8 @@ LLAMA_ROOT := ./ext/llama.cpp
 .PHONY: all build clean install install-global install-dev \
         build-windows build-android build-linux build-security \
         build-llm-bridge build-llm bootstrap-llm clean-llm download-nomic build-web \
-        build-all build-lite build-sec build-plugins build-gorkweb unleash setup setup-auto
+        build-all build-lite build-sec build-plugins build-gorkweb unleash setup setup-auto \
+        promote-public promote-public-apply
 
 all: build build-web
 
@@ -25,6 +26,14 @@ setup:
 # Non-interactive default path for quick onboarding.
 setup-auto:
 	@bash scripts/setup_wizard.sh --auto
+
+# Promote only production-grade content to the public mirror.
+# Defaults to dry-run safety mode.
+promote-public:
+	@bash scripts/promote_to_public.sh
+
+promote-public-apply:
+	@DRY_RUN=0 bash scripts/promote_to_public.sh
 
 # ── Specialized Binaries (Task 5.5) ──────────────────────────────────────────
 

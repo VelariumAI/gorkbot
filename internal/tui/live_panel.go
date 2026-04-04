@@ -11,21 +11,21 @@ import (
 
 // Color constants for tool categories (mirrored from style.go to avoid circular imports)
 const (
-	toolCyanColor   = "#8BE9FD"  // File operations
-	toolOrangeColor = "#FFB86C"  // Bash/shell
-	toolPinkColor   = "#FF79C6"  // Git operations
-	toolPurpleColor = "#BD93F9"  // Web operations
-	toolRedColor    = "#FF5555"  // Security tools
-	toolBlueColor   = "#00D9FF"  // Agent/system tools
-	toolYellowColor = "#F1FA8C"  // Hashed/special
-	toolGreenColor  = "#50FA7B"  // Default
+	toolCyanColor   = "#8BE9FD" // File operations
+	toolOrangeColor = "#FFB86C" // Bash/shell
+	toolPinkColor   = "#FF79C6" // Git operations
+	toolPurpleColor = "#BD93F9" // Web operations
+	toolRedColor    = "#FF5555" // Security tools
+	toolBlueColor   = "#00D9FF" // Agent/system tools
+	toolYellowColor = "#F1FA8C" // Hashed/special
+	toolGreenColor  = "#50FA7B" // Default
 )
 
 // liveBoxState represents the current expansion state of a tool box
 type liveBoxState int
 
 const (
-	liveBoxCompact liveBoxState = iota  // 1 line
+	liveBoxCompact  liveBoxState = iota // 1 line
 	liveBoxExpanded                     // 5 lines
 	liveBoxFull                         // 15 lines
 )
@@ -40,7 +40,7 @@ type LiveToolBox struct {
 	result      *tools.ToolResult
 	startTime   time.Time
 	state       liveBoxState
-	icon        string       // ⟳ running, ✓ success, ✗ failed
+	icon        string // ⟳ running, ✓ success, ✗ failed
 	accentColor string
 	completedAt time.Time
 }
@@ -48,7 +48,7 @@ type LiveToolBox struct {
 // LiveToolsPanel manages the live display of tools running in parallel
 type LiveToolsPanel struct {
 	boxes        []*LiveToolBox
-	focusIdx     int       // -1 = none
+	focusIdx     int // -1 = none
 	width        int
 	totalElapsed time.Duration
 	sessionStart time.Time

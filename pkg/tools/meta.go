@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -24,6 +25,41 @@ func NewCreateToolTool() *CreateToolTool {
 			defaultPermission:  PermissionOnce,
 		},
 	}
+}
+
+// validateCommandTemplate checks command for dangerous patterns that could allow code injection
+// or data destruction. Returns a slice of violation descriptions; empty slice means safe.
+func validateCommandTemplate(command string) []string {
+	patterns := []struct {
+		regex       string
+		description string
+	}{
+		{`\brm\s+-[^-]*r`, "recursive deletion (rm -r, rm -rf)"},
+		{`\|.*\bbash\b`, "pipe-to-bash (code injection vector)"},
+		{`\|.*\bsh\b`, "pipe-to-shell (code injection vector)"},
+		{`base64.*\|`, "base64-to-shell (obfuscated code execution)"},
+		{`\beval\s*\(`, "eval() call (code injection)"},
+		{`\bdd\s+if=`, "dd command (data destruction risk)"},
+		{`>\s*/dev/`, "write to device file (system corruption)"},
+		{`\bnetcat\b|\bnc\s`, "netcat (raw network socket access)"},
+		{`\bpython[23]?\s+-c`, "inline Python execution"},
+		{`\bperl\s+-e`, "inline Perl execution"},
+		{`\bchmod\s+[0-7]*7[0-7]\s`, "world-writable permissions"},
+		{`\bsudo\b`, "sudo (privilege escalation)"},
+		{`>/etc/|>/bin/|>/usr/`, "write to system directories"},
+	}
+
+	var violations []string
+	for _, p := range patterns {
+		re, err := regexp.Compile("(?i)" + p.regex)
+		if err != nil {
+			continue
+		}
+		if re.MatchString(command) {
+			violations = append(violations, p.description)
+		}
+	}
+	return violations
 }
 
 func (t *CreateToolTool) Parameters() json.RawMessage {
@@ -81,6 +117,16 @@ func (t *CreateToolTool) Execute(ctx context.Context, params map[string]interfac
 	command, ok := params["command"].(string)
 	if !ok {
 		return &ToolResult{Success: false, Error: "command is required"}, fmt.Errorf("command required")
+	}
+
+	// Validate command template for dangerous patterns (gosec gate)
+	if violations := validateCommandTemplate(command); len(violations) > 0 {
+		msg := "command template contains dangerous patterns:\n"
+		for _, v := range violations {
+			msg += "  - " + v + "\n"
+		}
+		msg += "\nThis tool cannot be created for security reasons."
+		return &ToolResult{Success: false, Error: msg}, fmt.Errorf("validation failed: %s", msg)
 	}
 
 	category := "custom"
@@ -173,6 +219,29 @@ func (t *CreateToolTool) Execute(ctx context.Context, params map[string]interfac
 		status = "WARNING: registry unavailable — tool NOT registered live; restart required"
 	} else if persistErr != nil {
 		status = fmt.Sprintf("registered live but persistence failed (%v); will not survive restart", persistErr)
+	}
+
+	// Log tool creation to audit database for forensic tracking
+	auditDB, hasAuditDB := ctx.Value(auditDBContextKey).(*AuditDB)
+	if hasAuditDB && auditDB != nil {
+		// Serialize parameters to JSON
+		paramBytes, _ := json.Marshal(params)
+		paramsJSON := string(paramBytes)
+		if len(paramsJSON) > 4096 {
+			paramsJSON = paramsJSON[:4096] + "…(truncated)"
+		}
+
+		// Violations already captured during validation
+		violations := validateCommandTemplate(command)
+
+		auditDB.LogToolCreation(
+			name,
+			command,
+			paramsJSON,
+			true, // approved
+			"Tool created via create_tool",
+			violations,
+		)
 	}
 
 	return &ToolResult{
@@ -773,8 +842,8 @@ func (t *ModifyToolTool) Execute(ctx context.Context, params map[string]interfac
 	if isStatic {
 		sb.WriteString("Type: Static (compiled-in) → overridden by dynamic wrapper\n")
 		sb.WriteString("Rebuild required for permanent integration.\n")
-		sb.WriteString("  Run: go build -o gorkbot ./cmd/gorkbot/\n")
-		sb.WriteString("  (Gorkbot will notify you on exit if a rebuild is pending.)\n")
+		sb.WriteString("  Run: go build -o grokster ./cmd/grokster/\n")
+		sb.WriteString("  (Grokster will notify you on exit if a rebuild is pending.)\n")
 	} else {
 		sb.WriteString("Type: Dynamic — hot-loaded, no rebuild needed.\n")
 	}

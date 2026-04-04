@@ -49,7 +49,7 @@ type EvolutionaryDirective struct {
 	Kind      DirectiveKind
 	ToolName  string
 	Rationale string
-	Magnitude float64    // 0–1 urgency/confidence
+	Magnitude float64 // 0–1 urgency/confidence
 	CreatedAt time.Time
 	AppliedAt *time.Time
 	Applied   bool
@@ -82,7 +82,7 @@ type ResearchObjective struct {
 	ID          string
 	Topic       string
 	Priority    float64
-	Source      string     // "heuristic" | "llm" | "diagnosis"
+	Source      string // "heuristic" | "llm" | "diagnosis"
 	CreatedAt   time.Time
 	CompletedAt *time.Time
 }
@@ -92,7 +92,7 @@ type SPARKState struct {
 	CapturedAt       time.Time
 	TIISnapshot      []TIIEntry
 	IDLSnapshot      []IDLEntry
-	MemoryPressure   float64            // 0–1 from AgeMem usage stats
+	MemoryPressure   float64 // 0–1 from AgeMem usage stats
 	ActiveDirectives int
 	DriveScore       float64
 	TopObjective     *ResearchObjective
