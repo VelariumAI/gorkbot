@@ -2,7 +2,6 @@ cmd/
 internal/
 pkg/
 configs/
-ext/
 scripts/bootstrap_native_llm.sh
 scripts/build_llm_bridge.sh
 scripts/write_launcher.sh
