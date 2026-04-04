@@ -7,6 +7,23 @@ on:
     branches: [ main, master ]
 
 jobs:
+  publish-readiness:
+    name: Publish Readiness Gates
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Version consistency gate
+        run: bash scripts/check_version_consistency.sh
+
+      - name: Promotion allowlist integrity gate
+        run: bash scripts/check_promotion_allowlist.sh
+
+      - name: Public repository hygiene gate
+        run: bash scripts/check_public_hygiene.sh
+
   # Multi-platform build validation
   cross-platform-build:
     name: Build - ${{ matrix.os }} (${{ matrix.arch }})
@@ -71,6 +88,12 @@ jobs:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
         run: go build -v -o bin/gorkbot-${{ matrix.os }}-${{ matrix.arch }} ./cmd/gorkbot
+
+      - name: Build grokster
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+        run: go build -v -o bin/grokster-${{ matrix.os }}-${{ matrix.arch }} ./cmd/grokster
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -212,18 +235,20 @@ jobs:
           GOARCH: ${{ steps.extract.outputs.goarch }}
         run: |
           go build -v -x ./cmd/gorkbot
+          go build -v -x ./cmd/grokster
           echo "✅ Build successful for ${{ matrix.platform }}"
 
   # Summary status check
   build-status:
     name: Build Status
     runs-on: ubuntu-latest
-    needs: [cross-platform-build, security-scan, test, platform-validation]
+    needs: [publish-readiness, cross-platform-build, security-scan, test, platform-validation]
     if: always()
 
     steps:
       - name: Check build success
         if: |
+          needs.publish-readiness.result == 'failure' ||
           needs.cross-platform-build.result == 'failure' ||
           needs.security-scan.result == 'failure' ||
           needs.test.result == 'failure' ||
@@ -236,6 +261,7 @@ jobs:
         if: success()
         run: |
           echo "✅ All validations passed"
+          echo "  - Publish readiness: OK"
           echo "  - Cross-platform builds: OK"
           echo "  - Security scans: OK"
           echo "  - Tests: OK"

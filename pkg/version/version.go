@@ -3,14 +3,14 @@ package version
 import "fmt"
 
 // Internal versioning (development)
-const InternalVersion = "5.4.0"
+const InternalVersion = "6.2.0"
 
 // Public versioning (user-facing releases)
 const PublicMajor = 1
-const PublicMinor = 3
+const PublicMinor = 6
 const PublicBuild = 0
 const PublicRevision = 0 // 0 = no revision suffix
-const PublicStatus = "" // empty = stable release
+const PublicStatus = "rc" // alpha|beta|rc|"" (stable)
 
 // GetInternalVersion returns the internal development version.
 func GetInternalVersion() string {
@@ -45,12 +45,18 @@ func GetVersionInfo() string {
 const SENSEVersion = "1.9.0"
 const SREVersion = "1.0.0"
 const XSKILLVersion = "1.0.0"
+const HarnessVersion = "1.0.0" // Multi-session state tracking + verification
+const ResearchVersion = "1.0.0" // Deep research engine with context-efficient web browsing
+const SelfImproveVersion = "1.0.0" // Autonomous self-improvement orchestrator
 
 // GetSubsystemVersions returns a map of all subsystem versions.
 func GetSubsystemVersions() map[string]string {
 	return map[string]string{
-		"SENSE":  SENSEVersion,
-		"SRE":    SREVersion,
-		"XSKILL": XSKILLVersion,
+		"SENSE":        SENSEVersion,
+		"SRE":          SREVersion,
+		"XSKILL":       XSKILLVersion,
+		"Harness":      HarnessVersion,
+		"Research":     ResearchVersion,
+		"SelfImprove":  SelfImproveVersion,
 	}
 }

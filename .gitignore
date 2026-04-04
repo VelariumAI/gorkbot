@@ -112,6 +112,8 @@ bash_demo/
 blockmosaic/
 components/
 configs/
+!configs/
+!configs/promotion-allowlist.txt
 mcp_servers/
 orchestrator/
 plugins/
@@ -122,6 +124,9 @@ scripts/*
 !scripts/bootstrap_native_llm.sh
 !scripts/setup_wizard.sh
 !scripts/write_launcher.sh
+!scripts/check_version_consistency.sh
+!scripts/check_public_hygiene.sh
+!scripts/check_promotion_allowlist.sh
 
 # Generated & dynamic tools
 pkg/tools/custom/

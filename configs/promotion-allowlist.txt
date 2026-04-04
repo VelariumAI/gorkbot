@@ -1,0 +1,17 @@
+cmd/
+internal/
+pkg/
+configs/
+ext/
+scripts/bootstrap_native_llm.sh
+scripts/build_llm_bridge.sh
+scripts/write_launcher.sh
+scripts/setup_wizard.sh
+Makefile
+go.mod
+go.sum
+VERSION
+VERSIONING.md
+config.example.yaml
+docker-compose.yml
+.github/
