@@ -127,6 +127,8 @@ scripts/*
 !scripts/check_version_consistency.sh
 !scripts/check_public_hygiene.sh
 !scripts/check_promotion_allowlist.sh
+!scripts/check_promotion_manifest.sh
+!scripts/release_checklist.sh
 
 # Generated & dynamic tools
 pkg/tools/custom/

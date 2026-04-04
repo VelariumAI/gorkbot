@@ -12,7 +12,7 @@ LLAMA_ROOT := ./ext/llama.cpp
         build-windows build-android build-linux build-security \
         build-llm-bridge build-llm bootstrap-llm clean-llm download-nomic build-web \
         build-all build-lite build-sec build-plugins build-gorkweb unleash setup setup-auto \
-        promote-public promote-public-apply
+        release-check
 
 all: build build-web
 
@@ -27,13 +27,9 @@ setup:
 setup-auto:
 	@bash scripts/setup_wizard.sh --auto
 
-# Promote only production-grade content to the public mirror.
-# Defaults to dry-run safety mode.
-promote-public:
-	@bash scripts/promote_to_public.sh
-
-promote-public-apply:
-	@DRY_RUN=0 bash scripts/promote_to_public.sh
+# One-command public release readiness checklist.
+release-check:
+	@bash scripts/release_checklist.sh
 
 # ── Specialized Binaries (Task 5.5) ──────────────────────────────────────────
 
