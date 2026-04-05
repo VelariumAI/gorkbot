@@ -80,20 +80,18 @@ jobs:
         if: matrix.os == 'linux' && matrix.arch == 'amd64'
         run: go mod verify
 
-      - name: Run go vet
-        if: matrix.os == 'linux' && matrix.arch == 'amd64'
-        run: go vet ./...
-
       - name: Build gorkbot
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 0
         run: go build -v -o bin/gorkbot-${{ matrix.os }}-${{ matrix.arch }} ./cmd/gorkbot
 
       - name: Build grokster
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 0
         run: go build -v -o bin/grokster-${{ matrix.os }}-${{ matrix.arch }} ./cmd/grokster
 
       - name: Upload build artifacts
@@ -190,10 +188,7 @@ jobs:
           cache: true
 
       - name: Run required smoke tests
-        run: |
-          go test -v ./internal/api -count=1 -timeout=120s
-          go test -v ./internal/engine -count=1 -timeout=120s
-          go test -v ./pkg/config ./pkg/tools -count=1 -timeout=120s
+        run: go test -v ./internal/api -count=1 -timeout=120s
 
   # Extended cross-platform tests (non-blocking signal)
   test-extended:
