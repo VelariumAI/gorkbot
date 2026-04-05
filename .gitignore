@@ -172,3 +172,4 @@ ext/llama.cpp/cmake_build_*/
 *_grpc.pb.go
 *_pb2.py
 *_generated.go
+!pkg/distributed/transport_grpc.pb.go
