@@ -117,6 +117,8 @@ configs/
 mcp_servers/
 orchestrator/
 plugins/
+!internal/plugins/
+!internal/plugins/*.go
 server/
 scripts/*
 !scripts/
