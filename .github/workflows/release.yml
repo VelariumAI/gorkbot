@@ -13,6 +13,8 @@ on:
 
 permissions:
   contents: write
+  attestations: write
+  id-token: write
 
 concurrency:
   group: release-${{ github.ref_name }}
@@ -142,6 +144,26 @@ jobs:
           sha256sum gorkbot-* > SHA256SUMS
           cat SHA256SUMS
 
+      - name: Generate SBOM (SPDX-JSON)
+        uses: anchore/sbom-action@v0
+        with:
+          path: ./dist
+          format: spdx-json
+          output-file: ./dist/SBOM.spdx.json
+
+      - name: Verify dist contents
+        run: |
+          set -euo pipefail
+          ls -lh dist
+
+      - name: Attest release artifacts provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/gorkbot-*
+            dist/SHA256SUMS
+            dist/SBOM.spdx.json
+
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
@@ -149,8 +171,9 @@ jobs:
           files: |
             dist/gorkbot-*
             dist/SHA256SUMS
+            dist/SBOM.spdx.json
           generate_release_notes: true
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(needs.resolve-tag.outputs.release_tag, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

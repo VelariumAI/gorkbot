@@ -18,7 +18,7 @@ jobs:
       - name: Version consistency gate
         run: bash scripts/check_version_consistency.sh
 
-      - name: Tag/version sync gate (policy: public, optional when no tag)
+      - name: "Tag/version sync gate (policy: public, optional when no tag)"
         run: TAG_POLICY=public bash scripts/check_tag_version_sync.sh
 
       - name: Promotion allowlist integrity gate
@@ -199,7 +199,7 @@ jobs:
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
         with:
           files: ./coverage.out
           flags: unittests
