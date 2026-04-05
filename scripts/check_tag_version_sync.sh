@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
-TAG_INPUT="${2:-${RELEASE_TAG:-${GITHUB_REF_NAME:-}}}"
+TAG_INPUT="${2:-${RELEASE_TAG:-}}"
 POLICY="${3:-${TAG_POLICY:-public}}"
 
 version_file="${ROOT}/VERSION"
@@ -30,6 +30,14 @@ public_version="$(extract_after_header "$version_file" "## Public Release Versio
 internal_version="$(extract_after_header "$version_file" "## Internal Development Version")"
 [[ -n "$public_version" ]] || fail "could not parse public version from VERSION"
 [[ -n "$internal_version" ]] || fail "could not parse internal version from VERSION"
+
+if [[ -z "$TAG_INPUT" ]]; then
+  if [[ "${GITHUB_REF_TYPE:-}" == "tag" && -n "${GITHUB_REF_NAME:-}" ]]; then
+    TAG_INPUT="${GITHUB_REF_NAME}"
+  elif [[ -n "${GITHUB_REF:-}" && "${GITHUB_REF#refs/tags/}" != "${GITHUB_REF}" ]]; then
+    TAG_INPUT="${GITHUB_REF#refs/tags/}"
+  fi
+fi
 
 if [[ -z "$TAG_INPUT" ]]; then
   echo "[tag-sync] INFO: no tag provided; version consistency validated only"
