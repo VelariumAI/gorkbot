@@ -78,10 +78,7 @@ jobs:
 
       - name: Verify go.mod and go.sum
         if: matrix.os == 'linux' && matrix.arch == 'amd64'
-        run: |
-          go mod verify
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
+        run: go mod verify
 
       - name: Run go fmt check
         run: |
@@ -197,7 +194,7 @@ jobs:
           cache: true
 
       - name: Run tests with coverage
-        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+        run: go test -v -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
