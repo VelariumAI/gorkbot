@@ -18,6 +18,9 @@ jobs:
       - name: Version consistency gate
         run: bash scripts/check_version_consistency.sh
 
+      - name: Tag/version sync gate (policy: public, optional when no tag)
+        run: TAG_POLICY=public bash scripts/check_tag_version_sync.sh
+
       - name: Promotion allowlist integrity gate
         run: bash scripts/check_promotion_allowlist.sh
 

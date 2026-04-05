@@ -128,6 +128,7 @@ scripts/*
 !scripts/check_public_hygiene.sh
 !scripts/check_promotion_allowlist.sh
 !scripts/check_promotion_manifest.sh
+!scripts/check_tag_version_sync.sh
 !scripts/release_checklist.sh
 
 # Generated & dynamic tools

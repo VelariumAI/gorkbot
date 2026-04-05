@@ -7,6 +7,9 @@ cd "$ROOT"
 echo "[release-check] version consistency"
 bash scripts/check_version_consistency.sh
 
+echo "[release-check] tag/version sync policy (no tag = consistency-only)"
+bash scripts/check_tag_version_sync.sh
+
 echo "[release-check] allowlist integrity"
 bash scripts/check_promotion_allowlist.sh
 
