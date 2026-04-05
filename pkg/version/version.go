@@ -8,7 +8,7 @@ const InternalVersion = "6.2.0"
 // Public versioning (user-facing releases)
 const PublicMajor = 1
 const PublicMinor = 6
-const PublicBuild = 1
+const PublicBuild = 2
 const PublicRevision = 0 // 0 = no revision suffix
 const PublicStatus = "rc" // alpha|beta|rc|"" (stable)
 

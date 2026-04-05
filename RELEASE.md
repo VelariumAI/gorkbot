@@ -13,8 +13,8 @@ This repository uses a **tag-driven** release process.
 
 - Public releases use `v<public-version>`.
 - Example:
-  - `VERSION` public: `1.6.1-rc`
-  - Release tag: `v1.6.1-rc`
+  - `VERSION` public: `1.6.2-rc`
+  - Release tag: `v1.6.2-rc`
 
 ## Preflight
 
@@ -32,8 +32,8 @@ This runs consistency, hygiene, promotion-parity, vet, and full tests.
 2. Create and push annotated tag:
 
 ```bash
-git tag -a v1.6.1-rc -m "release: v1.6.1-rc"
-git push origin v1.6.1-rc
+git tag -a v1.6.2-rc -m "release: v1.6.2-rc"
+git push origin v1.6.2-rc
 ```
 
 GitHub Actions `Release` workflow then builds artifacts and publishes:
