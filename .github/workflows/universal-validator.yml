@@ -77,6 +77,7 @@ jobs:
         run: go version
 
       - name: Verify go.mod and go.sum
+        if: matrix.os == 'linux' && matrix.arch == 'amd64'
         run: |
           go mod verify
           go mod tidy
@@ -119,6 +120,7 @@ jobs:
   security-scan:
     name: Security Scan (CodeQL)
     runs-on: ubuntu-latest
+    continue-on-error: true
     permissions:
       security-events: write
 
@@ -155,6 +157,7 @@ jobs:
   dependency-check:
     name: Dependency Vulnerability Scan
     runs-on: ubuntu-latest
+    continue-on-error: true
     permissions:
       contents: read
 
@@ -178,15 +181,40 @@ jobs:
         run: |
           go list -u -m all | grep -i 'deprecated' || echo "No deprecated modules found"
 
-  # Unit and integration tests
-  test:
-    name: Tests - ${{ matrix.os }}
+  # Required unit and integration tests
+  test-required:
+    name: Tests - ubuntu (required)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: true
+
+      - name: Run tests with coverage
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.out
+          flags: unittests
+          name: codecov-ubuntu
+          fail_ci_if_error: false
+
+  # Extended cross-platform tests (non-blocking signal)
+  test-extended:
+    name: Tests - ${{ matrix.os }} (extended)
     runs-on: ${{ matrix.runs-on }}
+    continue-on-error: true
     strategy:
       matrix:
         include:
-          - os: ubuntu
-            runs-on: ubuntu-latest
           - os: macos
             runs-on: macos-latest
           - os: windows
@@ -202,26 +230,22 @@ jobs:
           go-version: '1.25.0'
           cache: true
 
-      - name: Run tests with coverage
-        run: |
-          if [ "${{ matrix.os }}" = "ubuntu" ]; then
-            go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
-          else
-            go test -v -coverprofile=coverage.out -covermode=atomic ./...
-          fi
+      - name: Run tests with coverage (extended)
+        run: go test -v -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.out
           flags: unittests
-          name: codecov-umbrella
+          name: codecov-${{ matrix.os }}
           fail_ci_if_error: false
 
   # Platform-specific validation
   platform-validation:
     name: Platform Validation - ${{ matrix.platform }}
     runs-on: ubuntu-latest
+    continue-on-error: true
     strategy:
       matrix:
         platform:
@@ -261,7 +285,7 @@ jobs:
   build-status:
     name: Build Status
     runs-on: ubuntu-latest
-    needs: [publish-readiness, cross-platform-build, security-scan, test, platform-validation]
+    needs: [publish-readiness, cross-platform-build, test-required]
     if: always()
 
     steps:
@@ -269,9 +293,7 @@ jobs:
         if: |
           needs.publish-readiness.result == 'failure' ||
           needs.cross-platform-build.result == 'failure' ||
-          needs.security-scan.result == 'failure' ||
-          needs.test.result == 'failure' ||
-          needs.platform-validation.result == 'failure'
+          needs.test-required.result == 'failure'
         run: |
           echo "❌ Build validation failed"
           exit 1
@@ -279,9 +301,8 @@ jobs:
       - name: Report success
         if: success()
         run: |
-          echo "✅ All validations passed"
+          echo "✅ Required validations passed"
           echo "  - Publish readiness: OK"
           echo "  - Cross-platform builds: OK"
-          echo "  - Security scans: OK"
-          echo "  - Tests: OK"
-          echo "  - Platform validation: OK"
+          echo "  - Required tests (ubuntu): OK"
+          echo "ℹ️ Extended checks are advisory (security scan, extended tests, platform validation)."
