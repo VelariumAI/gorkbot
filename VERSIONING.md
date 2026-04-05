@@ -98,7 +98,7 @@ Subsystems maintain their own version tracks:
 
 ## Current Version Mapping
 
-### As of April 4, 2026
+### As of April 5, 2026
 
 | Version Type | Current | Notes |
 |--------------|---------|-------|
@@ -133,7 +133,7 @@ Subsystems maintain their own version tracks:
 - `CHANGELOG.md` (in memory): Historical version notes
 
 ### Metadata
-- Git tags: Follow `v{internal}` convention (e.g., `v5.3.0`)
+- Git tags: Follow `v{public}` convention (e.g., `v1.6.0-rc`)
 - Release notes: Tagged in commit messages or GitHub releases
 
 ---

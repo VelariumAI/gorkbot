@@ -251,7 +251,7 @@ make build-android
 
 ```bash
 gorkbot --version
-# Output: Gorkbot 1.2.0-beta (internal: 5.3.0)
+# Output: Gorkbot 1.6.0-rc (internal: 6.2.0)
 
 gorkbot status
 # Output: ✅ All systems operational
@@ -400,4 +400,3 @@ gorkbot setup
 ---
 
 **Installation complete! See [GETTING_STARTED.md](GETTING_STARTED.md) to begin using Gorkbot.**
-

@@ -2,7 +2,7 @@
 
 **Gorkbot** is an **AI-powered orchestration platform** that unifies multiple large language models (LLMs) into a single, intelligent terminal interface. It integrates Grok (xAI), Gemini (Google), Claude (Anthropic), and other OpenAI-compatible providers into a sophisticated reasoning engine with real-time streaming, autonomous tool execution, cross-session memory, and human-in-the-loop approval gates.
 
-**Public Version:** 1.2.0-beta | **Internal Version:** 5.3.0 (Development)
+**Public Version:** 1.6.0-rc | **Internal Version:** 6.2.0 (Development)
 **Build:** Go 1.25.0 | **Platform:** Linux, macOS, Windows, Android/Termux
 **License:** MIT
 
@@ -32,30 +32,37 @@ git clone https://github.com/velariumai/gorkbot.git
 cd gorkbot
 ```
 
-### 2. Build the Application
+### 2. Run Guided Setup (Recommended)
+```bash
+make setup
+```
+
+This single command guides dependency checks, API key setup, optional local LLM bridge bootstrap, optional semantic model download, build/install, and post-install validation.
+
+### 3. Fast Non-Interactive Setup (Optional)
+```bash
+make setup-auto
+```
+
+### 4. Manual Build (Advanced)
 ```bash
 make build
-# Output: ./bin/gorkbot
+./bin/gorkbot --version
 ```
 
-### 3. Run Setup Wizard
-```bash
-./gorkbot.sh setup
-```
-
-The wizard will guide you through obtaining API keys from:
+The setup flow supports API keys from:
 - **xAI Grok**: https://console.x.ai/
 - **Google Gemini**: https://aistudio.google.com/apikey
 - **Anthropic Claude**: https://console.anthropic.com/ (optional)
 - **OpenAI**: https://platform.openai.com/api-keys (optional)
 
-### 4. Start Chatting
+### 5. Start Chatting
 ```bash
 # Interactive TUI mode
-./gorkbot.sh
+./bin/gorkbot
 
 # Or one-shot mode
-./gorkbot.sh -p "What is quantum computing?"
+./bin/gorkbot -p "What is quantum computing?"
 ```
 
 ---
@@ -65,9 +72,11 @@ The wizard will guide you through obtaining API keys from:
 ### User Guides
 - **[GETTING_STARTED.md](GETTING_STARTED.md)** - Setup and basic usage
 - **[VERSIONING.md](VERSIONING.md)** - Version information and release notes
+- **[docs/RELEASE_OPERATIONS.md](docs/RELEASE_OPERATIONS.md)** - Tagging and release workflow
 
 ### Developer Resources
-- **[CLAUDE.md](CLAUDE.md)** - Comprehensive architecture and development guide
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Repository contribution and engineering standards
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Architecture overview
 - **[docs/TOOL_SYSTEM_DESIGN.md](docs/TOOL_SYSTEM_DESIGN.md)** - Tool system architecture
 - **[docs/TUI_QUICKSTART.md](docs/TUI_QUICKSTART.md)** - Terminal UI development
 - **[docs/PERMISSIONS_GUIDE.md](docs/PERMISSIONS_GUIDE.md)** - Tool permission system
@@ -610,15 +619,14 @@ Token counts by provider vary based on model and thinking tokens.
 
 **"API Key is not set"**
 ```bash
-./gorkbot.sh setup
+make setup
 # Or edit .env manually
 ```
 
 **Keys not loading**
 ```bash
-# Always use wrapper script
-./gorkbot.sh    # ✓ Loads .env
-./bin/gorkbot   # ✗ Doesn't load .env
+# Use guided setup to persist provider keys and validate configuration
+make setup
 ```
 
 **Slow generation**
@@ -641,7 +649,7 @@ Token counts by provider vary based on model and thinking tokens.
 /key status
 
 # Enable diagnostics
-./gorkbot.sh -watchdog
+./bin/gorkbot -watchdog
 ```
 
 **TUI display issues**
@@ -655,16 +663,16 @@ Token counts by provider vary based on model and thinking tokens.
 
 ```bash
 # Enable orchestrator debugging
-./gorkbot.sh -watchdog
+./bin/gorkbot -watchdog
 
 # Enable verbose consultant thinking
-./gorkbot.sh -verbose-thoughts
+./bin/gorkbot -verbose-thoughts
 
 # Enable execution tracing
-./gorkbot.sh --trace
+./bin/gorkbot --trace
 
 # Enable all diagnostics
-./gorkbot.sh -watchdog -verbose-thoughts --trace
+./bin/gorkbot -watchdog -verbose-thoughts --trace
 ```
 
 ### Getting Help

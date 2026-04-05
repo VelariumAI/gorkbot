@@ -74,7 +74,7 @@ via the chat input field.
 
 Type: Cross-Site Scripting (XSS)
 Severity: High
-Affected versions: 1.2.0-beta
+Affected versions: 1.6.0-rc
 
 Steps to reproduce:
 1. Open web UI at localhost:8080
@@ -378,6 +378,5 @@ go mod verify
 
 ---
 
-**Last Updated**: March 20, 2026
-**Version**: 1.2.0-beta
-
+**Last Updated**: April 5, 2026
+**Version**: 1.6.0-rc
