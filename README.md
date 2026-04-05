@@ -2,7 +2,7 @@
 
 **Gorkbot** is an **AI-powered orchestration platform** that unifies multiple large language models (LLMs) into a single, intelligent terminal interface. It integrates Grok (xAI), Gemini (Google), Claude (Anthropic), and other OpenAI-compatible providers into a sophisticated reasoning engine with real-time streaming, autonomous tool execution, cross-session memory, and human-in-the-loop approval gates.
 
-**Public Version:** 1.6.0-rc | **Internal Version:** 6.2.0 (Development)
+**Public Version:** 1.6.1-rc | **Internal Version:** 6.2.0 (Development)
 **Build:** Go 1.25.0 | **Platform:** Linux, macOS, Windows, Android/Termux
 **License:** MIT
 

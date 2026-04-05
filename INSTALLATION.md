@@ -251,7 +251,7 @@ make build-android
 
 ```bash
 gorkbot --version
-# Output: Gorkbot 1.6.0-rc (internal: 6.2.0)
+# Output: Gorkbot 1.6.1-rc (internal: 6.2.0)
 
 gorkbot status
 # Output: ✅ All systems operational

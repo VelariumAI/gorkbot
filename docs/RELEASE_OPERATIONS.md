@@ -5,7 +5,7 @@ This repository uses a tag-driven public release workflow.
 ## Release Policy
 
 - Public release tags must match `VERSION` public version: `v<public-version>`
-- Current example: public `1.6.0-rc` -> tag `v1.6.0-rc`
+- Current example: public `1.6.1-rc` -> tag `v1.6.1-rc`
 - Internal version (`6.2.0`) is tracked separately and validated for consistency
 
 ## Pre-Release Checklist
@@ -31,8 +31,8 @@ This validates:
 3. Create and push tag:
 
 ```bash
-git tag -a v1.6.0-rc -m "release: v1.6.0-rc"
-git push origin v1.6.0-rc
+git tag -a v1.6.1-rc -m "release: v1.6.1-rc"
+git push origin v1.6.1-rc
 ```
 
 ## What the Release Workflow Produces
