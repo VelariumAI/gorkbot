@@ -44,6 +44,8 @@ type GeminiModelListResponse struct {
 	Models []GeminiModel `json:"models"`
 }
 
+var newDiscoveryHTTPClient = NewRetryClient
+
 // FetchOpenAIModels performs model discovery against an OpenAI-compatible endpoint
 func FetchOpenAIModels(ctx context.Context, baseURL string, apiKey string) ([]registry.ModelDefinition, error) {
 	url := fmt.Sprintf("%s/v1/models", strings.TrimRight(baseURL, "/"))
@@ -56,7 +58,7 @@ func FetchOpenAIModels(ctx context.Context, baseURL string, apiKey string) ([]re
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := NewRetryClient()
+	client := newDiscoveryHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("discovery request failed: %w", err)
@@ -95,14 +97,26 @@ func FetchOpenAIModels(ctx context.Context, baseURL string, apiKey string) ([]re
 
 // FetchGeminiModels performs model discovery against Google's API
 func FetchGeminiModels(ctx context.Context, apiKey string) ([]registry.ModelDefinition, error) {
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models?key=%s", apiKey)
+	return FetchGeminiModelsWithAuth(ctx, apiKey, "")
+}
+
+// FetchGeminiModelsWithAuth performs model discovery against Google's API
+// using either API-key query auth or OAuth bearer-token auth.
+func FetchGeminiModelsWithAuth(ctx context.Context, apiKey, oauthAccessToken string) ([]registry.ModelDefinition, error) {
+	url := "https://generativelanguage.googleapis.com/v1beta/models"
+	if strings.TrimSpace(oauthAccessToken) == "" {
+		url = fmt.Sprintf("%s?key=%s", url, apiKey)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create discovery request: %w", err)
 	}
+	if strings.TrimSpace(oauthAccessToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(oauthAccessToken))
+	}
 
-	client := NewRetryClient()
+	client := newDiscoveryHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("discovery request failed: %w", err)
@@ -202,7 +216,7 @@ func geminiModelSupportsThinking(modelID string) bool {
 // FetchAnthropicModels_Discovery fetches models from Anthropic for the discovery manager.
 // This is a thin wrapper around FetchAnthropicModels defined in anthropic.go.
 func FetchAnthropicModels_Discovery(ctx context.Context, apiKey string) ([]registry.ModelDefinition, error) {
-	return FetchAnthropicModels(ctx, apiKey)
+	return FetchAnthropicModels(ctx, apiKey, false)
 }
 
 // FetchMiniMaxModels_Discovery fetches models from MiniMax for the discovery manager.

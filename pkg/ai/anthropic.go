@@ -182,6 +182,7 @@ func injectCacheControl(model, systemMsg string, msgs []anthropicMessage) (inter
 // AnthropicProvider implements AIProvider for Anthropic's Claude API.
 type AnthropicProvider struct {
 	APIKey           string
+	OAuthAccessToken string
 	BaseURL          string // default: "https://api.anthropic.com/v1"
 	Model            string
 	client           *http.Client
@@ -190,13 +191,23 @@ type AnthropicProvider struct {
 	bearerAuth       bool // if true, use "Authorization: Bearer" instead of "x-api-key" (for MiniMax compat)
 }
 
+var anthropicModelsEndpoint = "https://api.anthropic.com/v1/models"
+var newAnthropicRetryClient = NewRetryClient
+
 // NewAnthropicProvider creates a new Anthropic provider.
 func NewAnthropicProvider(apiKey, model string) *AnthropicProvider {
+	return NewAnthropicProviderWithAuth(apiKey, "", model)
+}
+
+// NewAnthropicProviderWithAuth creates a new Anthropic provider with hybrid auth.
+// If oauthAccessToken is set it is used as Bearer auth; otherwise API key is used.
+func NewAnthropicProviderWithAuth(apiKey, oauthAccessToken, model string) *AnthropicProvider {
 	if model == "" {
 		model = "claude-sonnet-4-5"
 	}
 	return &AnthropicProvider{
 		APIKey:           apiKey,
+		OAuthAccessToken: oauthAccessToken,
 		BaseURL:          "https://api.anthropic.com/v1",
 		Model:            model,
 		client:           NewRetryClient(),
@@ -220,6 +231,7 @@ func (a *AnthropicProvider) GetMetadata() ProviderMetadata {
 func (a *AnthropicProvider) WithModel(model string) AIProvider {
 	return &AnthropicProvider{
 		APIKey:           a.APIKey,
+		OAuthAccessToken: a.OAuthAccessToken,
 		BaseURL:          a.BaseURL,
 		Model:            model,
 		client:           a.client,
@@ -265,7 +277,7 @@ func (a *AnthropicProvider) FetchModels(ctx context.Context) ([]registry.ModelDe
 		ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 	}
-	models, err := FetchAnthropicModels(ctx, a.APIKey)
+	models, err := FetchAnthropicModels(ctx, a.authBearerToken(), a.usingBearerAuth())
 	if err != nil || len(models) == 0 {
 		return SafeModelDefs("anthropic"), nil
 	}
@@ -514,8 +526,8 @@ func (a *AnthropicProvider) convertHistory(history *ConversationHistory) (system
 
 func (a *AnthropicProvider) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
-	if a.bearerAuth {
-		req.Header.Set("Authorization", "Bearer "+a.APIKey)
+	if a.usingBearerAuth() {
+		req.Header.Set("Authorization", "Bearer "+a.authBearerToken())
 	} else {
 		req.Header.Set("x-api-key", a.APIKey)
 	}
@@ -533,16 +545,20 @@ func anthropicModelSupportsThinking(modelID string) bool {
 }
 
 // FetchAnthropicModels retrieves the model list from Anthropic's API.
-func FetchAnthropicModels(ctx context.Context, apiKey string) ([]registry.ModelDefinition, error) {
-	url := "https://api.anthropic.com/v1/models"
+func FetchAnthropicModels(ctx context.Context, token string, bearerAuth bool) ([]registry.ModelDefinition, error) {
+	url := anthropicModelsEndpoint
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	req.Header.Set("x-api-key", apiKey)
+	if bearerAuth {
+		req.Header.Set("Authorization", "Bearer "+token)
+	} else {
+		req.Header.Set("x-api-key", token)
+	}
 	req.Header.Set("anthropic-version", "2023-06-01")
 
-	client := NewRetryClient()
+	client := newAnthropicRetryClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -581,6 +597,17 @@ func FetchAnthropicModels(ctx context.Context, apiKey string) ([]registry.ModelD
 		})
 	}
 	return models, nil
+}
+
+func (a *AnthropicProvider) authBearerToken() string {
+	if strings.TrimSpace(a.OAuthAccessToken) != "" {
+		return strings.TrimSpace(a.OAuthAccessToken)
+	}
+	return strings.TrimSpace(a.APIKey)
+}
+
+func (a *AnthropicProvider) usingBearerAuth() bool {
+	return a.bearerAuth || strings.TrimSpace(a.OAuthAccessToken) != ""
 }
 
 // ── Native Tool Calling (NativeToolCaller interface) ─────────────────────────

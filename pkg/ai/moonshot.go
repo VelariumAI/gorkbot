@@ -21,6 +21,9 @@ type MoonshotProvider struct {
 	client *http.Client
 }
 
+var moonshotAPIBaseURL = "https://api.moonshot.ai"
+var newMoonshotPingClient = NewPingClient
+
 func NewMoonshotProvider(apiKey, model string) *MoonshotProvider {
 	if model == "" {
 		model = "moonshot-v1-8k"
@@ -61,12 +64,12 @@ func (m *MoonshotProvider) WithModel(model string) AIProvider {
 }
 
 func (m *MoonshotProvider) Ping(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.moonshot.ai/v1/models", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", moonshotAPIBaseURL+"/v1/models", nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+m.APIKey)
-	resp, err := NewPingClient().Do(req)
+	resp, err := newMoonshotPingClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("Moonshot unreachable: %w", err)
 	}
@@ -84,7 +87,7 @@ func (m *MoonshotProvider) FetchModels(ctx context.Context) ([]registry.ModelDef
 		ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 	}
-	url := "https://api.moonshot.ai/v1/models"
+	url := moonshotAPIBaseURL + "/v1/models"
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -154,7 +157,7 @@ func (m *MoonshotProvider) GenerateWithHistory(ctx context.Context, history *Con
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.moonshot.ai/v1/chat/completions", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", moonshotAPIBaseURL+"/v1/chat/completions", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
@@ -197,14 +200,18 @@ func (m *MoonshotProvider) StreamWithHistory(ctx context.Context, history *Conve
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.moonshot.ai/v1/chat/completions", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", moonshotAPIBaseURL+"/v1/chat/completions", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+m.APIKey)
 
-	streamClient := NewRetryClient()
+	// Reuse configured client so tests and custom runtimes can inject transport behavior.
+	streamClient := m.client
+	if streamClient == nil {
+		streamClient = NewRetryClient()
+	}
 	resp, err := streamClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)

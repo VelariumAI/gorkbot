@@ -30,6 +30,9 @@ jobs:
       - name: Promotion manifest parity gate
         run: bash scripts/check_promotion_manifest.sh
 
+      - name: Unmanaged path policy gate (same-repo mode)
+        run: bash scripts/check_promotion_unmanaged_paths.sh
+
   # Multi-platform build validation
   cross-platform-build:
     name: Build - ${{ matrix.os }} (${{ matrix.arch }})
@@ -224,6 +227,25 @@ jobs:
           name: codecov-${{ matrix.os }}
           fail_ci_if_error: false
 
+  # Data-race detection on supported architecture (non-blocking signal).
+  race-detection:
+    name: Race Detection - ubuntu (extended)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: true
+
+      - name: Run race detector
+        run: go test -race ./... -count=1 -timeout=240s
+
   # Platform-specific validation
   platform-validation:
     name: Platform Validation - ${{ matrix.platform }}
@@ -288,4 +310,4 @@ jobs:
           echo "  - Publish readiness: OK"
           echo "  - Cross-platform builds: OK"
           echo "  - Required tests (ubuntu): OK"
-          echo "ℹ️ Extended checks are advisory (security scan, extended tests, platform validation)."
+          echo "ℹ️ Extended checks are advisory (security scan, extended tests, race detection, platform validation)."

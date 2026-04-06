@@ -2,6 +2,7 @@ package designsystem
 
 import (
 	"log/slog"
+	"strings"
 	"testing"
 )
 
@@ -18,6 +19,24 @@ func TestInit(t *testing.T) {
 	reg := Get()
 	if reg == nil {
 		t.Errorf("Get() returned nil after Init()")
+	}
+}
+
+func TestGetAutoInitializesWhenNotExplicitlyInitialized(t *testing.T) {
+	registryMu.Lock()
+	prev := globalRegistry
+	globalRegistry = nil
+	registryMu.Unlock()
+
+	t.Cleanup(func() {
+		registryMu.Lock()
+		globalRegistry = prev
+		registryMu.Unlock()
+	})
+
+	reg := Get()
+	if reg == nil {
+		t.Fatal("Get returned nil registry")
 	}
 }
 
@@ -165,5 +184,5 @@ func TestSummary(t *testing.T) {
 
 // helper function to check if string contains substring
 func contains(s, substr string) bool {
-	return len(s) > 0 && len(substr) > 0 && len(s) >= len(substr)
+	return strings.Contains(s, substr)
 }

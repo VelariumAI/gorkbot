@@ -18,24 +18,35 @@ import (
 // OpenAIProvider implements AIProvider for OpenAI's chat completions API.
 // It reuses the same OpenAI-compatible format as GrokProvider.
 type OpenAIProvider struct {
-	APIKey    string
-	Model     string
-	BaseURL   string // default: "https://api.openai.com/v1"
-	client    *http.Client
-	isOSeries bool // true for o1/o3/o4-mini etc. (reasoning models)
+	APIKey           string
+	OAuthAccessToken string
+	Model            string
+	BaseURL          string // default: "https://api.openai.com/v1"
+	client           *http.Client
+	isOSeries        bool // true for o1/o3/o4-mini etc. (reasoning models)
 }
+
+var openAIModelsEndpoint = "https://api.openai.com/v1/models"
+var newOpenAIFetchClient = NewRetryClient
 
 // NewOpenAIProvider creates a new OpenAI provider.
 func NewOpenAIProvider(apiKey, model string) *OpenAIProvider {
+	return NewOpenAIProviderWithAuth(apiKey, "", model)
+}
+
+// NewOpenAIProviderWithAuth creates a new OpenAI provider with hybrid auth.
+// If oauthAccessToken is set it is used as Bearer auth; otherwise API key is used.
+func NewOpenAIProviderWithAuth(apiKey, oauthAccessToken, model string) *OpenAIProvider {
 	if model == "" {
 		model = "gpt-4o"
 	}
 	return &OpenAIProvider{
-		APIKey:    apiKey,
-		Model:     model,
-		BaseURL:   "https://api.openai.com/v1",
-		client:    NewRetryClient(),
-		isOSeries: openAIIsOSeries(model),
+		APIKey:           apiKey,
+		OAuthAccessToken: oauthAccessToken,
+		Model:            model,
+		BaseURL:          "https://api.openai.com/v1",
+		client:           NewRetryClient(),
+		isOSeries:        openAIIsOSeries(model),
 	}
 }
 
@@ -54,11 +65,12 @@ func (o *OpenAIProvider) GetMetadata() ProviderMetadata {
 
 func (o *OpenAIProvider) WithModel(model string) AIProvider {
 	return &OpenAIProvider{
-		APIKey:    o.APIKey,
-		Model:     model,
-		BaseURL:   o.BaseURL,
-		client:    o.client,
-		isOSeries: openAIIsOSeries(model),
+		APIKey:           o.APIKey,
+		OAuthAccessToken: o.OAuthAccessToken,
+		Model:            model,
+		BaseURL:          o.BaseURL,
+		client:           o.client,
+		isOSeries:        openAIIsOSeries(model),
 	}
 }
 
@@ -69,7 +81,7 @@ func (o *OpenAIProvider) Ping(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+o.APIKey)
+	req.Header.Set("Authorization", "Bearer "+o.authBearerToken())
 	resp, err := NewPingClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("OpenAI unreachable: %w", err)
@@ -89,7 +101,7 @@ func (o *OpenAIProvider) FetchModels(ctx context.Context) ([]registry.ModelDefin
 		ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 	}
-	models, err := FetchOpenAIModels_OpenAI(ctx, o.APIKey)
+	models, err := FetchOpenAIModels_OpenAI(ctx, o.authBearerToken())
 	if err != nil || len(models) == 0 {
 		return SafeModelDefs("openai"), nil
 	}
@@ -124,7 +136,7 @@ func (o *OpenAIProvider) GenerateWithHistory(ctx context.Context, history *Conve
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+o.APIKey)
+	req.Header.Set("Authorization", "Bearer "+o.authBearerToken())
 
 	resp, err := o.client.Do(req)
 	if err != nil {
@@ -173,7 +185,7 @@ func (o *OpenAIProvider) StreamWithHistory(ctx context.Context, history *Convers
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+o.APIKey)
+	req.Header.Set("Authorization", "Bearer "+o.authBearerToken())
 
 	streamClient := NewRetryClient()
 	resp, err := streamClient.Do(req)
@@ -283,14 +295,14 @@ func isOpenAIChatModel(modelID string) bool {
 
 // FetchOpenAIModels_OpenAI retrieves chat-capable models from api.openai.com.
 func FetchOpenAIModels_OpenAI(ctx context.Context, apiKey string) ([]registry.ModelDefinition, error) {
-	url := "https://api.openai.com/v1/models"
+	url := openAIModelsEndpoint
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := NewRetryClient()
+	client := newOpenAIFetchClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -336,4 +348,11 @@ func FetchOpenAIModels_OpenAI(ctx context.Context, apiKey string) ([]registry.Mo
 		})
 	}
 	return models, nil
+}
+
+func (o *OpenAIProvider) authBearerToken() string {
+	if strings.TrimSpace(o.OAuthAccessToken) != "" {
+		return strings.TrimSpace(o.OAuthAccessToken)
+	}
+	return strings.TrimSpace(o.APIKey)
 }

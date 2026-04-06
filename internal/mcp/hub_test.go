@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -130,5 +132,62 @@ func TestMCPHubHealthCheckStatusUpdates(t *testing.T) {
 	}
 	if s := hub.GetServer("bad"); s == nil || s.Status != "error" {
 		t.Fatalf("expected bad server error, got %#v", s)
+	}
+}
+
+func TestMCPHubDiscoverServersParsesTomlAndJSONConfigs(t *testing.T) {
+	tmp := t.TempDir()
+	tomlDir := filepath.Join(tmp, "filesystem")
+	if err := os.MkdirAll(tomlDir, 0o755); err != nil {
+		t.Fatalf("mkdir toml dir: %v", err)
+	}
+	tomlConfig := []byte(`name = "filesystem"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+enabled = true
+`)
+	if err := os.WriteFile(filepath.Join(tomlDir, "config.toml"), tomlConfig, 0o644); err != nil {
+		t.Fatalf("write toml config: %v", err)
+	}
+
+	jsonConfig := []byte(`{
+  "name": "memory",
+  "command": "uvx",
+  "args": ["mcp-server-memory"],
+  "enabled": false
+}`)
+	if err := os.WriteFile(filepath.Join(tmp, "memory.json"), jsonConfig, 0o644); err != nil {
+		t.Fatalf("write json config: %v", err)
+	}
+
+	hub := NewMCPHub(slog.Default())
+	hub.configDir = tmp
+	if err := hub.DiscoverServers(); err != nil {
+		t.Fatalf("DiscoverServers failed: %v", err)
+	}
+
+	fs := hub.GetServer("filesystem")
+	if fs == nil {
+		t.Fatal("expected filesystem server to be discovered")
+	}
+	if fs.Command != "npx" {
+		t.Fatalf("expected filesystem command npx, got %q", fs.Command)
+	}
+	if len(fs.Args) != 3 {
+		t.Fatalf("expected filesystem args length=3, got %d", len(fs.Args))
+	}
+	if !fs.Enabled {
+		t.Fatal("filesystem should be enabled")
+	}
+
+	mem := hub.GetServer("memory")
+	if mem == nil {
+		t.Fatal("expected memory server to be discovered")
+	}
+	if mem.Command != "uvx" {
+		t.Fatalf("expected memory command uvx, got %q", mem.Command)
+	}
+	if mem.Enabled {
+		t.Fatal("memory server should be disabled from config")
 	}
 }

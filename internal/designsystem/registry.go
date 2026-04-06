@@ -25,16 +25,10 @@ var (
 	registryMu     sync.Mutex
 )
 
-// Init initializes the global token registry with defaults.
-// Called once at application startup.
-func Init(logger *slog.Logger) error {
-	registryMu.Lock()
-	defer registryMu.Unlock()
-
+func newDefaultRegistry(logger *slog.Logger) (*Registry, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-
 	reg := &Registry{
 		colors:     NewColorTokens(),
 		spacing:    NewSpacingScale(),
@@ -42,36 +36,50 @@ func Init(logger *slog.Logger) error {
 		elevation:  NewElevationTokens(),
 		typography: NewTypographyTokens(),
 		icons:      NewIconTokens(),
-		density:    DensityOperator, // Default density
+		density:    DensityOperator,
 		logger:     logger,
 	}
-
-	// Validate token integrity
 	if err := reg.colors.ValidateColors(); err != nil {
-		return err
+		return nil, err
 	}
 	if err := reg.typography.ValidateTypography(); err != nil {
+		return nil, err
+	}
+	return reg, nil
+}
+
+// Init initializes the global token registry with defaults.
+// Called once at application startup.
+func Init(logger *slog.Logger) error {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+
+	reg, err := newDefaultRegistry(logger)
+	if err != nil {
 		return err
 	}
 
 	globalRegistry = reg
-	logger.Debug("design system initialized", "density", string(DensityOperator))
+	reg.logger.Debug("design system initialized", "density", string(DensityOperator))
 
 	return nil
 }
 
 // Get returns the global registry instance.
-// Panics if Init() was not called.
+// Falls back to a default registry if Init() was not called.
 func Get() *Registry {
 	registryMu.Lock()
-	reg := globalRegistry
-	registryMu.Unlock()
-
-	if reg == nil {
-		panic("design system registry not initialized; call designsystem.Init() first")
+	defer registryMu.Unlock()
+	if globalRegistry == nil {
+		reg, err := newDefaultRegistry(slog.Default())
+		if err != nil {
+			// Ultra-safe fallback: keep process alive with zero-value registry.
+			globalRegistry = &Registry{logger: slog.Default(), density: DensityOperator}
+		} else {
+			globalRegistry = reg
+		}
 	}
-
-	return reg
+	return globalRegistry
 }
 
 // GetColors returns the current color token set.

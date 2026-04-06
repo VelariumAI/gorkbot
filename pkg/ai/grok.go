@@ -143,6 +143,9 @@ type GrokProvider struct {
 	ConvID string
 }
 
+var grokAPIBaseURL = "https://api.x.ai"
+var newGrokPingClient = NewPingClient
+
 // SetConvID sets the conversation ID used for xAI prompt-cache sticky routing.
 // Should be called once at session start with a stable UUID4 string.
 func (g *GrokProvider) SetConvID(id string) { g.ConvID = id }
@@ -197,7 +200,7 @@ func (g *GrokProvider) FetchModels(ctx context.Context) ([]registry.ModelDefinit
 		ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 	}
-	models, err := FetchOpenAIModels(ctx, "https://api.x.ai", g.APIKey)
+	models, err := FetchOpenAIModels(ctx, grokAPIBaseURL, g.APIKey)
 	if err != nil || len(models) == 0 {
 		return SafeModelDefs("xai"), nil
 	}
@@ -219,7 +222,7 @@ func (g *GrokProvider) WithModel(model string) AIProvider {
 }
 
 func (g *GrokProvider) Generate(ctx context.Context, prompt string) (string, error) {
-	url := "https://api.x.ai/v1/chat/completions"
+	url := grokAPIBaseURL + "/v1/chat/completions"
 
 	reqBody := GrokRequest{
 		Model: g.Model,
@@ -273,7 +276,7 @@ func (g *GrokProvider) Generate(ctx context.Context, prompt string) (string, err
 }
 
 func (g *GrokProvider) GenerateWithHistory(ctx context.Context, history *ConversationHistory) (string, error) {
-	url := "https://api.x.ai/v1/chat/completions"
+	url := grokAPIBaseURL + "/v1/chat/completions"
 
 	// Convert conversation history to Grok messages
 	messages := g.convertHistoryToMessages(history)
@@ -328,7 +331,7 @@ func (g *GrokProvider) GenerateWithHistory(ctx context.Context, history *Convers
 }
 
 func (g *GrokProvider) Stream(ctx context.Context, prompt string, out io.Writer) error {
-	url := "https://api.x.ai/v1/chat/completions"
+	url := grokAPIBaseURL + "/v1/chat/completions"
 
 	reqBody := GrokRequest{
 		Model: g.Model,
@@ -357,8 +360,11 @@ func (g *GrokProvider) Stream(ctx context.Context, prompt string, out io.Writer)
 	req.Header.Set("Authorization", "Bearer "+g.APIKey)
 	g.injectGrokCacheHeader(req)
 
-	// Use a client with no timeout for streaming, or long timeout
-	streamClient := NewRetryClient()
+	// Reuse configured client so tests and custom runtimes can inject transport behavior.
+	streamClient := g.Client
+	if streamClient == nil {
+		streamClient = NewRetryClient()
+	}
 	resp, err := streamClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
@@ -410,7 +416,7 @@ func (g *GrokProvider) Stream(ctx context.Context, prompt string, out io.Writer)
 }
 
 func (g *GrokProvider) StreamWithHistory(ctx context.Context, history *ConversationHistory, out io.Writer) error {
-	url := "https://api.x.ai/v1/chat/completions"
+	url := grokAPIBaseURL + "/v1/chat/completions"
 
 	// Convert conversation history to Grok messages
 	messages := g.convertHistoryToMessages(history)
@@ -440,8 +446,11 @@ func (g *GrokProvider) StreamWithHistory(ctx context.Context, history *Conversat
 	req.Header.Set("Authorization", "Bearer "+g.APIKey)
 	g.injectGrokCacheHeader(req)
 
-	// Use a client with no timeout for streaming, or long timeout
-	streamClient := NewRetryClient()
+	// Reuse configured client so tests and custom runtimes can inject transport behavior.
+	streamClient := g.Client
+	if streamClient == nil {
+		streamClient = NewRetryClient()
+	}
 	resp, err := streamClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
@@ -569,7 +578,7 @@ func (g *GrokProvider) convertHistoryToMessages(history *ConversationHistory) []
 // a final text response or a set of tool call requests from the model.
 // Implements NativeToolCaller.
 func (g *GrokProvider) GenerateWithTools(ctx context.Context, history *ConversationHistory, tools []GrokToolSchema) (*NativeToolResult, error) {
-	url := "https://api.x.ai/v1/chat/completions"
+	url := grokAPIBaseURL + "/v1/chat/completions"
 
 	msgs := g.convertHistoryToNativeMsgs(history)
 
@@ -670,7 +679,7 @@ func (g *GrokProvider) convertHistoryToNativeMsgs(history *ConversationHistory) 
 // Ping validates the xAI key with a single lightweight GET /v1/models request.
 // Uses NewPingClient (5 s hard timeout, no retries) so it never blocks the UI.
 func (g *GrokProvider) Ping(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.x.ai/v1/models", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", grokAPIBaseURL+"/v1/models", nil)
 	if err != nil {
 		return err
 	}
@@ -678,7 +687,7 @@ func (g *GrokProvider) Ping(ctx context.Context) error {
 	g.injectGrokCacheHeader(req)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := NewPingClient().Do(req)
+	resp, err := newGrokPingClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("xAI unreachable: %w", err)
 	}

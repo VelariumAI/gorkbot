@@ -12,7 +12,7 @@ LLAMA_ROOT := ./ext/llama.cpp
         build-windows build-android build-linux build-security \
         build-llm-bridge build-llm bootstrap-llm clean-llm download-nomic build-web \
         build-all build-lite build-sec build-plugins build-gorkweb unleash setup setup-auto \
-        release-check
+        promote-public promote-public-apply promote-verify release-check
 
 all: build build-web
 
@@ -27,7 +27,24 @@ setup:
 setup-auto:
 	@bash scripts/setup_wizard.sh --auto
 
-# One-command public release readiness checklist.
+# Promote only production-grade content to the public mirror.
+# Defaults to dry-run safety mode.
+promote-public:
+	@bash scripts/promote_to_public.sh
+
+promote-public-apply:
+	@DRY_RUN=0 bash scripts/promote_to_public.sh
+
+# Verify source<->destination managed file parity for promotion allowlist.
+promote-verify:
+	@SRC=/data/data/com.termux/files/home/project/gorky \
+	 DST=/data/data/com.termux/files/home/project/gorkbot \
+	 bash scripts/check_promotion_manifest.sh
+	@SRC=/data/data/com.termux/files/home/project/gorky \
+	 DST=/data/data/com.termux/files/home/project/gorkbot \
+	 bash scripts/check_promotion_unmanaged_paths.sh
+
+# One-command release readiness checklist (quality + policy gates).
 release-check:
 	@bash scripts/release_checklist.sh
 
@@ -117,33 +134,23 @@ install-global: build-llm download-nomic build-web
 	@install -m 755 $(BUILD_DIR)/$(WEB_APP_NAME) $(INSTALL_DIR)/$(WEB_APP_NAME)
 	@bash scripts/write_launcher.sh $(INSTALL_DIR) $(APP_NAME) $(SHORT_NAME)
 
-# ── Developer Installation (Easter Egg: Full Feature Build) ─────────────────────
-# install-dev: Global installation with ALL features enabled (security, plugins, headless, MCP, LLM).
-# Creates a single 'gork' command with absolute maximum capability.
-# Command: make install-dev
-# Result: ~/bin/gork with every feature unlocked
-#
-# For the curious: This target exists to give developers (and intrepid users) access to
-# the full power of Gorkbot without needing to rebuild. It's an easter egg because who
-# doesn't like discovering hidden capabilities? 🧠✨
+# ── Developer Installation (Full Feature Build) ─────────────────────────────
+# install-dev: Global installation with all feature tags enabled
+# (security, plugins, headless, MCP, local LLM bridge).
 
 install-dev: build-llm download-nomic
-	@echo "🔓 Unleashing the full power of Gorkbot..."
+	@echo "Building developer profile with full feature set..."
 	@mkdir -p $(BUILD_DIR)
 	@CGO_ENABLED=1 go build -tags "with_security,with_plugins,with_headless,with_mcp,llamacpp" \
 		-o $(BUILD_DIR)/$(APP_NAME)-dev $(CMD_PATH)
 	@install -m 755 $(BUILD_DIR)/$(APP_NAME)-dev $(INSTALL_DIR)/$(SHORT_NAME)
-	@echo "✨ $(SHORT_NAME) installed to $(INSTALL_DIR) with ALL features enabled"
-	@echo "   Security Tools    → enabled (pentesting, redteaming)"
-	@echo "   Plugin SDK v2     → enabled (custom plugin loading)"
-	@echo "   Headless API      → enabled (REST endpoints)"
-	@echo "   Model Context Pro → enabled (MCP protocol)"
-	@echo "   Local LLM Engine  → enabled (Llama.cpp integration)"
+	@echo "$(SHORT_NAME) installed to $(INSTALL_DIR) with all features enabled"
+	@echo "Enabled: security tools, plugin SDK v2, headless API, MCP, local LLM"
 	@echo ""
-	@echo "🚀 Try it: gork --help"
+	@echo "Run: gork --help"
 
-# ── Easter Egg Build Alias ────────────────────────────────────────────────────
-# unleash: Alias for install-dev. Because sometimes you just want to unleash the beast.
+# ── Build Alias ───────────────────────────────────────────────────────────────
+# unleash: Alias for install-dev.
 
 unleash: install-dev
 

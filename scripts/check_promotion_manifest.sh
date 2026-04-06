@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="${SRC:-${ROOT}}"
 DST="${DST:-${ROOT}}"
 ALLOWLIST_FILE="${ALLOWLIST_FILE:-${SRC}/configs/promotion-allowlist.txt}"
+MANIFEST_FILE="${MANIFEST_FILE:-${SRC}/configs/promotion-manifest.txt}"
 
 fail() {
   echo "[promotion-manifest] ERROR: $*" >&2
@@ -22,33 +23,39 @@ tmp_expected="$(mktemp)"
 tmp_actual="$(mktemp)"
 tmp_missing="$(mktemp)"
 tmp_unmanaged="$(mktemp)"
-trap 'rm -f "$tmp_expected" "$tmp_actual" "$tmp_missing" "$tmp_unmanaged"' EXIT
+tmp_manifest="$(mktemp)"
+tmp_generated="$(mktemp)"
+trap 'rm -f "$tmp_expected" "$tmp_actual" "$tmp_missing" "$tmp_unmanaged" "$tmp_manifest" "$tmp_generated"' EXIT
 
 # Expected projected file set from source allowlist (tracked files only).
-for p in "${ALLOWLIST[@]}"; do
-  if [[ "${p}" == */ ]]; then
-    git -C "${SRC}" ls-files "${p}**" >> "$tmp_expected" || true
-  else
-    git -C "${SRC}" ls-files "${p}" >> "$tmp_expected" || true
-  fi
-  if [[ ! -e "${SRC}/${p}" ]]; then
-    fail "allowlisted path missing in source: ${p}"
-  else
-    :
-  fi
-done
-sort -u "$tmp_expected" -o "$tmp_expected"
+ALLOWLIST_FILE="${ALLOWLIST_FILE}" OUT_FILE="${tmp_generated}" \
+  bash "${ROOT}/scripts/generate_promotion_manifest.sh" "${SRC}" >/dev/null
+if [[ -f "${MANIFEST_FILE}" ]]; then
+  grep -vE '^\s*(#|$)' "${MANIFEST_FILE}" | sort -u > "$tmp_manifest"
+else
+  fail "manifest file not found: ${MANIFEST_FILE}"
+fi
+grep -vE '^\s*(#|$)' "${tmp_generated}" | sort -u > "$tmp_expected"
+
+# Ensure checked-in manifest matches generated projection.
+manifest_diff="$(
+  comm -3 "$tmp_expected" "$tmp_manifest" || true
+)"
+if [[ -n "${manifest_diff}" ]]; then
+  echo "${manifest_diff}" | sed -n '1,120p' >&2
+  fail "manifest drift detected. Regenerate with: bash scripts/generate_promotion_manifest.sh"
+fi
 
 # Actual file set in destination under managed allowlist paths.
+# Use filesystem state (not only tracked git files) so verification works
+# immediately after sync, before destination commit.
 for p in "${ALLOWLIST[@]}"; do
   if [[ "${p}" == */ ]]; then
-    while IFS= read -r rel; do
-      [[ -e "${DST}/${rel}" ]] && printf '%s\n' "${rel}" >> "$tmp_actual"
-    done < <(git -C "${DST}" ls-files "${p}**" || true)
+    if [[ -d "${DST}/${p}" ]]; then
+      (cd "${DST}" && find "${p}" -type f -print) >> "$tmp_actual"
+    fi
   else
-    while IFS= read -r rel; do
-      [[ -e "${DST}/${rel}" ]] && printf '%s\n' "${rel}" >> "$tmp_actual"
-    done < <(git -C "${DST}" ls-files "${p}" || true)
+    [[ -f "${DST}/${p}" ]] && printf '%s\n' "${p}" >> "$tmp_actual"
   fi
 done
 sort -u "$tmp_actual" -o "$tmp_actual"

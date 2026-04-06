@@ -22,6 +22,16 @@ var (
 	configPath  string
 )
 
+func ensureDefaultConfigLocked() *Config {
+	if globalConfig != nil {
+		return globalConfig
+	}
+	cfg := &Config{}
+	cfg.applyDefaults()
+	globalConfig = cfg
+	return globalConfig
+}
+
 // LoadConfig loads or reloads the configuration from file
 func LoadConfig(path string) (*Config, error) {
 	configMutex.Lock()
@@ -74,41 +84,56 @@ func LoadConfig(path string) (*Config, error) {
 // GetConfig returns the currently loaded global config
 func GetConfig() *Config {
 	configMutex.RLock()
-	defer configMutex.RUnlock()
-
-	if globalConfig == nil {
-		panic("config not loaded - call LoadConfig() first")
+	cfg := globalConfig
+	configMutex.RUnlock()
+	if cfg != nil {
+		return cfg
 	}
-	return globalConfig
+
+	configMutex.Lock()
+	defer configMutex.Unlock()
+	return ensureDefaultConfigLocked()
 }
 
 // ReloadIfChanged checks if config file has changed and reloads it
 func ReloadIfChanged() (*Config, error) {
 	configMutex.RLock()
 	currentPath := configPath
+	currentCfg := globalConfig
+	currentModTime := lastModTime
 	configMutex.RUnlock()
 
 	if currentPath == "" {
+		if currentCfg != nil {
+			return currentCfg, nil
+		}
 		return GetConfig(), nil
 	}
 
 	// Check file modification time
 	fi, err := os.Stat(currentPath)
 	if err != nil {
-		return GetConfig(), nil // File may have been temporarily unavailable
+		if currentCfg != nil {
+			return currentCfg, nil // File may have been temporarily unavailable
+		}
+		return GetConfig(), nil
 	}
 
-	if fi.ModTime().After(lastModTime) {
+	if fi.ModTime().After(currentModTime) {
 		// File has been modified, reload
 		return LoadConfig(currentPath)
 	}
 
+	if currentCfg != nil {
+		return currentCfg, nil
+	}
 	return GetConfig(), nil
 }
 
 // WatchConfigFile starts a background goroutine that watches for config file changes
 func WatchConfigFile(onReload func(*Config)) {
 	go func() {
+		lastSeen := GetConfig()
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 
@@ -119,8 +144,11 @@ func WatchConfigFile(onReload func(*Config)) {
 				continue
 			}
 
-			if onReload != nil && cfg != GetConfig() {
+			if onReload != nil && cfg != lastSeen {
+				lastSeen = cfg
 				onReload(cfg)
+			} else {
+				lastSeen = cfg
 			}
 		}
 	}()

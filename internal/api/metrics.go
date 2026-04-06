@@ -52,6 +52,9 @@ func NewMetrics() *Metrics {
 
 // RecordRequest records a completed HTTP request.
 func (m *Metrics) RecordRequest(path, method string, latencyMs int64, success bool) {
+	if m == nil {
+		return
+	}
 	atomic.AddInt64(&m.RequestsTotal, 1)
 	atomic.AddInt64(&m.TotalLatencyMs, latencyMs)
 
@@ -99,6 +102,9 @@ func (m *Metrics) RecordRequest(path, method string, latencyMs int64, success bo
 
 // RecordConnectorMessage records a message sent via a connector.
 func (m *Metrics) RecordConnectorMessage(latencyMs int64, success bool) {
+	if m == nil {
+		return
+	}
 	atomic.AddInt64(&m.ConnectorMessagesTotal, 1)
 	atomic.AddInt64(&m.ConnectorLatencyMs, latencyMs)
 
@@ -111,12 +117,18 @@ func (m *Metrics) RecordConnectorMessage(latencyMs int64, success bool) {
 
 // RecordWebSocketConnection records a new WebSocket connection.
 func (m *Metrics) RecordWebSocketConnection() {
+	if m == nil {
+		return
+	}
 	atomic.AddInt64(&m.WebSocketConnectionsActive, 1)
 	atomic.AddInt64(&m.WebSocketConnectionsTotal, 1)
 }
 
 // RecordWebSocketDisconnection records a WebSocket disconnection.
 func (m *Metrics) RecordWebSocketDisconnection() {
+	if m == nil {
+		return
+	}
 	active := atomic.AddInt64(&m.WebSocketConnectionsActive, -1)
 	if active < 0 {
 		atomic.StoreInt64(&m.WebSocketConnectionsActive, 0)
@@ -125,11 +137,31 @@ func (m *Metrics) RecordWebSocketDisconnection() {
 
 // RecordWebSocketMessage records a message received via WebSocket.
 func (m *Metrics) RecordWebSocketMessage() {
+	if m == nil {
+		return
+	}
 	atomic.AddInt64(&m.WebSocketMessagesTotal, 1)
 }
 
 // GetStats returns a snapshot of current metrics.
 func (m *Metrics) GetStats() map[string]interface{} {
+	if m == nil {
+		return map[string]interface{}{
+			"http_requests_total":            int64(0),
+			"http_requests_success":          int64(0),
+			"http_requests_error":            int64(0),
+			"http_success_rate_percent":      float64(0),
+			"http_avg_latency_ms":            int64(0),
+			"connector_messages_total":       int64(0),
+			"connector_messages_sent":        int64(0),
+			"connector_messages_failed":      int64(0),
+			"connector_avg_latency_ms":       int64(0),
+			"websocket_connections_active":   int64(0),
+			"websocket_connections_total":    int64(0),
+			"websocket_messages_total":       int64(0),
+			"uptime":                         time.Now().Unix(),
+		}
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -168,6 +200,9 @@ func (m *Metrics) GetStats() map[string]interface{} {
 
 // GetEndpointStats returns metrics for all endpoints.
 func (m *Metrics) GetEndpointStats() []map[string]interface{} {
+	if m == nil {
+		return nil
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
