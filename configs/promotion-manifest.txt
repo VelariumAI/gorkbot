@@ -1,7 +1,7 @@
 # Auto-generated promotion manifest.
 # Source allowlist: configs/promotion-allowlist.txt
 # Regenerate with: bash scripts/generate_promotion_manifest.sh
-# Generated at (UTC): 2026-05-11T22:54:13Z
+# Generated at (UTC): 2026-05-11T23:57:55Z
 
 .github/workflows/release.yml
 .github/workflows/universal-validator.yml
@@ -112,6 +112,8 @@ internal/engine/rag_injector.go
 internal/engine/ralph.go
 internal/engine/ralph_plan_crystallizer_test.go
 internal/engine/reasoning_hooks.go
+internal/engine/render_guard.go
+internal/engine/render_guard_test.go
 internal/engine/selfimprove_hooks.go
 internal/engine/selfimprove_hooks_test.go
 internal/engine/sense_hitl.go
@@ -449,6 +451,9 @@ pkg/governance/policy.go
 pkg/governance/policy_test.go
 pkg/governance/postcondition.go
 pkg/governance/receipt.go
+pkg/governance/render_guard.go
+pkg/governance/render_guard_service.go
+pkg/governance/render_guard_test.go
 pkg/governance/risk.go
 pkg/harness/harness_test.go
 pkg/harness/initializer.go
@@ -699,6 +704,7 @@ pkg/vcseclient/health.go
 pkg/vcseclient/ledger.go
 pkg/vcseclient/proposal.go
 pkg/vcseclient/render.go
+pkg/vcseclient/render_test.go
 pkg/vcseclient/vcseclient_test.go
 pkg/vectorstore/store.go
 pkg/version/version.go
