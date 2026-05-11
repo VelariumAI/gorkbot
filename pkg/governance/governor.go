@@ -25,6 +25,13 @@ type Governor struct {
 	ApprovalCache   *ApprovalCache
 	ApprovalTimeout time.Duration
 	ApprovalRuntime *ApprovalRuntime
+	// RenderGuardTimeout bounds final-answer renderer verification calls.
+	RenderGuardTimeout time.Duration
+	// RenderGuardPolicy defines renderer verification policy.
+	RenderGuardPolicy RendererGuardPolicy
+	// RenderGuardOnUnavailable controls correctness behavior when VCSE render
+	// verification is unavailable: block|downgrade|audit.
+	RenderGuardOnUnavailable string
 	// MaxInflightApprovals bounds stuck approval callbacks from non-cancellable handlers.
 	MaxInflightApprovals int
 	Now                  func() time.Time

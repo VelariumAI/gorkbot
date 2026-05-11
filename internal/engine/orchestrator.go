@@ -25,6 +25,7 @@ import (
 	"github.com/velariumai/gorkbot/pkg/collab"
 	"github.com/velariumai/gorkbot/pkg/config"
 	"github.com/velariumai/gorkbot/pkg/distributed"
+	"github.com/velariumai/gorkbot/pkg/governance"
 	"github.com/velariumai/gorkbot/pkg/hooks"
 	"github.com/velariumai/gorkbot/pkg/memory"
 	"github.com/velariumai/gorkbot/pkg/persist"
@@ -335,6 +336,13 @@ type Orchestrator struct {
 	// sandboxSanitizer stores the InputSanitizer when the sandbox is bypassed
 	// so it can be restored by ToggleSandbox(). Nil when sandbox is active.
 	sandboxSanitizer *sense.InputSanitizer
+
+	// Governor is the optional governance spine used for final-answer renderer
+	// guard checks in correctness mode.
+	Governor *governance.Governor
+
+	lastRenderGuardMu       sync.Mutex
+	lastRenderGuardDecision *governance.RendererGuardDecision
 }
 
 // NewOrchestrator initializes the orchestration engine with SENSE components.
@@ -1680,6 +1688,7 @@ func (o *Orchestrator) ExecuteTaskWithTools(ctx context.Context, prompt string, 
 		o.ConversationHistory.RepairOrphanedPairs()
 	}
 
+	finalResponse = o.applyFinalAnswerGuard(ctx, finalResponse, nil)
 	return finalResponse, nil
 }
 

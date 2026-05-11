@@ -212,6 +212,8 @@ func main() {
 	governanceApprovalTimeoutFlag := fs.Duration("governance-approval-timeout", 30*time.Second, "Timeout for human governance approval")
 	governanceMaxInflightApprovalsFlag := fs.Int("governance-max-inflight-approvals", 4, "Maximum in-flight governance approval callbacks")
 	governanceNoApprovalCacheFlag := fs.Bool("governance-no-approval-cache", false, "Disable in-memory governance approval cache")
+	renderGuardOnUnavailableFlag := fs.String("render-guard-on-unavailable", "", "Renderer guard unavailable behavior: block|downgrade|audit")
+	renderGuardTimeoutFlag := fs.Duration("render-guard-timeout", 750*time.Millisecond, "Timeout for VCSE renderer guard verification")
 
 	// Pre-scan for --output-format=json to handle errors correctly
 	isJSON := false
@@ -246,6 +248,27 @@ func main() {
 			vcseURLExplicit = true
 		}
 	})
+
+	renderGuardOnUnavailable := strings.ToLower(strings.TrimSpace(*renderGuardOnUnavailableFlag))
+	if renderGuardOnUnavailable != "" &&
+		renderGuardOnUnavailable != governance.RenderGuardUnavailableBlock &&
+		renderGuardOnUnavailable != governance.RenderGuardUnavailableDowngrade &&
+		renderGuardOnUnavailable != governance.RenderGuardUnavailableAudit {
+		msg := fmt.Sprintf("invalid --render-guard-on-unavailable value %q (expected block|downgrade|audit)", *renderGuardOnUnavailableFlag)
+		if isJSON {
+			outputErrorJSON(msg)
+		} else {
+			fmt.Fprintln(os.Stderr, msg)
+		}
+		os.Exit(2)
+	}
+	if renderGuardOnUnavailable == "" {
+		if governanceMode == governance.GOVERNANCE_AUDIT {
+			renderGuardOnUnavailable = governance.RenderGuardUnavailableAudit
+		} else {
+			renderGuardOnUnavailable = governance.RenderGuardUnavailableDowngrade
+		}
+	}
 
 	// --join: observer-only mode — no orchestrator or TUI needed.
 	if *joinFlag != "" {
@@ -550,6 +573,11 @@ func main() {
 		ApprovalHandler:      toolRegistry,
 		ApprovalTimeout:      *governanceApprovalTimeoutFlag,
 		MaxInflightApprovals: *governanceMaxInflightApprovalsFlag,
+		RenderGuardTimeout:   *renderGuardTimeoutFlag,
+		RenderGuardPolicy: governance.RendererGuardPolicy{
+			RenderMode: string(governance.RENDER_MODE_CANONICAL_ONLY),
+		},
+		RenderGuardOnUnavailable: renderGuardOnUnavailable,
 	}
 	if !*governanceNoApprovalCacheFlag {
 		gov.ApprovalCache = governance.NewApprovalCache()
@@ -573,6 +601,8 @@ func main() {
 			"approval_timeout", governanceApprovalTimeoutFlag.String(),
 			"approval_max_inflight", gov.ApprovalRuntime.MaxInflight(),
 			"approval_cache_enabled", !*governanceNoApprovalCacheFlag,
+			"render_guard_timeout", renderGuardTimeoutFlag.String(),
+			"render_guard_on_unavailable", renderGuardOnUnavailable,
 		)
 	} else {
 		logger.Info("Governance disabled", "mode", governanceMode)
@@ -679,6 +709,7 @@ func main() {
 	// 6. Orchestration Engine with ProviderCoordinator
 	provCoord := engprov.NewProviderCoordinator(provMgr, primary, consultant, discMgr, events.NewBus(), logger)
 	orch := engine.NewOrchestrator(provCoord, toolRegistry, logger, *watchdogFlag)
+	orch.Governor = gov
 
 	// 6a. Free Will Engine for self-evolution
 	freeWillEng := engine.NewFreeWillEngine()
@@ -1461,6 +1492,9 @@ func runOneShotTask(ctx context.Context, orch *engine.Orchestrator, prompt strin
 				"output": outTokens,
 			},
 			"tools": toolCalls,
+		}
+		if decision := orch.LastRenderGuardDecision(); decision != nil {
+			outMap["render_guard"] = decision
 		}
 
 		if err != nil {

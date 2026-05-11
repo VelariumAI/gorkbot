@@ -503,7 +503,7 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 			interventionCallback: interventionCallback,
 			relay:                o.Relay,
 			thinkingCallback:     getThinkingCallbackFromAtomic(o),
-			statusUpdateFreq:     10, // emit status every 10 tokens
+			statusUpdateFreq:     10,                  // emit status every 10 tokens
 			suppressor:           o.MessageSuppressor, // Apply message suppression if configured
 		}
 
@@ -566,29 +566,29 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 				provID := string(primary.ID())
 				modelID := primary.GetMetadata().ID
 
-			// Record provider latency metric
-			if o.Observability != nil {
-				o.Observability.RecordProviderLatency(provID, modelID, latency)
-			}
-
-			if o.ContextMgr != nil {
-				o.ContextMgr.UpdateFromUsage(TokenUsage{
-					InputTokens:  u.PromptTokens,
-					OutputTokens: u.CompletionTokens,
-					ProviderID:   provID,
-					ModelID:      modelID,
-				})
-			}
-			if o.Billing != nil {
-				cost := o.Billing.CalculateCost(provID, modelID, u.PromptTokens, u.CompletionTokens)
-				o.Billing.TrackTurn(provID, modelID, u.PromptTokens, u.CompletionTokens)
-
-				// Record cost metric
+				// Record provider latency metric
 				if o.Observability != nil {
-					o.Observability.RecordCost(provID, modelID, u.PromptTokens, u.CompletionTokens, cost)
+					o.Observability.RecordProviderLatency(provID, modelID, latency)
+				}
+
+				if o.ContextMgr != nil {
+					o.ContextMgr.UpdateFromUsage(TokenUsage{
+						InputTokens:  u.PromptTokens,
+						OutputTokens: u.CompletionTokens,
+						ProviderID:   provID,
+						ModelID:      modelID,
+					})
+				}
+				if o.Billing != nil {
+					cost := o.Billing.CalculateCost(provID, modelID, u.PromptTokens, u.CompletionTokens)
+					o.Billing.TrackTurn(provID, modelID, u.PromptTokens, u.CompletionTokens)
+
+					// Record cost metric
+					if o.Observability != nil {
+						o.Observability.RecordCost(provID, modelID, u.PromptTokens, u.CompletionTokens, cost)
+					}
 				}
 			}
-		}
 		}
 		// ALWAYS commit whatever was streamed to history, even on partial / error.
 		// Without this, an interrupted response is silently dropped and the model
@@ -738,6 +738,9 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 				go o.VectorStore.IndexTurn(context.Background(), o.SessionID, "user", prompt)
 				go o.VectorStore.IndexTurn(context.Background(), o.SessionID, "assistant", response)
 			}
+
+			// Final-answer renderer guard (correctness mode / explicit request).
+			o.renderGuardStreamingNotice(ctx, response, nil, streamCallback)
 
 			taskCompleted = true
 			break
@@ -936,6 +939,7 @@ func (o *Orchestrator) ExecuteTaskWithStreaming(ctx context.Context, prompt stri
 					streamCallback(finalResponse)
 				}
 				o.ConversationHistory.AddAssistantMessage(finalResponse)
+				o.renderGuardStreamingNotice(ctx, finalResponse, nil, streamCallback)
 			}
 		}
 	}
@@ -1003,11 +1007,11 @@ type streamCallbackWriter struct {
 	thinkingBuf      strings.Builder // accumulates partial thinking text within one Write call
 
 	// token counting and status updates for the TUI status line
-	tokenCount        int       // tracks tokens received from LLM
-	firstTokenTime    time.Time // tracks when first token arrived
-	modelID           string    // model being used (e.g. "grok-4-fast-")
-	statusUpdateFreq  int       // throttle status updates: emit every N tokens (default 10)
-	lastStatusTokens  int       // tokens at last status update
+	tokenCount       int       // tracks tokens received from LLM
+	firstTokenTime   time.Time // tracks when first token arrived
+	modelID          string    // model being used (e.g. "grok-4-fast-")
+	statusUpdateFreq int       // throttle status updates: emit every N tokens (default 10)
+	lastStatusTokens int       // tokens at last status update
 
 	// Message suppression for filtering internal system messages
 	suppressor *MessageSuppressionMiddleware // nil = no suppression (all messages passed through)
@@ -1100,27 +1104,27 @@ func (w *streamCallbackWriter) Write(p []byte) (n int, err error) {
 					// Use the turn's context so the check is cancelled if the user aborts.
 					verdict, _ := consultant.Generate(w.ctx, prompt)
 
-				if strings.Contains(strings.ToUpper(verdict), "LOOP") {
-					// Confirmed loop. Escalate to User.
-					if w.interventionCallback != nil {
-						response := w.interventionCallback(severity, sample)
+					if strings.Contains(strings.ToUpper(verdict), "LOOP") {
+						// Confirmed loop. Escalate to User.
+						if w.interventionCallback != nil {
+							response := w.interventionCallback(severity, sample)
 
-						switch response {
-						case InterventionStop:
-							if w.cancel != nil {
-								w.cancel()
+							switch response {
+							case InterventionStop:
+								if w.cancel != nil {
+									w.cancel()
+								}
+								return len(p), fmt.Errorf("stream halted by user intervention")
+							case InterventionAllowSession:
+								// Disable monitor for this writer
+								w.monitor = nil
+							case InterventionContinue:
+								// Just continue, maybe reset monitor stats
+								// We essentially ignore this warning instance
 							}
-							return len(p), fmt.Errorf("stream halted by user intervention")
-						case InterventionAllowSession:
-							// Disable monitor for this writer
-							w.monitor = nil
-						case InterventionContinue:
-							// Just continue, maybe reset monitor stats
-							// We essentially ignore this warning instance
 						}
 					}
 				}
-			}
 			}
 		}
 	}
