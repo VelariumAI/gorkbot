@@ -53,6 +53,8 @@ import (
 	"github.com/velariumai/gorkbot/pkg/config"
 	"github.com/velariumai/gorkbot/pkg/discovery"
 	gorkenv "github.com/velariumai/gorkbot/pkg/env"
+	"github.com/velariumai/gorkbot/pkg/execution"
+	"github.com/velariumai/gorkbot/pkg/governance"
 	"github.com/velariumai/gorkbot/pkg/memory"
 	"github.com/velariumai/gorkbot/pkg/persist"
 	"github.com/velariumai/gorkbot/pkg/process"
@@ -70,6 +72,7 @@ import (
 	"github.com/velariumai/gorkbot/pkg/tools"
 	"github.com/velariumai/gorkbot/pkg/tui/hotkeys"
 	"github.com/velariumai/gorkbot/pkg/usercommands"
+	"github.com/velariumai/gorkbot/pkg/vcseclient"
 	"github.com/velariumai/gorkbot/pkg/vectorstore"
 	"github.com/velariumai/gorkbot/pkg/webhook"
 )
@@ -203,6 +206,12 @@ func main() {
 	dryRunFlag := fs.Bool("dry-run", false, "Validate request and tools locally without executing mutations")
 	inlineFlag := fs.Bool("inline", false, "Use the inline REPL instead of the TUI")
 	irFlag := fs.Bool("ir", false, "Use the inline REPL instead of the TUI (alias for --inline)")
+	governanceFlag := fs.String("governance", "off", "Governance mode: off|audit|fast|enforce|correctness")
+	vcseURLFlag := fs.String("vcse-url", "http://127.0.0.1:8000", "VCSE base URL")
+	vcseTimeoutFlag := fs.Duration("vcse-timeout", 250*time.Millisecond, "VCSE fast-path timeout")
+	governanceApprovalTimeoutFlag := fs.Duration("governance-approval-timeout", 30*time.Second, "Timeout for human governance approval")
+	governanceMaxInflightApprovalsFlag := fs.Int("governance-max-inflight-approvals", 4, "Maximum in-flight governance approval callbacks")
+	governanceNoApprovalCacheFlag := fs.Bool("governance-no-approval-cache", false, "Disable in-memory governance approval cache")
 
 	// Pre-scan for --output-format=json to handle errors correctly
 	isJSON := false
@@ -220,6 +229,23 @@ func main() {
 		// ContinueOnError returns err instead of exiting, so we exit manually if not JSON
 		os.Exit(2)
 	}
+
+	governanceMode, ok := governance.ParseMode(*governanceFlag)
+	if !ok {
+		msg := fmt.Sprintf("invalid --governance value %q (expected off|audit|fast|enforce|correctness)", *governanceFlag)
+		if isJSON {
+			outputErrorJSON(msg)
+		} else {
+			fmt.Fprintln(os.Stderr, msg)
+		}
+		os.Exit(2)
+	}
+	vcseURLExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "vcse-url" {
+			vcseURLExplicit = true
+		}
+	})
 
 	// --join: observer-only mode — no orchestrator or TUI needed.
 	if *joinFlag != "" {
@@ -507,6 +533,50 @@ func main() {
 	researchEngine := research.NewEngine(10, logger)
 	toolRegistry.SetResearchEngine(researchEngine)
 	logger.Info("Research engine initialized", "max_documents", 10)
+
+	// Governance spine (PR-001): optional, default-off.
+	// VCSE is enabled when governance is active, or when vcse-url is explicitly provided.
+	vcseEnabled := governanceMode != governance.GOVERNANCE_OFF || vcseURLExplicit
+	govPolicy := governance.DefaultPolicy()
+	govPolicy.Mode = governanceMode
+	if cwd, err := os.Getwd(); err == nil {
+		govPolicy.WorkspaceRoot = cwd
+	}
+	gov := &governance.Governor{
+		Policy:               govPolicy,
+		Budget:               execution.DefaultBudget(),
+		Breakers:             execution.NewDefaultBreakerSet(),
+		Progress:             execution.NewProgressTracker(),
+		ApprovalHandler:      toolRegistry,
+		ApprovalTimeout:      *governanceApprovalTimeoutFlag,
+		MaxInflightApprovals: *governanceMaxInflightApprovalsFlag,
+	}
+	if !*governanceNoApprovalCacheFlag {
+		gov.ApprovalCache = governance.NewApprovalCache()
+	}
+	if vcseEnabled {
+		gov.VCSE = vcseclient.New(vcseclient.Config{
+			BaseURL: *vcseURLFlag,
+			Timeout: *vcseTimeoutFlag,
+			Enabled: true,
+		})
+	}
+	if governanceMode != governance.GOVERNANCE_OFF {
+		gov.ApprovalRuntime = governance.NewApprovalRuntime(*governanceMaxInflightApprovalsFlag)
+		defer gov.Shutdown()
+		toolRegistry.SetGovernor(gov)
+		logger.Info("Governance enabled",
+			"mode", governanceMode,
+			"vcse_enabled", vcseEnabled,
+			"vcse_url", *vcseURLFlag,
+			"vcse_timeout", vcseTimeoutFlag.String(),
+			"approval_timeout", governanceApprovalTimeoutFlag.String(),
+			"approval_max_inflight", gov.ApprovalRuntime.MaxInflight(),
+			"approval_cache_enabled", !*governanceNoApprovalCacheFlag,
+		)
+	} else {
+		logger.Info("Governance disabled", "mode", governanceMode)
+	}
 
 	if err := toolRegistry.RegisterDefaultTools(); err != nil {
 		logger.Error("Failed to register default tools", "error", err)

@@ -3,12 +3,18 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/velariumai/gorkbot/pkg/execution"
+	"github.com/velariumai/gorkbot/pkg/governance"
 	"github.com/velariumai/gorkbot/pkg/persist"
 	"github.com/velariumai/gorkbot/pkg/research"
 	"github.com/velariumai/gorkbot/pkg/scheduler"
@@ -33,6 +39,8 @@ var observabilityHubContextKey = &contextKey{"observability"}
 
 // bypassSanitizerKey is the context key for requesting sanitizer bypass (legacy).
 var bypassSanitizerKey = &contextKey{"bypassSanitizer"}
+
+var governanceApprovalUnavailableOnce sync.Once
 
 // OrchestratorContextKey returns the context key for the orchestrator.
 func OrchestratorContextKey() interface{} {
@@ -99,6 +107,11 @@ type Registry struct {
 	// researchEngine is the shared deep-research engine for browser_* tools.
 	// Document content lives here and never enters conversation history.
 	researchEngine *research.Engine
+
+	// governor is an optional governance gate for audit/enforcement decisions.
+	governor interface {
+		DecideAndApprove(context.Context, governance.GovernedAction) governance.GovernanceDecision
+	}
 
 	DryRun bool // If true, validation succeeds but tool execution returns a mocked success
 }
@@ -287,6 +300,15 @@ func (r *Registry) SetResearchEngine(e *research.Engine) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.researchEngine = e
+}
+
+// SetGovernor wires an optional governance decision engine into the registry.
+func (r *Registry) SetGovernor(g interface {
+	DecideAndApprove(context.Context, governance.GovernedAction) governance.GovernanceDecision
+}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.governor = g
 }
 
 // GetResearchEngine returns the research engine (nil when not configured).
@@ -762,6 +784,24 @@ func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, 
 		}
 	}
 
+	// Optional governance pass (audit/enforce based on mode).
+	r.mu.RLock()
+	gov := r.governor
+	r.mu.RUnlock()
+	if gov != nil {
+		action := buildGovernedAction(normalizedName, normalizedParams)
+		decision := gov.DecideAndApprove(ctx, action)
+		logGovernanceDecision(decision, normalizedName, normalizedParams)
+		logGovernanceApproval(decision, normalizedName)
+		if decision.Mode != governance.GOVERNANCE_AUDIT && !decision.Allowed {
+			msg := fmt.Sprintf("governance blocked tool %q: %s", normalizedName, strings.TrimPrefix(decision.ReasonCode, "REASON_"))
+			return &ToolResult{
+				Success: false,
+				Error:   msg,
+			}, fmt.Errorf("%s", msg)
+		}
+	}
+
 	// Add registry to context for meta tools that need it
 	ctxWithRegistry := context.WithValue(ctx, registryContextKey, r)
 
@@ -921,6 +961,231 @@ func (r *Registry) GrantSessionPermission(toolName string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sessionPerms[toolName] = true
+}
+
+func buildGovernedAction(toolName string, params map[string]interface{}) governance.GovernedAction {
+	workspace, _ := os.Getwd()
+	anyParams := make(map[string]any, len(params))
+	for k, v := range params {
+		anyParams[k] = v
+	}
+	return governance.GovernedAction{
+		ID:         uuid.NewString(),
+		Actor:      "gorkbot",
+		Capability: "tool." + toolName,
+		ToolName:   toolName,
+		Workspace:  workspace,
+		Parameters: anyParams,
+		RiskClass:  governance.ClassifyTool(toolName, anyParams),
+		CreatedAt:  time.Now().UTC(),
+	}
+}
+
+func logGovernanceDecision(decision governance.GovernanceDecision, toolName string, params map[string]interface{}) {
+	safeParams := redactSensitiveParams(params)
+	paramsJSON := ""
+	if b, err := json.Marshal(safeParams); err == nil {
+		paramsJSON = execution.TruncateOutput(string(b), 4000)
+	}
+	slog.Info("governance_decision",
+		"action_id", decision.ActionID,
+		"tool", toolName,
+		"risk", decision.RiskClass,
+		"allowed", decision.Allowed,
+		"mode", decision.Mode,
+		"status", decision.FinalStatus,
+		"reason", decision.ReasonCode,
+		"duration_ms", decision.DurationMS,
+		"issues", decision.Issues,
+		"params_json", paramsJSON,
+	)
+}
+
+func logGovernanceApproval(decision governance.GovernanceDecision, toolName string) {
+	if !strings.HasPrefix(decision.ReasonCode, "REASON_HUMAN_APPROVAL_") {
+		return
+	}
+	slog.Info("governance_approval_result",
+		"action_id", decision.ActionID,
+		"tool", toolName,
+		"allowed", decision.Allowed,
+		"mode", decision.Mode,
+		"status", decision.FinalStatus,
+		"reason", decision.ReasonCode,
+	)
+}
+
+func redactSensitiveParams(params map[string]interface{}) map[string]interface{} {
+	if params == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(params))
+	for k, v := range params {
+		if isSensitiveParamKey(k) {
+			out[k] = "[REDACTED]"
+			continue
+		}
+		out[k] = redactSensitiveValue(v)
+	}
+	return out
+}
+
+func redactSensitiveValue(v interface{}) interface{} {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		return redactSensitiveParams(t)
+	case []interface{}:
+		out := make([]interface{}, len(t))
+		for i := range t {
+			out[i] = redactSensitiveValue(t[i])
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+func isSensitiveParamKey(k string) bool {
+	key := strings.ToLower(strings.TrimSpace(k))
+	switch key {
+	case "api_key", "token", "password", "secret", "authorization", "cookie":
+		return true
+	}
+	if strings.Contains(key, "token") || strings.Contains(key, "secret") || strings.Contains(key, "password") {
+		return true
+	}
+	if strings.Contains(key, "api-key") || strings.Contains(key, "api_key") {
+		return true
+	}
+	return false
+}
+
+// RequestApproval adapts the existing permission callback into governance approval.
+func (r *Registry) RequestApproval(ctx context.Context, req governance.ApprovalRequest) (governance.ApprovalResult, error) {
+	r.mu.RLock()
+	handler := r.permissionHandler
+	pm := r.permissionMgr
+	sessionAllowed := r.sessionPerms[req.ToolName]
+	r.mu.RUnlock()
+
+	if sessionAllowed {
+		return governance.ApprovalResult{
+			ActionID: req.ActionID,
+			Decision: governance.APPROVAL_GRANTED,
+			Scope:    governance.APPROVAL_SESSION,
+		}, nil
+	}
+	if pm != nil {
+		switch pm.GetPermission(req.ToolName) {
+		case PermissionAlways:
+			return governance.ApprovalResult{ActionID: req.ActionID, Decision: governance.APPROVAL_GRANTED, Scope: governance.APPROVAL_ALWAYS}, nil
+		case PermissionSession:
+			return governance.ApprovalResult{ActionID: req.ActionID, Decision: governance.APPROVAL_GRANTED, Scope: governance.APPROVAL_SESSION}, nil
+		case PermissionNever:
+			return governance.ApprovalResult{ActionID: req.ActionID, Decision: governance.APPROVAL_DENIED, Scope: governance.APPROVAL_NEVER}, nil
+		}
+	}
+
+	if handler == nil {
+		governanceApprovalUnavailableOnce.Do(func() {
+			slog.Warn("governance approval handler unavailable; high-risk actions will be blocked in enforce modes")
+		})
+		return governance.ApprovalResult{
+			ActionID: req.ActionID,
+			Decision: governance.APPROVAL_UNAVAILABLE,
+			Scope:    governance.APPROVAL_ONCE,
+			Reason:   "permission handler unavailable",
+		}, nil
+	}
+
+	params := req.RedactedParams
+	if len(params) == 0 {
+		params = req.Parameters
+	}
+	callParams := anyToInterfaceMap(params)
+
+	if err := ctx.Err(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return governance.ApprovalResult{
+				ActionID: req.ActionID,
+				Decision: governance.APPROVAL_TIMEOUT,
+				Scope:    governance.APPROVAL_ONCE,
+				Reason:   err.Error(),
+			}, nil
+		}
+		return governance.ApprovalResult{
+			ActionID: req.ActionID,
+			Decision: governance.APPROVAL_CANCELLED,
+			Scope:    governance.APPROVAL_ONCE,
+			Reason:   err.Error(),
+		}, nil
+	}
+
+	level := handler(req.ToolName, callParams)
+	if err := ctx.Err(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return governance.ApprovalResult{
+				ActionID: req.ActionID,
+				Decision: governance.APPROVAL_TIMEOUT,
+				Scope:    governance.APPROVAL_ONCE,
+				Reason:   err.Error(),
+			}, nil
+		}
+		return governance.ApprovalResult{
+			ActionID: req.ActionID,
+			Decision: governance.APPROVAL_CANCELLED,
+			Scope:    governance.APPROVAL_ONCE,
+			Reason:   err.Error(),
+		}, nil
+	}
+
+	switch level {
+	case PermissionAlways:
+		if pm != nil {
+			_ = pm.SetPermission(req.ToolName, PermissionAlways)
+		}
+		return governance.ApprovalResult{ActionID: req.ActionID, Decision: governance.APPROVAL_GRANTED, Scope: governance.APPROVAL_ALWAYS}, nil
+	case PermissionSession:
+		r.mu.Lock()
+		r.sessionPerms[req.ToolName] = true
+		r.mu.Unlock()
+		return governance.ApprovalResult{ActionID: req.ActionID, Decision: governance.APPROVAL_GRANTED, Scope: governance.APPROVAL_SESSION}, nil
+	case PermissionOnce:
+		return governance.ApprovalResult{ActionID: req.ActionID, Decision: governance.APPROVAL_GRANTED, Scope: governance.APPROVAL_ONCE}, nil
+	case PermissionNever:
+		if pm != nil {
+			_ = pm.SetPermission(req.ToolName, PermissionNever)
+		}
+		return governance.ApprovalResult{ActionID: req.ActionID, Decision: governance.APPROVAL_DENIED, Scope: governance.APPROVAL_NEVER}, nil
+	default:
+		return governance.ApprovalResult{ActionID: req.ActionID, Decision: governance.APPROVAL_UNAVAILABLE, Scope: governance.APPROVAL_ONCE}, nil
+	}
+}
+
+func anyToInterfaceMap(in map[string]any) map[string]interface{} {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(in))
+	for k, v := range in {
+		out[k] = convertAny(v)
+	}
+	return out
+}
+
+func convertAny(v any) interface{} {
+	switch t := v.(type) {
+	case map[string]any:
+		return anyToInterfaceMap(t)
+	case []any:
+		out := make([]interface{}, len(t))
+		for i := range t {
+			out[i] = convertAny(t[i])
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 // RevokeSessionPermission revokes session permission
