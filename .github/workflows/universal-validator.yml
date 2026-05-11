@@ -146,6 +146,7 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:go"
+          upload: false
 
   # Dependency vulnerability check
   dependency-check:
@@ -217,7 +218,8 @@ jobs:
           cache: true
 
       - name: Run tests with coverage (extended)
-        run: go test -v -coverprofile=coverage.out -covermode=atomic ./...
+        shell: bash
+        run: go test -v -covermode=atomic -coverprofile=coverage.out ./...
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

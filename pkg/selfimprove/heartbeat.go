@@ -11,7 +11,13 @@ type AdaptiveHeartbeat struct {
 	ticker     *time.Ticker
 	currentInt time.Duration
 	stopCh     chan struct{}
+	resetCh    chan heartbeatReset
 	tickCh     chan time.Time
+}
+
+type heartbeatReset struct {
+	interval time.Duration
+	done     chan struct{}
 }
 
 // Mode-specific intervals.
@@ -28,6 +34,7 @@ func NewAdaptiveHeartbeat() *AdaptiveHeartbeat {
 	h := &AdaptiveHeartbeat{
 		currentInt: modeIntervals[ModeCalm],
 		stopCh:     make(chan struct{}),
+		resetCh:    make(chan heartbeatReset, 1),
 		tickCh:     make(chan time.Time),
 	}
 	h.ticker = time.NewTicker(h.currentInt)
@@ -38,11 +45,20 @@ func NewAdaptiveHeartbeat() *AdaptiveHeartbeat {
 
 // relayTicks runs in a background goroutine and forwards ticker events.
 func (h *AdaptiveHeartbeat) relayTicks() {
+	tickC := h.ticker.C
 	for {
 		select {
 		case <-h.stopCh:
 			return
-		case t := <-h.ticker.C:
+		case req := <-h.resetCh:
+			h.mu.Lock()
+			h.ticker.Stop()
+			h.currentInt = req.interval
+			h.ticker = time.NewTicker(req.interval)
+			tickC = h.ticker.C
+			h.mu.Unlock()
+			close(req.done)
+		case t := <-tickC:
 			select {
 			case h.tickCh <- t:
 			case <-h.stopCh:
@@ -55,22 +71,32 @@ func (h *AdaptiveHeartbeat) relayTicks() {
 // Adapt changes the heartbeat interval for a new mode.
 // This hot-resets the ticker and clears any pending tick.
 func (h *AdaptiveHeartbeat) Adapt(mode EmotionalMode) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	newInt, ok := modeIntervals[mode]
 	if !ok {
 		newInt = modeIntervals[ModeCalm]
 	}
 
-	// If no change, skip.
-	if newInt == h.currentInt {
+	h.mu.Lock()
+	same := newInt == h.currentInt
+	h.mu.Unlock()
+	if same {
 		return
 	}
-
-	h.currentInt = newInt
-	h.ticker.Stop()
-	h.ticker = time.NewTicker(newInt)
+	req := heartbeatReset{interval: newInt, done: make(chan struct{})}
+	select {
+	case h.resetCh <- req:
+	default:
+		// Keep latest requested interval when updates arrive rapidly.
+		select {
+		case <-h.resetCh:
+		default:
+		}
+		h.resetCh <- req
+	}
+	select {
+	case <-req.done:
+	case <-h.stopCh:
+	}
 }
 
 // C returns the ticker channel to listen for ticks.

@@ -175,9 +175,15 @@ func TestWrappedProviderCountTokensAndRecordUsageQueue(t *testing.T) {
 	}
 
 	orig := usageLogCh
-	defer func() { usageLogCh = orig }()
+	defer func() {
+		usageLogMu.Lock()
+		usageLogCh = orig
+		usageLogMu.Unlock()
+	}()
+	usageLogMu.Lock()
 	usageLogCh = make(chan logEntry, 1)
 	usageLogCh <- logEntry{} // fill channel to force default/drop branch
+	usageLogMu.Unlock()
 
 	done := make(chan struct{})
 	go func() {
@@ -196,8 +202,15 @@ func TestWrappedProviderCountTokensAndRecordUsageQueue(t *testing.T) {
 
 func TestDrainUsageLogFlushOnClose(t *testing.T) {
 	orig := usageLogCh
-	defer func() { usageLogCh = orig }()
+	defer func() {
+		usageLogMu.Lock()
+		usageLogCh = orig
+		usageLogMu.Unlock()
+	}()
+	usageLogMu.Lock()
 	usageLogCh = make(chan logEntry, 2)
+	ch := usageLogCh
+	usageLogMu.Unlock()
 
 	logPath := filepath.Join(t.TempDir(), "usage", "usage_log.jsonl")
 	done := make(chan struct{})
@@ -205,8 +218,8 @@ func TestDrainUsageLogFlushOnClose(t *testing.T) {
 		drainUsageLog(logPath)
 		close(done)
 	}()
-	usageLogCh <- logEntry{Model: "m1", InputTokens: 1, OutputTokens: 2}
-	close(usageLogCh)
+	ch <- logEntry{Model: "m1", InputTokens: 1, OutputTokens: 2}
+	close(ch)
 
 	select {
 	case <-done:
