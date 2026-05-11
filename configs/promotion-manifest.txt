@@ -1,7 +1,7 @@
 # Auto-generated promotion manifest.
-# Source allowlist: /data/data/com.termux/files/home/project/gorky/configs/promotion-allowlist.txt
+# Source allowlist: configs/promotion-allowlist.txt
 # Regenerate with: bash scripts/generate_promotion_manifest.sh
-# Generated at (UTC): 2026-04-06T14:55:49Z
+# Generated at (UTC): 2026-05-11T22:54:13Z
 
 .github/workflows/release.yml
 .github/workflows/universal-validator.yml
@@ -249,23 +249,6 @@ internal/webui/api/api_test.go
 internal/webui/api/client.go
 internal/webui/api/sync.go
 internal/webui/api/websocket.go
-internal/webui/components/a11y.go
-internal/webui/components/components_test.go
-internal/webui/components/composer.go
-internal/webui/components/entity_models.go
-internal/webui/components/entity_models_test.go
-internal/webui/components/inspector.go
-internal/webui/components/keyboard.go
-internal/webui/components/performance.go
-internal/webui/components/polish_test.go
-internal/webui/components/response_card.go
-internal/webui/components/theming.go
-internal/webui/components/workspace.go
-internal/webui/components/workspace_chat.go
-internal/webui/components/workspace_other.go
-internal/webui/components/workspace_tasks.go
-internal/webui/components/workspace_tools.go
-internal/webui/components/workspaces_test.go
 internal/webui/run_store.go
 internal/webui/run_store_test.go
 internal/webui/server.go
@@ -409,6 +392,9 @@ pkg/config/schema.go
 pkg/config/viper.go
 pkg/config/viper_test.go
 pkg/config/watcher.go
+pkg/contracts/action_contract.go
+pkg/contracts/doc.go
+pkg/contracts/tool_contract.go
 pkg/dag/dag.go
 pkg/dag/executor.go
 pkg/dag/pruner.go
@@ -435,6 +421,35 @@ pkg/embeddings/ollama.go
 pkg/env/probe.go
 pkg/env/probe_test.go
 pkg/errors/errors.go
+pkg/execution/breaker.go
+pkg/execution/breaker_test.go
+pkg/execution/budget.go
+pkg/execution/budget_test.go
+pkg/execution/progress.go
+pkg/execution/progress_test.go
+pkg/execution/timeout.go
+pkg/execution/timeout_test.go
+pkg/execution/watchdog.go
+pkg/execution/watchdog_test.go
+pkg/governance/action.go
+pkg/governance/approval.go
+pkg/governance/approval_cache.go
+pkg/governance/approval_cache_test.go
+pkg/governance/approval_runtime.go
+pkg/governance/approval_runtime_test.go
+pkg/governance/approval_test.go
+pkg/governance/classifier.go
+pkg/governance/classifier_test.go
+pkg/governance/classify_bypass_test.go
+pkg/governance/decision.go
+pkg/governance/governance_test.go
+pkg/governance/governor.go
+pkg/governance/governor_test.go
+pkg/governance/policy.go
+pkg/governance/policy_test.go
+pkg/governance/postcondition.go
+pkg/governance/receipt.go
+pkg/governance/risk.go
 pkg/harness/harness_test.go
 pkg/harness/initializer.go
 pkg/harness/store.go
@@ -602,9 +617,6 @@ pkg/tools/colony_tool.go
 pkg/tools/consult.go
 pkg/tools/context_stats.go
 pkg/tools/coordinator.go
-pkg/tools/custom/hitl_notifier.go
-pkg/tools/custom/smart_read_file.go
-pkg/tools/custom/system_monitor.go
 pkg/tools/custom_android.go
 pkg/tools/custom_android_stub.go
 pkg/tools/custom_communication.go
@@ -680,6 +692,14 @@ pkg/usercommands/loader.go
 pkg/vault/policy.go
 pkg/vault/vault.go
 pkg/vault/vault_test.go
+pkg/vcseclient/client.go
+pkg/vcseclient/config.go
+pkg/vcseclient/errors.go
+pkg/vcseclient/health.go
+pkg/vcseclient/ledger.go
+pkg/vcseclient/proposal.go
+pkg/vcseclient/render.go
+pkg/vcseclient/vcseclient_test.go
 pkg/vectorstore/store.go
 pkg/version/version.go
 pkg/vision/adb.go
@@ -695,10 +715,6 @@ pkg/webhook/server.go
 scripts/bootstrap_native_llm.sh
 scripts/build_llm_bridge.sh
 scripts/check_promotion_manifest.sh
-scripts/check_promotion_unmanaged_paths.sh
-scripts/check_release_artifact_matrix.sh
-scripts/check_release_changelog.sh
-scripts/generate_promotion_manifest.sh
 scripts/release_checklist.sh
 scripts/setup_wizard.sh
 scripts/write_launcher.sh
