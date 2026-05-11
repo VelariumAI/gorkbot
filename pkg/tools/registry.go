@@ -1061,6 +1061,10 @@ func isSensitiveParamKey(k string) bool {
 }
 
 // RequestApproval adapts the existing permission callback into governance approval.
+// PermissionHandler is a legacy synchronous callback with no context parameter.
+// ApprovalRuntime enforces the caller context timeout boundary, but this callback
+// itself cannot be force-cancelled until the callback contract is upgraded.
+// Runtime slot limits (MaxInflightApprovals) bound stuck callbacks.
 func (r *Registry) RequestApproval(ctx context.Context, req governance.ApprovalRequest) (governance.ApprovalResult, error) {
 	r.mu.RLock()
 	handler := r.permissionHandler

@@ -220,6 +220,8 @@ func (r *ApprovalRuntime) runInflight(inflight *InflightApproval, fn func() (App
 }
 
 func (r *ApprovalRuntime) releaseSlot() {
+	// Defensive no-op when the semaphore is already empty.
+	// Normal paths acquire once and release exactly once.
 	select {
 	case <-r.sem:
 	default:

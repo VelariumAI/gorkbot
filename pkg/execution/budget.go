@@ -8,10 +8,12 @@ import (
 
 // ExecutionBudget defines time and iteration limits for a turn.
 type ExecutionBudget struct {
-	TurnTimeout            time.Duration
-	ToolDecisionTimeout    time.Duration
-	ToolExecutionTimeout   time.Duration
-	VCSEFastTimeout        time.Duration
+	TurnTimeout          time.Duration
+	ToolDecisionTimeout  time.Duration
+	ToolExecutionTimeout time.Duration
+	VCSEFastTimeout      time.Duration
+	// VCSEReasonTimeout is reserved for explicit future "reasoning/deep-VCSE"
+	// paths and is not used on the ordinary tool-execution hot path today.
 	VCSEReasonTimeout      time.Duration
 	MaxToolCalls           int
 	MaxRepeatedToolCalls   int

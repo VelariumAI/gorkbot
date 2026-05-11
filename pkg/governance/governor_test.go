@@ -3,6 +3,9 @@ package governance
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -65,6 +68,39 @@ func TestGovernorFastBlocksMutationIfVCSEUnavailable(t *testing.T) {
 	d := g.DecideAndApprove(context.Background(), newAction("a3", RISK_LOCAL_MUTATION, "write_file"))
 	if d.Allowed {
 		t.Fatalf("fast mode mutation should fail-closed on VCSE outage, got %#v", d)
+	}
+}
+
+func TestGovernorEnforceBlocksMutationOnVCSE4xx(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/proposal/validate" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		http.Error(w, "bad proposal", http.StatusBadRequest)
+	}))
+	defer s.Close()
+
+	p := DefaultPolicy()
+	p.Mode = GOVERNANCE_ENFORCE
+	g := &Governor{
+		Policy:   p,
+		Budget:   execution.DefaultBudget(),
+		VCSE:     vcseclient.New(vcseclient.Config{BaseURL: s.URL, Timeout: 200 * time.Millisecond, Enabled: true}),
+		Breakers: execution.NewDefaultBreakerSet(),
+	}
+
+	d := g.DecideAndApprove(context.Background(), newAction("a3b", RISK_LOCAL_MUTATION, "write_file"))
+	if d.Allowed {
+		t.Fatalf("enforce mode must fail-closed on VCSE non-2xx: %#v", d)
+	}
+	if d.ReasonCode != REASON_VCSE_UNAVAILABLE {
+		t.Fatalf("expected unavailable reason code for VCSE 4xx, got %s", d.ReasonCode)
+	}
+	if len(d.Issues) == 0 || !strings.Contains(strings.Join(d.Issues, ","), REASON_VCSE_UNAVAILABLE) {
+		t.Fatalf("expected VCSE unavailable issue on non-2xx: %#v", d.Issues)
+	}
+	if d.ReasonCode == REASON_HUMAN_APPROVAL_GRANTED {
+		t.Fatalf("unexpected approval override on VCSE failure: %#v", d)
 	}
 }
 

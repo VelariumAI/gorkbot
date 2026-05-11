@@ -25,6 +25,13 @@ func TestApprovalGranted(t *testing.T) {
 	}
 }
 
+func TestApprovalGrantedContradictoryScopeNeverBlocked(t *testing.T) {
+	res := ApprovalResult{Decision: APPROVAL_GRANTED, Scope: APPROVAL_NEVER}
+	if ApprovalGranted(res) {
+		t.Fatalf("APPROVAL_GRANTED with APPROVAL_NEVER must not be treated as granted: %#v", res)
+	}
+}
+
 func TestApprovalJSONRoundtrip(t *testing.T) {
 	req := ApprovalRequest{
 		ActionID:   "a1",
