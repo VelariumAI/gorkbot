@@ -150,6 +150,8 @@ func metadataCorrectnessRequested(metadata map[string]any) bool {
 	}
 }
 
+// VCSE issue strings are logged only in bounded/truncated form.
+// VCSE responses should avoid raw full answer text, secrets, or large claim bodies in issues.
 func shortIssues(issues []string) string {
 	if len(issues) == 0 {
 		return ""

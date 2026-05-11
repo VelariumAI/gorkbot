@@ -99,9 +99,6 @@ func BuildAnswerDraftFromClaimViews(answerText string, views []ValidatedClaimVie
 
 	for _, v := range views {
 		rendered := v.CanonicalText
-		if rendered != "" && strings.Contains(answerText, rendered) {
-			rendered = v.CanonicalText
-		}
 		draft.ClaimRefs = append(draft.ClaimRefs, AnswerClaimRef{
 			ClaimID:       v.ClaimID,
 			RenderedText:  rendered,

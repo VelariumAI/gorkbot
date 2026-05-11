@@ -266,7 +266,7 @@ func TestVerifyFinalAnswerCorrectnessVCSETimeoutBlocksWithPolicy(t *testing.T) {
 	}
 }
 
-func TestVerifyFinalAnswerAuditModeDoesNotBlock(t *testing.T) {
+func TestVerifyFinalAnswerAuditModeForwardsVCSEDecision(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"valid":false,"final_status":"RENDER_INVALID","reason_code":"CLAIM_STATUS_NOT_ALLOWED","issues":["bad"]}`))
 	}))
