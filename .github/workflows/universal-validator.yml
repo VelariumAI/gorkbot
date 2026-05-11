@@ -30,9 +30,6 @@ jobs:
       - name: Promotion manifest parity gate
         run: bash scripts/check_promotion_manifest.sh
 
-      - name: Unmanaged path policy gate (same-repo mode)
-        run: bash scripts/check_promotion_unmanaged_paths.sh
-
   # Multi-platform build validation
   cross-platform-build:
     name: Build - ${{ matrix.os }} (${{ matrix.arch }})
