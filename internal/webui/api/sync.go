@@ -5,29 +5,30 @@ package api
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // AppState represents the complete application state.
 type AppState struct {
 	// Current session and run
-	SessionID      string
-	CurrentRunID   string
-	CurrentModel   string
+	SessionID       string
+	CurrentRunID    string
+	CurrentModel    string
 	CurrentProvider string
 
 	// Collections
-	Runs        map[string]interface{}
-	Workspaces  map[string]interface{}
-	Tools       map[string]interface{}
-	Memory      map[string]interface{}
-	Agents      map[string]interface{}
-	Metrics     map[string]interface{}
+	Runs       map[string]interface{}
+	Workspaces map[string]interface{}
+	Tools      map[string]interface{}
+	Memory     map[string]interface{}
+	Agents     map[string]interface{}
+	Metrics    map[string]interface{}
 
 	// UI State
 	ActiveWorkspace string
-	ThemeMode      string
-	LastUpdated    time.Time
+	ThemeMode       string
+	LastUpdated     time.Time
 
 	// Flags
 	IsLoading   bool
@@ -38,15 +39,15 @@ type AppState struct {
 
 // StateManager synchronizes state between client and server.
 type StateManager struct {
-	state            *AppState
-	client           *Client
-	wsClient         *WebSocketClient
-	mu               sync.RWMutex
-	stateChangedCh   chan *AppState
-	ctx              context.Context
-	cancel           context.CancelFunc
-	syncInterval     time.Duration
-	lastSyncTime     time.Time
+	state          *AppState
+	client         *Client
+	wsClient       *WebSocketClient
+	mu             sync.RWMutex
+	stateChangedCh chan *AppState
+	ctx            context.Context
+	cancel         context.CancelFunc
+	syncInterval   time.Duration
+	lastSyncTime   time.Time
 }
 
 // NewStateManager creates a new state manager.
@@ -278,13 +279,17 @@ func (sm *StateManager) Stop() {
 
 // Helper function to generate session ID
 func generateSessionID() string {
-	return "sess_" + timeStampNano()
+	n := time.Now().UnixNano()
+	seq := sessionIDSeq.Add(1)
+	return "sess_" + toBase62(n) + toBase62(int64(seq))
 }
 
 // Helper function for timestamp
 func timeStampNano() string {
 	return toBase62(time.Now().UnixNano())
 }
+
+var sessionIDSeq atomic.Uint64
 
 // Simple base62 encoding
 func toBase62(n int64) string {

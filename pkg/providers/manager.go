@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/velariumai/gorkbot/pkg/ai"
 	"github.com/velariumai/gorkbot/pkg/embeddings"
@@ -75,12 +76,22 @@ func (m *Manager) SetVerboseThoughts(v bool) {
 // current key from the KeyStore. A missing or empty key is a no-op.
 func (m *Manager) InitProvider(provider string) {
 	key, _ := m.keys.Get(provider)
-	if key == "" {
+	var oauthToken string
+	if provider == ProviderGoogle {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		key, oauthToken, _ = ResolveGoogleCredentials(ctx, m.keys.Dir(), key, m.logger)
+	} else if provider == ProviderOpenAI {
+		key, oauthToken, _ = ResolveOpenAICredentials(m.keys.Dir(), key, m.logger)
+	} else if provider == ProviderAnthropic {
+		key, oauthToken, _ = ResolveAnthropicCredentials(m.keys.Dir(), key, m.logger)
+	}
+	if key == "" && oauthToken == "" {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	base := m.buildBase(provider, key)
+	base := m.buildBase(provider, key, oauthToken)
 	if base != nil {
 		m.bases[provider] = NewWrappedProvider(base, m.cache)
 	}
@@ -89,26 +100,36 @@ func (m *Manager) InitProvider(provider string) {
 // initProvider is the lock-free inner version called during construction.
 func (m *Manager) initProvider(provider string) {
 	key, _ := m.keys.Get(provider)
-	if key == "" {
+	var oauthToken string
+	if provider == ProviderGoogle {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		key, oauthToken, _ = ResolveGoogleCredentials(ctx, m.keys.Dir(), key, m.logger)
+	} else if provider == ProviderOpenAI {
+		key, oauthToken, _ = ResolveOpenAICredentials(m.keys.Dir(), key, m.logger)
+	} else if provider == ProviderAnthropic {
+		key, oauthToken, _ = ResolveAnthropicCredentials(m.keys.Dir(), key, m.logger)
+	}
+	if key == "" && oauthToken == "" {
 		return
 	}
-	base := m.buildBase(provider, key)
+	base := m.buildBase(provider, key, oauthToken)
 	if base != nil {
 		m.bases[provider] = NewWrappedProvider(base, m.cache)
 	}
 }
 
 // buildBase constructs the correct AIProvider for the given provider/key pair.
-func (m *Manager) buildBase(provider, key string) ai.AIProvider {
+func (m *Manager) buildBase(provider, key, oauthToken string) ai.AIProvider {
 	switch provider {
 	case ProviderXAI:
 		return ai.NewGrokProvider(key, "")
 	case ProviderGoogle:
-		return ai.NewGeminiProvider(key, "", m.verboseThoughts)
+		return ai.NewGeminiProviderWithAuth(key, oauthToken, "", m.verboseThoughts)
 	case ProviderAnthropic:
-		return ai.NewAnthropicProvider(key, "")
+		return ai.NewAnthropicProviderWithAuth(key, oauthToken, "")
 	case ProviderOpenAI:
-		return ai.NewOpenAIProvider(key, "")
+		return ai.NewOpenAIProviderWithAuth(key, oauthToken, "")
 	case ProviderMiniMax:
 		return ai.NewMiniMaxProvider(key, "")
 	case ProviderOpenRouter:

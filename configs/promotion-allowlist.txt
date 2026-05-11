@@ -6,6 +6,8 @@ scripts/bootstrap_native_llm.sh
 scripts/build_llm_bridge.sh
 scripts/write_launcher.sh
 scripts/setup_wizard.sh
+scripts/check_promotion_manifest.sh
+scripts/release_checklist.sh
 Makefile
 go.mod
 go.sum

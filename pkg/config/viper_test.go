@@ -6,6 +6,60 @@ import (
 	"testing"
 )
 
+func TestGetConfigWithoutLoadReturnsDefaults(t *testing.T) {
+	configMutex.Lock()
+	prevGlobal := globalConfig
+	prevPath := configPath
+	prevMod := lastModTime
+	globalConfig = nil
+	configPath = ""
+	lastModTime = prevMod
+	configMutex.Unlock()
+
+	t.Cleanup(func() {
+		configMutex.Lock()
+		globalConfig = prevGlobal
+		configPath = prevPath
+		lastModTime = prevMod
+		configMutex.Unlock()
+	})
+
+	cfg := GetConfig()
+	if cfg == nil {
+		t.Fatal("GetConfig returned nil")
+	}
+	if cfg.Memory.DebounceSeconds != DefaultMemoryDebounceSeconds {
+		t.Fatalf("expected default debounce_seconds=%d, got %d", DefaultMemoryDebounceSeconds, cfg.Memory.DebounceSeconds)
+	}
+}
+
+func TestReloadIfChangedWithoutLoadDoesNotError(t *testing.T) {
+	configMutex.Lock()
+	prevGlobal := globalConfig
+	prevPath := configPath
+	prevMod := lastModTime
+	globalConfig = nil
+	configPath = ""
+	lastModTime = prevMod
+	configMutex.Unlock()
+
+	t.Cleanup(func() {
+		configMutex.Lock()
+		globalConfig = prevGlobal
+		configPath = prevPath
+		lastModTime = prevMod
+		configMutex.Unlock()
+	})
+
+	cfg, err := ReloadIfChanged()
+	if err != nil {
+		t.Fatalf("ReloadIfChanged returned error: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("ReloadIfChanged returned nil config")
+	}
+}
+
 func TestLoadConfigFromYAML(t *testing.T) {
 	// Create a temporary config file
 	tmpDir := t.TempDir()

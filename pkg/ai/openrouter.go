@@ -21,6 +21,10 @@ const (
 	openRouterTitle   = "Gorkbot"
 )
 
+var openRouterAPIBaseURL = openRouterBaseURL
+var newOpenRouterPingClient = NewPingClient
+var newOpenRouterRetryClient = NewRetryClient
+
 // OpenRouterProvider implements AIProvider for OpenRouter's OpenAI-compatible API.
 // OpenRouter is a gateway to 400+ models (Claude, GPT, Gemini, Llama, Mistral, etc.)
 // via a single API key, using provider-prefixed model IDs like "anthropic/claude-opus-4-6".
@@ -74,7 +78,7 @@ func (o *OpenRouterProvider) addHeaders(req *http.Request) {
 // Ping validates the OpenRouter key with a GET /v1/models request.
 // Uses NewPingClient (5 s hard timeout, no retries) so it never blocks the UI.
 func (o *OpenRouterProvider) Ping(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", openRouterBaseURL+"/models", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", openRouterAPIBaseURL+"/models", nil)
 	if err != nil {
 		return err
 	}
@@ -82,7 +86,7 @@ func (o *OpenRouterProvider) Ping(ctx context.Context) error {
 	req.Header.Set("HTTP-Referer", openRouterReferer)
 	req.Header.Set("X-Title", openRouterTitle)
 
-	resp, err := NewPingClient().Do(req)
+	resp, err := newOpenRouterPingClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("OpenRouter unreachable: %w", err)
 	}
@@ -136,7 +140,7 @@ func openRouterSupportsThinking(modelID string) bool {
 
 // fetchOpenRouterModels retrieves the live model list from the OpenRouter API.
 func fetchOpenRouterModels(ctx context.Context, apiKey string) ([]registry.ModelDefinition, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", openRouterBaseURL+"/models", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", openRouterAPIBaseURL+"/models", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -144,7 +148,7 @@ func fetchOpenRouterModels(ctx context.Context, apiKey string) ([]registry.Model
 	req.Header.Set("HTTP-Referer", openRouterReferer)
 	req.Header.Set("X-Title", openRouterTitle)
 
-	client := NewRetryClient()
+	client := newOpenRouterRetryClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -217,7 +221,7 @@ func (o *OpenRouterProvider) GenerateWithHistory(ctx context.Context, history *C
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", openRouterBaseURL+"/chat/completions", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", openRouterAPIBaseURL+"/chat/completions", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
@@ -265,13 +269,17 @@ func (o *OpenRouterProvider) StreamWithHistory(ctx context.Context, history *Con
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", openRouterBaseURL+"/chat/completions", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", openRouterAPIBaseURL+"/chat/completions", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	o.addHeaders(req)
 
-	streamClient := NewRetryClient()
+	// Reuse configured client so tests and custom runtimes can inject transport behavior.
+	streamClient := o.client
+	if streamClient == nil {
+		streamClient = NewRetryClient()
+	}
 	resp, err := streamClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)

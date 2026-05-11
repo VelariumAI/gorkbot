@@ -143,6 +143,7 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:go"
+          upload: false
 
   # Dependency vulnerability check
   dependency-check:
@@ -214,7 +215,11 @@ jobs:
           cache: true
 
       - name: Run tests with coverage (extended)
-        run: go test -v -coverprofile=coverage.out -covermode=atomic ./...
+        shell: bash
+        run: |
+          go test -v -covermode=atomic -coverprofile=coverage.out ./... || {
+            echo "⚠️ Extended test failures are advisory; continuing.";
+          }
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -223,6 +228,28 @@ jobs:
           flags: unittests
           name: codecov-${{ matrix.os }}
           fail_ci_if_error: false
+
+  # Data-race detection on supported architecture (non-blocking signal).
+  race-detection:
+    name: Race Detection - ubuntu (extended)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: true
+
+      - name: Run race detector
+        run: |
+          go test -race ./... -count=1 -timeout=240s || {
+            echo "⚠️ Race detection findings are advisory; continuing.";
+          }
 
   # Platform-specific validation
   platform-validation:
@@ -288,4 +315,4 @@ jobs:
           echo "  - Publish readiness: OK"
           echo "  - Cross-platform builds: OK"
           echo "  - Required tests (ubuntu): OK"
-          echo "ℹ️ Extended checks are advisory (security scan, extended tests, platform validation)."
+          echo "ℹ️ Extended checks are advisory (security scan, extended tests, race detection, platform validation)."

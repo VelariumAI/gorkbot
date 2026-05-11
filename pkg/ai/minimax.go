@@ -22,6 +22,11 @@ type MiniMaxProvider struct {
 const minimaxAnthropicBase = "https://api.minimax.io/anthropic/v1"
 const minimaxModelsURL = "https://api.minimax.io/v1/models"
 
+var minimaxAnthropicEndpoint = minimaxAnthropicBase
+var minimaxModelsEndpoint = minimaxModelsURL
+var newMiniMaxPingClient = NewPingClient
+var newMiniMaxRetryClient = NewRetryClient
+
 // minimaxFallbackModels is the static fallback list when the listing endpoint fails.
 var minimaxFallbackModels = []struct {
 	id   string
@@ -40,7 +45,7 @@ func NewMiniMaxProvider(apiKey, model string) *MiniMaxProvider {
 	}
 	inner := &AnthropicProvider{
 		APIKey:           apiKey,
-		BaseURL:          minimaxAnthropicBase,
+		BaseURL:          minimaxAnthropicEndpoint,
 		Model:            model,
 		client:           NewRetryClient(),
 		supportsThinking: minimaxModelSupportsThinking(model),
@@ -65,7 +70,7 @@ func (m *MiniMaxProvider) GetMetadata() ProviderMetadata {
 func (m *MiniMaxProvider) WithModel(model string) AIProvider {
 	newInner := &AnthropicProvider{
 		APIKey:           m.inner.APIKey,
-		BaseURL:          minimaxAnthropicBase,
+		BaseURL:          minimaxAnthropicEndpoint,
 		Model:            model,
 		client:           m.inner.client,
 		supportsThinking: minimaxModelSupportsThinking(model),
@@ -80,14 +85,14 @@ func (m *MiniMaxProvider) WithModel(model string) AIProvider {
 // MiniMax's Anthropic-compat path (/anthropic/v1) does NOT expose /models,
 // so we must NOT delegate to the inner AnthropicProvider.Ping().
 func (m *MiniMaxProvider) Ping(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", minimaxModelsURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", minimaxModelsEndpoint, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+m.inner.APIKey)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := NewPingClient().Do(req)
+	resp, err := newMiniMaxPingClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("MiniMax unreachable: %w", err)
 	}
@@ -153,14 +158,14 @@ func minimaxModelSupportsThinking(modelID string) bool {
 // FetchMiniMaxModels retrieves the model list from the MiniMax OpenAI-compat listing endpoint.
 // Falls back to a static known-good list if the endpoint fails or returns no results.
 func FetchMiniMaxModels(ctx context.Context, apiKey string) ([]registry.ModelDefinition, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", minimaxModelsURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", minimaxModelsEndpoint, nil)
 	if err != nil {
 		return fallbackMiniMaxModels(), nil
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Accept", "application/json")
 
-	client := NewRetryClient()
+	client := newMiniMaxRetryClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return fallbackMiniMaxModels(), nil

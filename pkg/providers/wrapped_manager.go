@@ -61,12 +61,15 @@ type logEntry struct {
 var (
 	usageLogOnce sync.Once
 	usageLogCh   chan logEntry
+	usageLogMu   sync.RWMutex
 	usageLogWg   sync.WaitGroup
 )
 
 func initUsageLogger(logPath string) {
 	usageLogOnce.Do(func() {
+		usageLogMu.Lock()
 		usageLogCh = make(chan logEntry, 256)
+		usageLogMu.Unlock()
 		usageLogWg.Add(1)
 		go func() {
 			defer usageLogWg.Done()
@@ -216,7 +219,10 @@ func (w *WrappedProvider) recordUsage(inToks, outToks int) {
 	// Atomic store — LastUsage() readers always see a consistent snapshot.
 	w.lastUsgPtr.Store(usg)
 
-	if usageLogCh == nil {
+	usageLogMu.RLock()
+	ch := usageLogCh
+	usageLogMu.RUnlock()
+	if ch == nil {
 		return
 	}
 	e := logEntry{
@@ -228,7 +234,7 @@ func (w *WrappedProvider) recordUsage(inToks, outToks int) {
 	}
 	// Non-blocking send: drop if logger is backed up.
 	select {
-	case usageLogCh <- e:
+	case ch <- e:
 	default:
 		slog.Debug("providers: usage log channel full, entry dropped")
 	}

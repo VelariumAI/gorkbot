@@ -45,7 +45,13 @@ install_pkg() {
   local pkg="$1"
   if in_termux && command -v pkg >/dev/null 2>&1; then
     log "Installing '${pkg}' via termux pkg..."
-    pkg install -y "${pkg}"
+    local termux_pkg="${pkg}"
+    case "${pkg}" in
+      pkg-config) termux_pkg="pkgconf" ;;
+      g++) termux_pkg="clang" ;;
+      binutils) termux_pkg="binutils" ;;
+    esac
+    pkg install -y "${termux_pkg}"
     return 0
   fi
 
@@ -53,6 +59,7 @@ install_pkg() {
     local apt_pkg="${pkg}"
     case "${pkg}" in
       clang) apt_pkg="clang" ;;
+      g++) apt_pkg="g++" ;;
       cmake) apt_pkg="cmake" ;;
       ninja) apt_pkg="ninja-build" ;;
       make) apt_pkg="make" ;;
@@ -72,20 +79,131 @@ install_pkg() {
     return 0
   fi
 
+  if command -v dnf >/dev/null 2>&1; then
+    local dnf_pkg="${pkg}"
+    case "${pkg}" in
+      pkg-config) dnf_pkg="pkgconf-pkg-config" ;;
+    esac
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+      dnf install -y "${dnf_pkg}"
+    elif command -v sudo >/dev/null 2>&1; then
+      sudo dnf install -y "${dnf_pkg}"
+    else
+      die "cannot install '${dnf_pkg}' automatically (dnf requires root/sudo)"
+    fi
+    return 0
+  fi
+
+  if command -v yum >/dev/null 2>&1; then
+    local yum_pkg="${pkg}"
+    case "${pkg}" in
+      pkg-config) yum_pkg="pkgconfig" ;;
+    esac
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+      yum install -y "${yum_pkg}"
+    elif command -v sudo >/dev/null 2>&1; then
+      sudo yum install -y "${yum_pkg}"
+    else
+      die "cannot install '${yum_pkg}' automatically (yum requires root/sudo)"
+    fi
+    return 0
+  fi
+
+  if command -v pacman >/dev/null 2>&1; then
+    local pacman_pkg="${pkg}"
+    case "${pkg}" in
+      pkg-config) pacman_pkg="pkgconf" ;;
+      g++) pacman_pkg="gcc" ;;
+    esac
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+      pacman -Sy --noconfirm "${pacman_pkg}"
+    elif command -v sudo >/dev/null 2>&1; then
+      sudo pacman -Sy --noconfirm "${pacman_pkg}"
+    else
+      die "cannot install '${pacman_pkg}' automatically (pacman requires root/sudo)"
+    fi
+    return 0
+  fi
+
+  if command -v zypper >/dev/null 2>&1; then
+    local zypper_pkg="${pkg}"
+    case "${pkg}" in
+      pkg-config) zypper_pkg="pkg-config" ;;
+    esac
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+      zypper --non-interactive install "${zypper_pkg}"
+    elif command -v sudo >/dev/null 2>&1; then
+      sudo zypper --non-interactive install "${zypper_pkg}"
+    else
+      die "cannot install '${zypper_pkg}' automatically (zypper requires root/sudo)"
+    fi
+    return 0
+  fi
+
+  if command -v apk >/dev/null 2>&1; then
+    local apk_pkg="${pkg}"
+    case "${pkg}" in
+      pkg-config) apk_pkg="pkgconf" ;;
+      g++) apk_pkg="g++" ;;
+      binutils) apk_pkg="binutils" ;;
+    esac
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+      apk add --no-cache "${apk_pkg}"
+    elif command -v sudo >/dev/null 2>&1; then
+      sudo apk add --no-cache "${apk_pkg}"
+    else
+      die "cannot install '${apk_pkg}' automatically (apk requires root/sudo)"
+    fi
+    return 0
+  fi
+
   if command -v brew >/dev/null 2>&1; then
     log "Installing '${pkg}' via Homebrew..."
-    brew install "${pkg}" || true
+    local brew_pkg="${pkg}"
+    case "${pkg}" in
+      g++) brew_pkg="gcc" ;;
+    esac
+    brew install "${brew_pkg}" || true
     return 0
   fi
 
   die "no supported package manager found for auto-installing '${pkg}'"
 }
 
+ensure_cpp_compiler() {
+  if command -v clang++ >/dev/null 2>&1 || command -v g++ >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ "${AUTO_INSTALL_DEPS}" != "1" ]]; then
+    die "missing required C++ compiler (clang++ or g++)"
+  fi
+
+  install_pkg clang || true
+  if command -v clang++ >/dev/null 2>&1 || command -v g++ >/dev/null 2>&1; then
+    return 0
+  fi
+
+  install_pkg g++ || true
+  if command -v clang++ >/dev/null 2>&1 || command -v g++ >/dev/null 2>&1; then
+    return 0
+  fi
+  die "unable to install a working C++ compiler (clang++ or g++)"
+}
+
 ensure_llama_checkout() {
   if [[ -d "${LLAMA_ROOT}" ]]; then
     return 0
   fi
-  die "missing ${LLAMA_ROOT}. Initialize submodule first: git submodule update --init --recursive ext/llama.cpp"
+  if [[ "${AUTO_INSTALL_DEPS}" != "1" ]]; then
+    die "missing ${LLAMA_ROOT}. Initialize submodule first: git submodule update --init --recursive ext/llama.cpp"
+  fi
+  if [[ ! -d "${PROJECT_ROOT}/.git" ]]; then
+    die "missing ${LLAMA_ROOT} and repository metadata unavailable for submodule init"
+  fi
+  log "llama.cpp submodule missing; initializing automatically..."
+  (cd "${PROJECT_ROOT}" && git submodule update --init --recursive ext/llama.cpp) || \
+    die "failed to initialize ext/llama.cpp submodule automatically"
+  [[ -d "${LLAMA_ROOT}" ]] || die "submodule initialization completed but ${LLAMA_ROOT} is still missing"
 }
 
 canonicalize_llama_libs() {
@@ -158,11 +276,11 @@ download_model() {
 
 main() {
   log "Bootstrapping native LLM toolchain and bridge..."
+  ensure_cmd go golang
   ensure_cmd cmake cmake
   ensure_cmd make make
-  ensure_cmd clang++ clang || ensure_cmd g++ g++
+  ensure_cpp_compiler
   ensure_cmd ar binutils
-  ensure_cmd git git
   ensure_cmd pkg-config pkg-config
 
   build_llama_cpp

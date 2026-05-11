@@ -1,0 +1,5 @@
+# Optional destination-only tracked paths allowed outside promotion-manifest scope.
+# Keep this file minimal and documented.
+#
+# Example:
+# docs/legacy-migration-notes.md

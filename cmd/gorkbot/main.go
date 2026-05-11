@@ -53,6 +53,8 @@ import (
 	"github.com/velariumai/gorkbot/pkg/config"
 	"github.com/velariumai/gorkbot/pkg/discovery"
 	gorkenv "github.com/velariumai/gorkbot/pkg/env"
+	"github.com/velariumai/gorkbot/pkg/execution"
+	"github.com/velariumai/gorkbot/pkg/governance"
 	"github.com/velariumai/gorkbot/pkg/memory"
 	"github.com/velariumai/gorkbot/pkg/persist"
 	"github.com/velariumai/gorkbot/pkg/process"
@@ -70,6 +72,7 @@ import (
 	"github.com/velariumai/gorkbot/pkg/tools"
 	"github.com/velariumai/gorkbot/pkg/tui/hotkeys"
 	"github.com/velariumai/gorkbot/pkg/usercommands"
+	"github.com/velariumai/gorkbot/pkg/vcseclient"
 	"github.com/velariumai/gorkbot/pkg/vectorstore"
 	"github.com/velariumai/gorkbot/pkg/webhook"
 )
@@ -86,15 +89,12 @@ func hasConfiguredProviderKey(raw string) bool {
 	return true
 }
 
-// loadEnv loads environment variables from .env file, supporting encryption
-func loadEnv(configDir string) {
-	file, err := os.Open(".env")
+func loadEnvFile(path string, km *security.KeyManager) {
+	file, err := os.Open(path)
 	if err != nil {
-		return // It's okay if .env doesn't exist
+		return
 	}
 	defer file.Close()
-
-	km, _ := security.NewKeyManager(configDir)
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -102,25 +102,35 @@ func loadEnv(configDir string) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-
 		parts := strings.SplitN(line, "=", 2)
-		if len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			value := strings.TrimSpace(parts[1])
-
-			// Decrypt if it looks encrypted (starts with ENC_)
-			if strings.HasPrefix(value, "ENC_") && km != nil {
-				decrypted, err := km.Decrypt(strings.TrimPrefix(value, "ENC_"))
-				if err == nil {
-					value = decrypted
-				}
-			}
-
-			// Only set if not already set (allow override)
-			if os.Getenv(key) == "" {
-				os.Setenv(key, value)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		if strings.HasPrefix(value, "ENC_") && km != nil {
+			decrypted, err := km.Decrypt(strings.TrimPrefix(value, "ENC_"))
+			if err == nil {
+				value = decrypted
 			}
 		}
+		if os.Getenv(key) == "" {
+			os.Setenv(key, value)
+		}
+	}
+}
+
+// loadEnv loads environment variables from local/project and config env files.
+func loadEnv(configDir string) {
+	km, _ := security.NewKeyManager(configDir)
+
+	// Precedence:
+	// 1) Existing process env vars (highest)
+	// 2) Project-local .env
+	// 3) ~/.config/gorkbot/.env (via configDir)
+	loadEnvFile(".env", km)
+	if configDir != "" {
+		loadEnvFile(filepath.Join(configDir, ".env"), km)
 	}
 }
 
@@ -196,6 +206,12 @@ func main() {
 	dryRunFlag := fs.Bool("dry-run", false, "Validate request and tools locally without executing mutations")
 	inlineFlag := fs.Bool("inline", false, "Use the inline REPL instead of the TUI")
 	irFlag := fs.Bool("ir", false, "Use the inline REPL instead of the TUI (alias for --inline)")
+	governanceFlag := fs.String("governance", "off", "Governance mode: off|audit|fast|enforce|correctness")
+	vcseURLFlag := fs.String("vcse-url", "http://127.0.0.1:8000", "VCSE base URL")
+	vcseTimeoutFlag := fs.Duration("vcse-timeout", 250*time.Millisecond, "VCSE fast-path timeout")
+	governanceApprovalTimeoutFlag := fs.Duration("governance-approval-timeout", 30*time.Second, "Timeout for human governance approval")
+	governanceMaxInflightApprovalsFlag := fs.Int("governance-max-inflight-approvals", 4, "Maximum in-flight governance approval callbacks")
+	governanceNoApprovalCacheFlag := fs.Bool("governance-no-approval-cache", false, "Disable in-memory governance approval cache")
 
 	// Pre-scan for --output-format=json to handle errors correctly
 	isJSON := false
@@ -213,6 +229,23 @@ func main() {
 		// ContinueOnError returns err instead of exiting, so we exit manually if not JSON
 		os.Exit(2)
 	}
+
+	governanceMode, ok := governance.ParseMode(*governanceFlag)
+	if !ok {
+		msg := fmt.Sprintf("invalid --governance value %q (expected off|audit|fast|enforce|correctness)", *governanceFlag)
+		if isJSON {
+			outputErrorJSON(msg)
+		} else {
+			fmt.Fprintln(os.Stderr, msg)
+		}
+		os.Exit(2)
+	}
+	vcseURLExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "vcse-url" {
+			vcseURLExplicit = true
+		}
+	})
 
 	// --join: observer-only mode — no orchestrator or TUI needed.
 	if *joinFlag != "" {
@@ -254,6 +287,11 @@ func main() {
 	minimaxKey, _ := keyStore.Get(providers.ProviderMiniMax)
 	openrouterKey, _ := keyStore.Get(providers.ProviderOpenRouter)
 	moonshotKey, _ := keyStore.Get(providers.ProviderMoonshot)
+	credCtx, credCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	resolvedGeminiKey, geminiOAuthToken, geminiAuthMode := providers.ResolveGoogleCredentials(credCtx, env.ConfigDir, geminiKey, logger)
+	credCancel()
+	resolvedOpenAIKey, openaiOAuthToken, openaiAuthMode := providers.ResolveOpenAICredentials(env.ConfigDir, openaiKey, logger)
+	resolvedAnthropicKey, anthropicOAuthToken, anthropicAuthMode := providers.ResolveAnthropicCredentials(env.ConfigDir, anthropicKey, logger)
 
 	// Read Provider Selection (Provider Agnosticism)
 	primaryOverride := os.Getenv("GORKBOT_PRIMARY")
@@ -285,6 +323,15 @@ func main() {
 		}
 		placeholder = append(placeholder, envName)
 	}
+	if geminiAuthMode == "oauth" {
+		configured = append(configured, "GOOGLE_OAUTH")
+	}
+	if openaiAuthMode == "oauth" {
+		configured = append(configured, "OPENAI_OAUTH")
+	}
+	if anthropicAuthMode == "oauth" {
+		configured = append(configured, "ANTHROPIC_OAUTH")
+	}
 
 	if len(configured) == 0 {
 		logger.Warn("No valid AI provider API keys configured. Set at least one provider API key before model calls.")
@@ -296,50 +343,59 @@ func main() {
 		logger.Warn("Placeholder provider API keys detected; these providers will be treated as unavailable",
 			"env_vars", strings.Join(placeholder, ", "))
 	}
+	if geminiAuthMode == "oauth" {
+		logger.Info("Google provider using OAuth sign-in credentials (API key fallback available)")
+	}
+	if openaiAuthMode == "oauth" {
+		logger.Info("OpenAI provider using OAuth/session credentials (API key fallback available)")
+	}
+	if anthropicAuthMode == "oauth" {
+		logger.Info("Anthropic provider using OAuth/session credentials (API key fallback available)")
+	}
 
 	// Initialize Registry
 	reg := registry.NewModelRegistry(logger)
 	startupCtx := context.Background()
 
-	// Register ALL providers that have API keys (Provider Agnosticism)
-	if grokKey != "" {
-		baseGrok := ai.NewGrokProvider(grokKey, primaryModelOverride)
+	// Register ALL providers that have valid API keys (Provider Agnosticism)
+	if hasConfiguredProviderKey(grokKey) {
+		baseGrok := ai.NewGrokProvider(strings.TrimSpace(grokKey), primaryModelOverride)
 		if err := reg.RegisterProvider(startupCtx, baseGrok); err != nil {
 			logger.Error("Failed to register Grok provider", "error", err)
 		}
 	}
-	if geminiKey != "" {
-		baseGemini := ai.NewGeminiProvider(geminiKey, consultantModelOverride, *verboseThoughts)
+	if hasConfiguredProviderKey(resolvedGeminiKey) || strings.TrimSpace(geminiOAuthToken) != "" {
+		baseGemini := ai.NewGeminiProviderWithAuth(strings.TrimSpace(resolvedGeminiKey), strings.TrimSpace(geminiOAuthToken), consultantModelOverride, *verboseThoughts)
 		if err := reg.RegisterProvider(startupCtx, baseGemini); err != nil {
 			logger.Error("Failed to register Gemini provider", "error", err)
 		}
 	}
-	if anthropicKey != "" {
-		baseAnthropic := ai.NewAnthropicProvider(anthropicKey, "")
+	if hasConfiguredProviderKey(resolvedAnthropicKey) || strings.TrimSpace(anthropicOAuthToken) != "" {
+		baseAnthropic := ai.NewAnthropicProviderWithAuth(strings.TrimSpace(resolvedAnthropicKey), strings.TrimSpace(anthropicOAuthToken), "")
 		if err := reg.RegisterProvider(startupCtx, baseAnthropic); err != nil {
 			logger.Error("Failed to register Anthropic provider", "error", err)
 		}
 	}
-	if openaiKey != "" {
-		baseOpenAI := ai.NewOpenAIProvider(openaiKey, "")
+	if hasConfiguredProviderKey(resolvedOpenAIKey) || strings.TrimSpace(openaiOAuthToken) != "" {
+		baseOpenAI := ai.NewOpenAIProviderWithAuth(strings.TrimSpace(resolvedOpenAIKey), strings.TrimSpace(openaiOAuthToken), "")
 		if err := reg.RegisterProvider(startupCtx, baseOpenAI); err != nil {
 			logger.Error("Failed to register OpenAI provider", "error", err)
 		}
 	}
-	if minimaxKey != "" {
-		baseMiniMax := ai.NewMiniMaxProvider(minimaxKey, "")
+	if hasConfiguredProviderKey(minimaxKey) {
+		baseMiniMax := ai.NewMiniMaxProvider(strings.TrimSpace(minimaxKey), "")
 		if err := reg.RegisterProvider(startupCtx, baseMiniMax); err != nil {
 			logger.Error("Failed to register MiniMax provider", "error", err)
 		}
 	}
-	if openrouterKey != "" {
-		baseOpenRouter := ai.NewOpenRouterProvider(openrouterKey, "")
+	if hasConfiguredProviderKey(openrouterKey) {
+		baseOpenRouter := ai.NewOpenRouterProvider(strings.TrimSpace(openrouterKey), "")
 		if err := reg.RegisterProvider(startupCtx, baseOpenRouter); err != nil {
 			logger.Error("Failed to register OpenRouter provider", "error", err)
 		}
 	}
-	if moonshotKey != "" {
-		baseMoonshot := ai.NewMoonshotProvider(moonshotKey, "")
+	if hasConfiguredProviderKey(moonshotKey) {
+		baseMoonshot := ai.NewMoonshotProvider(strings.TrimSpace(moonshotKey), "")
 		if err := reg.RegisterProvider(startupCtx, baseMoonshot); err != nil {
 			logger.Error("Failed to register Moonshot provider", "error", err)
 		}
@@ -477,6 +533,50 @@ func main() {
 	researchEngine := research.NewEngine(10, logger)
 	toolRegistry.SetResearchEngine(researchEngine)
 	logger.Info("Research engine initialized", "max_documents", 10)
+
+	// Governance spine (PR-001): optional, default-off.
+	// VCSE is enabled when governance is active, or when vcse-url is explicitly provided.
+	vcseEnabled := governanceMode != governance.GOVERNANCE_OFF || vcseURLExplicit
+	govPolicy := governance.DefaultPolicy()
+	govPolicy.Mode = governanceMode
+	if cwd, err := os.Getwd(); err == nil {
+		govPolicy.WorkspaceRoot = cwd
+	}
+	gov := &governance.Governor{
+		Policy:               govPolicy,
+		Budget:               execution.DefaultBudget(),
+		Breakers:             execution.NewDefaultBreakerSet(),
+		Progress:             execution.NewProgressTracker(),
+		ApprovalHandler:      toolRegistry,
+		ApprovalTimeout:      *governanceApprovalTimeoutFlag,
+		MaxInflightApprovals: *governanceMaxInflightApprovalsFlag,
+	}
+	if !*governanceNoApprovalCacheFlag {
+		gov.ApprovalCache = governance.NewApprovalCache()
+	}
+	if vcseEnabled {
+		gov.VCSE = vcseclient.New(vcseclient.Config{
+			BaseURL: *vcseURLFlag,
+			Timeout: *vcseTimeoutFlag,
+			Enabled: true,
+		})
+	}
+	if governanceMode != governance.GOVERNANCE_OFF {
+		gov.ApprovalRuntime = governance.NewApprovalRuntime(*governanceMaxInflightApprovalsFlag)
+		defer gov.Shutdown()
+		toolRegistry.SetGovernor(gov)
+		logger.Info("Governance enabled",
+			"mode", governanceMode,
+			"vcse_enabled", vcseEnabled,
+			"vcse_url", *vcseURLFlag,
+			"vcse_timeout", vcseTimeoutFlag.String(),
+			"approval_timeout", governanceApprovalTimeoutFlag.String(),
+			"approval_max_inflight", gov.ApprovalRuntime.MaxInflight(),
+			"approval_cache_enabled", !*governanceNoApprovalCacheFlag,
+		)
+	} else {
+		logger.Info("Governance disabled", "mode", governanceMode)
+	}
 
 	if err := toolRegistry.RegisterDefaultTools(); err != nil {
 		logger.Error("Failed to register default tools", "error", err)
@@ -2011,7 +2111,11 @@ func removeFromSlice(slice []string, item string) []string {
 // handleSetup runs the interactive setup wizard
 func handleSetup(configDir string) {
 	reader := bufio.NewReader(os.Stdin)
-	envPath := ".env"
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		fmt.Printf("Error creating config directory: %v\n", err)
+		return
+	}
+	envPath := filepath.Join(configDir, ".env")
 
 	fmt.Println("╔══════════════════════════════════════════╗")
 	fmt.Println("║           Gorkbot Setup Wizard           ║")
@@ -2020,7 +2124,7 @@ func handleSetup(configDir string) {
 	fmt.Println()
 	fmt.Println("Gorkbot works with any OpenAI-compatible API.")
 	fmt.Println("This wizard configures your API keys.")
-	fmt.Println("Keys will be saved to .env in the current directory.")
+	fmt.Printf("Keys will be saved to %s.\n", envPath)
 	fmt.Println("Keys will be ENCRYPTED using a local key.")
 	fmt.Println()
 
@@ -2346,9 +2450,19 @@ func handleStatus() {
 	geminiKey := os.Getenv("GEMINI_API_KEY")
 	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
 	openaiKey := os.Getenv("OPENAI_API_KEY")
+	openaiAccessToken := os.Getenv("OPENAI_ACCESS_TOKEN")
 	minimaxKey := os.Getenv("MINIMAX_API_KEY")
 	githubKey := os.Getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
 	braveKey := os.Getenv("BRAVE_API_KEY")
+	ks := providers.NewKeyStore(env.ConfigDir)
+	geminiStoredKey, _ := ks.Get(providers.ProviderGoogle)
+	openaiStoredKey, _ := ks.Get(providers.ProviderOpenAI)
+	anthropicStoredKey, _ := ks.Get(providers.ProviderAnthropic)
+	credCtx, credCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	_, _, geminiMode := providers.ResolveGoogleCredentials(credCtx, env.ConfigDir, geminiStoredKey, slog.Default())
+	_, _, openaiMode := providers.ResolveOpenAICredentials(env.ConfigDir, openaiStoredKey, slog.Default())
+	_, _, anthropicMode := providers.ResolveAnthropicCredentials(env.ConfigDir, anthropicStoredKey, slog.Default())
+	credCancel()
 
 	mask := func(key string) string {
 		if key == "" {
@@ -2364,11 +2478,36 @@ func handleStatus() {
 	fmt.Printf("Gemini:          %s\n", mask(geminiKey))
 	fmt.Printf("Anthropic:       %s\n", mask(anthropicKey))
 	fmt.Printf("OpenAI:          %s\n", mask(openaiKey))
+	fmt.Printf("OpenAI OAuth:    %s\n", mask(openaiAccessToken))
 	fmt.Printf("MiniMax:         %s\n", mask(minimaxKey))
 	fmt.Println()
 	fmt.Printf("GitHub MCP:      %s\n", mask(githubKey))
 	fmt.Printf("Brave Search:    %s\n", mask(braveKey))
 	fmt.Printf("NotebookLM:      %s (shared with Gemini)\n", mask(geminiKey))
+	switch geminiMode {
+	case "oauth":
+		fmt.Printf("Gemini Auth:     ✅ OAuth sign-in active\n")
+	case "api_key":
+		fmt.Printf("Gemini Auth:     ✅ API key active\n")
+	default:
+		fmt.Printf("Gemini Auth:     ❌ Not configured\n")
+	}
+	switch openaiMode {
+	case "oauth":
+		fmt.Printf("OpenAI Auth:     ✅ OAuth/session sign-in active\n")
+	case "api_key":
+		fmt.Printf("OpenAI Auth:     ✅ API key active\n")
+	default:
+		fmt.Printf("OpenAI Auth:     ❌ Not configured\n")
+	}
+	switch anthropicMode {
+	case "oauth":
+		fmt.Printf("Anthropic Auth:  ✅ OAuth/session sign-in active\n")
+	case "api_key":
+		fmt.Printf("Anthropic Auth:  ✅ API key active\n")
+	default:
+		fmt.Printf("Anthropic Auth:  ❌ Not configured\n")
+	}
 
 	fmt.Println()
 }
@@ -2403,7 +2542,7 @@ func printHelp() {
 	fmt.Println("  gorkbot [command] [options]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  setup              Run setup wizard to configure API keys")
+	fmt.Println("  setup              Run setup wizard (recommended: make setup)")
 	fmt.Println("  status             Show configuration status")
 	fmt.Println("  help               Show this help message")
 	fmt.Println()
@@ -2415,13 +2554,14 @@ func printHelp() {
 	fmt.Println("  -evolve            Enable autonomous self-improvement drive on startup")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  gorkbot setup                    # Configure API keys")
+	fmt.Println("  make setup                       # Full guided setup (recommended)")
+	fmt.Println("  gorkbot setup                    # Legacy in-binary setup")
 	fmt.Println("  gorkbot status                   # Check configuration")
 	fmt.Println("  gorkbot                          # Start interactive TUI")
 	fmt.Println("  gorkbot -p \"Hello, Gorkbot!\"    # One-shot prompt")
 	fmt.Println()
 	fmt.Println("First time setup:")
-	fmt.Println("  1. Run: gorkbot setup")
+	fmt.Println("  1. Run: make setup")
 	fmt.Println("  2. Get API keys from:")
 	fmt.Println("     - xAI:    https://console.x.ai/")
 	fmt.Println("     - Google: https://aistudio.google.com/apikey")

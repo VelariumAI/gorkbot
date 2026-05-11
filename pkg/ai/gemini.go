@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 
 type GeminiProvider struct {
 	APIKey           string
+	OAuthAccessToken string
 	Model            string
 	Client           *http.Client
 	VerboseThoughts  bool
@@ -31,6 +33,9 @@ type GeminiProvider struct {
 	// Managed externally by pkg/cache.GeminiCacheClient via SetCachedContent.
 	CachedContentName string
 }
+
+var geminiAPIBaseURL = "https://generativelanguage.googleapis.com"
+var newGeminiPingClient = NewPingClient
 
 // SetCachedContent stores the Gemini CachedContent resource name
 // ("cachedContents/{id}") that subsequent generateContent calls will reference.
@@ -113,6 +118,12 @@ type GeminiStreamChunk struct {
 }
 
 func NewGeminiProvider(apiKey string, defaultModel string, verboseThoughts bool) *GeminiProvider {
+	return NewGeminiProviderWithAuth(apiKey, "", defaultModel, verboseThoughts)
+}
+
+// NewGeminiProviderWithAuth creates a Gemini provider that can use either
+// API-key auth or OAuth bearer-token auth (preferred when token is present).
+func NewGeminiProviderWithAuth(apiKey, oauthAccessToken, defaultModel string, verboseThoughts bool) *GeminiProvider {
 	model := defaultModel
 	if model == "" {
 		model = "gemini-2.0-flash"
@@ -126,6 +137,7 @@ func NewGeminiProvider(apiKey string, defaultModel string, verboseThoughts bool)
 
 	return &GeminiProvider{
 		APIKey:           apiKey,
+		OAuthAccessToken: oauthAccessToken,
 		Model:            model,
 		Client:           NewRetryClient(),
 		VerboseThoughts:  verboseThoughts,
@@ -155,7 +167,7 @@ func (g *GeminiProvider) ID() registry.ProviderID {
 
 // FetchModels returns the live model list from Gemini, falling back to safe statics on failure.
 func (g *GeminiProvider) FetchModels(ctx context.Context) ([]registry.ModelDefinition, error) {
-	if g.APIKey == "" {
+	if strings.TrimSpace(g.APIKey) == "" && !g.usingOAuth() {
 		return SafeModelDefs("google"), nil
 	}
 	if _, ok := ctx.Deadline(); !ok {
@@ -163,7 +175,7 @@ func (g *GeminiProvider) FetchModels(ctx context.Context) ([]registry.ModelDefin
 		ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 	}
-	models, err := FetchGeminiModels(ctx, g.APIKey)
+	models, err := FetchGeminiModelsWithAuth(ctx, g.APIKey, g.OAuthAccessToken)
 	if err != nil || len(models) == 0 {
 		return SafeModelDefs("google"), nil
 	}
@@ -175,11 +187,16 @@ func (g *GeminiProvider) FetchModels(ctx context.Context) ([]registry.ModelDefin
 func (g *GeminiProvider) WithModel(model string) AIProvider {
 	return &GeminiProvider{
 		APIKey:           g.APIKey,
+		OAuthAccessToken: g.OAuthAccessToken,
 		Model:            model,
 		Client:           g.Client,
 		VerboseThoughts:  g.VerboseThoughts,
 		supportsThinking: geminiModelSupportsThinking(model),
 	}
+}
+
+func (g *GeminiProvider) usingOAuth() bool {
+	return strings.TrimSpace(g.OAuthAccessToken) != ""
 }
 
 func (g *GeminiProvider) getURL(streaming bool) string {
@@ -190,14 +207,24 @@ func (g *GeminiProvider) getURL(streaming bool) string {
 
 	// Professional Personal Premium Endpoint (Gemini API)
 	// Base URL: generativelanguage.googleapis.com (Current standard for 2026)
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:%s", g.Model, method)
+	base := fmt.Sprintf("%s/v1beta/models/%s:%s", geminiAPIBaseURL, g.Model, method)
+	q := url.Values{}
 	if streaming {
-		url += "?alt=sse"
+		q.Set("alt", "sse")
 	}
-	if g.APIKey != "" {
-		url += "&key=" + g.APIKey
+	if !g.usingOAuth() && g.APIKey != "" {
+		q.Set("key", g.APIKey)
 	}
-	return url
+	if enc := q.Encode(); enc != "" {
+		return base + "?" + enc
+	}
+	return base
+}
+
+func (g *GeminiProvider) applyAuth(req *http.Request) {
+	if g.usingOAuth() {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(g.OAuthAccessToken))
+	}
 }
 
 func (g *GeminiProvider) GenerateWithHistory(ctx context.Context, history *ConversationHistory) (string, error) {
@@ -231,6 +258,7 @@ func (g *GeminiProvider) GenerateWithHistory(ctx context.Context, history *Conve
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	g.applyAuth(req)
 
 	resp, err := g.Client.Do(req)
 	if err != nil {
@@ -283,6 +311,7 @@ func (g *GeminiProvider) Generate(ctx context.Context, prompt string) (string, e
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	g.applyAuth(req)
 
 	resp, err := g.Client.Do(req)
 	if err != nil {
@@ -352,6 +381,7 @@ func (g *GeminiProvider) Stream(ctx context.Context, prompt string, out io.Write
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	g.applyAuth(req)
 
 	resp, err := g.Client.Do(req)
 	if err != nil {
@@ -445,6 +475,7 @@ func (g *GeminiProvider) StreamWithHistory(ctx context.Context, history *Convers
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	g.applyAuth(req)
 
 	resp, err := g.Client.Do(req)
 	if err != nil {
@@ -558,20 +589,27 @@ func (g *GeminiProvider) extractTextFromResponse(result GeminiResponse) string {
 // Ping validates the Gemini key with a single lightweight GET /v1beta/models request.
 // Uses NewPingClient (5 s hard timeout, no retries) so it never blocks the UI.
 func (g *GeminiProvider) Ping(ctx context.Context) error {
-	url := "https://generativelanguage.googleapis.com/v1beta/models?key=" + g.APIKey + "&pageSize=1"
+	url := geminiAPIBaseURL + "/v1beta/models?pageSize=1"
+	if !g.usingOAuth() && strings.TrimSpace(g.APIKey) != "" {
+		url += "&key=" + g.APIKey
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
+	g.applyAuth(req)
 
-	resp, err := NewPingClient().Do(req)
+	resp, err := newGeminiPingClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("Gemini unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		body, _ := io.ReadAll(resp.Body)
+		if g.usingOAuth() {
+			return fmt.Errorf("Gemini OAuth token invalid (%d): %s", resp.StatusCode, string(body))
+		}
 		return fmt.Errorf("Gemini key invalid (%d): %s", resp.StatusCode, string(body))
 	}
 	return nil

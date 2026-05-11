@@ -7,12 +7,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	mcptransport "github.com/mark3labs/mcp-go/client/transport"
 	mcpproto "github.com/mark3labs/mcp-go/mcp"
+	"github.com/pelletier/go-toml/v2"
 )
 
 // MCPServer represents an MCP (Model Context Protocol) server
@@ -54,6 +56,13 @@ type mcpExecutor interface {
 
 type stdioExecutor struct {
 	logger *slog.Logger
+}
+
+type mcpServerConfig struct {
+	Name    string   `json:"name" toml:"name"`
+	Command string   `json:"command" toml:"command"`
+	Args    []string `json:"args" toml:"args"`
+	Enabled *bool    `json:"enabled" toml:"enabled"`
 }
 
 // NewMCPHub creates a new MCP hub
@@ -100,20 +109,48 @@ func (h *MCPHub) DiscoverServers() error {
 		return fmt.Errorf("failed to read MCP config: %w", err)
 	}
 
+	configPaths := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
-			// Check for default config in subdirectory
-			configPath := filepath.Join(h.configDir, entry.Name(), "config.toml")
-			if _, err := os.Stat(configPath); err == nil {
-				server, err := h.loadServerConfig(configPath)
-				if err == nil {
-					h.servers[server.Name] = server
-					h.logger.Debug("discovered MCP server",
-						slog.String("name", server.Name),
-						slog.String("path", server.Path),
-					)
+			for _, candidate := range []string{"config.toml", "config.json"} {
+				configPath := filepath.Join(h.configDir, entry.Name(), candidate)
+				if _, err := os.Stat(configPath); err == nil {
+					configPaths = append(configPaths, configPath)
 				}
 			}
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		if ext == ".toml" || ext == ".json" {
+			configPaths = append(configPaths, filepath.Join(h.configDir, entry.Name()))
+		}
+	}
+
+	for _, configPath := range configPaths {
+		server, err := h.loadServerConfig(configPath)
+		if err != nil {
+			h.logger.Warn("failed to load MCP server config",
+				slog.String("path", configPath),
+				slog.String("error", err.Error()),
+			)
+			continue
+		}
+		h.servers[server.Name] = server
+		h.logger.Debug("discovered MCP server",
+			slog.String("name", server.Name),
+			slog.String("path", server.Path),
+		)
+		if server.Command == "" {
+			h.logger.Warn("MCP server discovered without command; execution will fail until configured",
+				slog.String("name", server.Name),
+				slog.String("path", configPath),
+			)
+		}
+		if !server.Enabled {
+			h.logger.Debug("MCP server config is disabled",
+				slog.String("name", server.Name),
+				slog.String("path", configPath),
+			)
 		}
 	}
 
@@ -124,20 +161,64 @@ func (h *MCPHub) DiscoverServers() error {
 	return nil
 }
 
+func parseMCPServerConfig(configPath string, raw []byte) (*mcpServerConfig, error) {
+	cfg := &mcpServerConfig{}
+	ext := strings.ToLower(filepath.Ext(configPath))
+	switch ext {
+	case ".toml":
+		if err := toml.Unmarshal(raw, cfg); err != nil {
+			return nil, fmt.Errorf("parse TOML config: %w", err)
+		}
+	case ".json":
+		if err := json.Unmarshal(raw, cfg); err != nil {
+			return nil, fmt.Errorf("parse JSON config: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported MCP config extension: %s", ext)
+	}
+	return cfg, nil
+}
+
+func deriveServerName(configPath string, parsedName string) string {
+	if strings.TrimSpace(parsedName) != "" {
+		return strings.TrimSpace(parsedName)
+	}
+	base := filepath.Base(configPath)
+	if strings.EqualFold(base, "config.toml") || strings.EqualFold(base, "config.json") {
+		return filepath.Base(filepath.Dir(configPath))
+	}
+	return strings.TrimSuffix(base, filepath.Ext(base))
+}
+
 // loadServerConfig loads a server configuration
 func (h *MCPHub) loadServerConfig(configPath string) (*MCPServer, error) {
-	// Parse TOML config (simplified for now)
-	serverName := filepath.Base(filepath.Dir(configPath))
-
-	server := &MCPServer{
-		Name:    serverName,
-		Path:    filepath.Dir(configPath),
-		Enabled: true,
-		Tools:   []MCPTool{},
-		Status:  "stopped",
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("read MCP config: %w", err)
+	}
+	parsed, err := parseMCPServerConfig(configPath, raw)
+	if err != nil {
+		return nil, err
 	}
 
-	return server, nil
+	serverName := deriveServerName(configPath, parsed.Name)
+	if serverName == "" {
+		return nil, fmt.Errorf("server name could not be derived")
+	}
+	enabled := true
+	if parsed.Enabled != nil {
+		enabled = *parsed.Enabled
+	}
+
+	return &MCPServer{
+		Name:    serverName,
+		Path:    filepath.Dir(configPath),
+		Command: strings.TrimSpace(parsed.Command),
+		Args:    parsed.Args,
+		Enabled: enabled,
+		Tools:   []MCPTool{},
+		Status:  "stopped",
+	}, nil
 }
 
 // RegisterServer manually registers an MCP server

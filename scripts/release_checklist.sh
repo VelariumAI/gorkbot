@@ -19,6 +19,15 @@ bash scripts/check_public_hygiene.sh
 echo "[release-check] promotion manifest parity"
 bash scripts/check_promotion_manifest.sh
 
+echo "[release-check] unmanaged destination path policy (same-repo run skips)"
+bash scripts/check_promotion_unmanaged_paths.sh
+
+echo "[release-check] release changelog source"
+bash scripts/check_release_changelog.sh
+
+echo "[release-check] release artifact matrix"
+bash scripts/check_release_artifact_matrix.sh
+
 if [[ -f scripts/promote_to_public.sh ]]; then
   echo "[release-check] lint promotion script"
   bash -n scripts/promote_to_public.sh
