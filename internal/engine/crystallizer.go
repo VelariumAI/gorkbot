@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -118,13 +116,18 @@ func (c *Crystallizer) saveForgedPlugin(tool forgedTool) {
 		c.orchestrator.Logger.Warn("Rejected forged tool with invalid name", "name", tool.Name)
 		return
 	}
+	mainPath, err := selfmod.NewPythonToolStagingPath(safeName, "main.py")
+	if err != nil {
+		c.orchestrator.Logger.Warn("Rejected forged tool staging path", "reason", err)
+		return
+	}
 
 	manifest := map[string]any{
 		"name":             safeName,
 		"artifact_kind":    "tool_plugin_manifest",
 		"risk_class":       "high",
 		"capabilities":     []string{"dynamic.tool.register", "dynamic.tool.execute"},
-		"target_paths":     []string{filepath.ToSlash(filepath.Join(".gorkbot", "staging", "python_tools", safeName, "main.py"))},
+		"target_paths":     []string{mainPath.String()},
 		"expected_effects": []string{"stage python plugin for review"},
 		"rollback_plan":    "delete staged plugin directory",
 		"description":      tool.Description,
@@ -142,15 +145,7 @@ func (c *Crystallizer) saveForgedPlugin(tool forgedTool) {
 		return
 	}
 
-	cwd, _ := os.Getwd()
-	pluginDir := filepath.Join(cwd, ".gorkbot", "staging", "python_tools", safeName)
-	if err := os.MkdirAll(pluginDir, 0755); err != nil {
-		c.orchestrator.Logger.Warn("Failed to create plugin dir", "error", err)
-		return
-	}
-
-	pyPath := filepath.Join(pluginDir, "main.py")
-	if err := os.WriteFile(pyPath, []byte(tool.PythonCode), 0755); err != nil {
+	if err := selfmod.WriteStagedFile(mainPath, []byte(tool.PythonCode), 0755); err != nil {
 		c.orchestrator.Logger.Warn("Failed to write python code", "error", err)
 		return
 	}
@@ -178,13 +173,17 @@ func (c *Crystallizer) saveForgedPlugin(tool forgedTool) {
 		return
 	}
 
-	manifestPath := filepath.Join(pluginDir, "manifest.json")
-	if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
+	manifestPath, err := selfmod.NewPythonToolStagingPath(safeName, "manifest.json")
+	if err != nil {
+		c.orchestrator.Logger.Warn("Rejected forged manifest staging path", "reason", err)
+		return
+	}
+	if err := selfmod.WriteStagedFile(manifestPath, manifestJSON, 0644); err != nil {
 		c.orchestrator.Logger.Warn("Failed to write manifest", "error", err)
 		return
 	}
 
-	c.orchestrator.Logger.Info("Tool proposal staged by crystallizer", "tool", safeName, "path", pluginDir)
+	c.orchestrator.Logger.Info("Tool proposal staged by crystallizer", "tool", safeName, "path", mainPath.Dir())
 	// Optionally inform the AI via System message
 	if c.orchestrator.ConversationHistory != nil {
 		c.orchestrator.ConversationHistory.AddSystemMessage(fmt.Sprintf("[TOOL FORGE]: I staged a proposed tool '%s' for human/governance review. It is not active yet.", safeName))

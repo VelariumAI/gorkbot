@@ -1,7 +1,7 @@
 # Auto-generated promotion manifest.
 # Source allowlist: configs/promotion-allowlist.txt
 # Regenerate with: bash scripts/generate_promotion_manifest.sh
-# Generated at (UTC): 2026-05-12T15:35:36Z
+# Generated at (UTC): 2026-05-12T17:14:49Z
 
 .github/workflows/release.yml
 .github/workflows/universal-validator.yml
@@ -575,6 +575,8 @@ pkg/selfmod/path_test.go
 pkg/selfmod/receipt.go
 pkg/selfmod/safe_name.go
 pkg/selfmod/safe_name_test.go
+pkg/selfmod/staging_path.go
+pkg/selfmod/staging_path_test.go
 pkg/selfmod/static_scan.go
 pkg/selfmod/static_scan_test.go
 pkg/selfmod/validator.go

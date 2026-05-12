@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
@@ -81,21 +79,18 @@ func (t *DefineCommandTool) Execute(ctx context.Context, params map[string]inter
 				Error:   fmt.Sprintf("dynamic proposal blocked: %s", validation.ReasonCode),
 			}, nil
 		}
-		stagePath := filepath.Join(".gorkbot", "staging", "commands", name+".json")
-		if _, blocked, reason, issue := selfmod.ValidateStagedTargetPath(filepath.ToSlash(stagePath)); blocked {
-			return &ToolResult{Success: false, Error: fmt.Sprintf("stage path rejected: %s (%s)", reason, issue)}, nil
+		stagePath, err := selfmod.NewCommandStagingPath(name)
+		if err != nil {
+			return &ToolResult{Success: false, Error: fmt.Sprintf("stage path rejected: %v", err)}, nil
 		}
 		payload := map[string]string{"name": name, "description": desc, "prompt": prompt}
 		b, _ := json.MarshalIndent(payload, "", "  ")
-		if err := os.MkdirAll(filepath.Dir(stagePath), 0755); err != nil {
-			return &ToolResult{Success: false, Error: fmt.Sprintf("failed to create staging dir: %v", err)}, nil
-		}
-		if err := os.WriteFile(stagePath, b, 0600); err != nil {
+		if err := selfmod.WriteStagedFile(stagePath, b, 0600); err != nil {
 			return &ToolResult{Success: false, Error: fmt.Sprintf("failed to stage command: %v", err)}, nil
 		}
 		return &ToolResult{
 			Success: true,
-			Output:  fmt.Sprintf("Command /%s validated and staged at %s (not active yet).", name, stagePath),
+			Output:  fmt.Sprintf("Command /%s validated and staged at %s (not active yet).", name, stagePath.String()),
 		}, nil
 	}
 

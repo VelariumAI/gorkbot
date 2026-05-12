@@ -67,14 +67,6 @@ func validateCommandTemplate(command string) []string {
 	return violations
 }
 
-func stageDynamicArtifact(path string, content []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, content, 0600)
-}
-
 func paramsToAny(in map[string]interface{}) map[string]any {
 	out := make(map[string]any, len(in))
 	for k, v := range in {
@@ -246,30 +238,23 @@ func (t *CreateToolTool) Execute(ctx context.Context, params map[string]interfac
 			}, fmt.Errorf("dynamic proposal blocked: %s", validation.ReasonCode)
 		}
 
-		stagePath := filepath.Join(".gorkbot", "staging", "tools", fmt.Sprintf("%s.go", name))
-		if _, blocked, reason, issue := selfmod.ValidateStagedTargetPath(filepath.ToSlash(stagePath)); blocked {
-			return &ToolResult{Success: false, Error: fmt.Sprintf("stage path rejected: %s (%s)", reason, issue)}, fmt.Errorf("stage path rejected: %s", reason)
+		stagePath, err := selfmod.NewToolStagingPath(name)
+		if err != nil {
+			return &ToolResult{Success: false, Error: fmt.Sprintf("stage path rejected: %v", err)}, err
 		}
-		if err := stageDynamicArtifact(stagePath, []byte(code)); err != nil {
+		if err := selfmod.WriteStagedFile(stagePath, []byte(code), 0600); err != nil {
 			return &ToolResult{Success: false, Error: fmt.Sprintf("failed to stage tool: %v", err)}, err
-		}
-
-		manifestPath := filepath.Join(".gorkbot", "staging", "tools", fmt.Sprintf("%s.manifest.json", name))
-		if manifestRaw, ok := params["manifest"]; ok && manifestRaw != nil {
-			if b, err := json.MarshalIndent(manifestRaw, "", "  "); err == nil {
-				_ = stageDynamicArtifact(manifestPath, b)
-			}
 		}
 
 		return &ToolResult{
 			Success: true,
 			Output: fmt.Sprintf(
 				"Dynamic tool '%s' validated and staged.\n\nStatus: staged only (non-off governance mode)\nPath: %s",
-				name, stagePath,
+				name, stagePath.String(),
 			),
 			Data: map[string]interface{}{
 				"tool_name": name,
-				"file_path": stagePath,
+				"file_path": stagePath.String(),
 				"staged":    true,
 				"live":      false,
 				"mode":      mode,
@@ -920,27 +905,22 @@ func (t *ModifyToolTool) Execute(ctx context.Context, params map[string]interfac
 			}, fmt.Errorf("dynamic proposal blocked: %s", validation.ReasonCode)
 		}
 
-		stageDir := filepath.Join(".gorkbot", "staging", "tools")
-		stageGoPath := filepath.Join(stageDir, fmt.Sprintf("%s.go", name))
-		if _, blocked, reason, issue := selfmod.ValidateStagedTargetPath(filepath.ToSlash(stageGoPath)); blocked {
-			return &ToolResult{Success: false, Error: fmt.Sprintf("stage path rejected: %s (%s)", reason, issue)}, fmt.Errorf("stage path rejected: %s", reason)
+		stageGoPath, err := selfmod.NewToolStagingPath(name)
+		if err != nil {
+			return &ToolResult{Success: false, Error: fmt.Sprintf("stage path rejected: %v", err)}, err
 		}
-		if err := stageDynamicArtifact(stageGoPath, []byte(code)); err != nil {
+		if err := selfmod.WriteStagedFile(stageGoPath, []byte(code), 0600); err != nil {
 			return &ToolResult{Success: false, Error: fmt.Sprintf("failed to stage updated tool: %v", err)}, err
-		}
-		stageCfgPath := filepath.Join(stageDir, fmt.Sprintf("%s.config.json", name))
-		if b, err := json.MarshalIndent(cfg, "", "  "); err == nil {
-			_ = stageDynamicArtifact(stageCfgPath, b)
 		}
 		return &ToolResult{
 			Success: true,
 			Output: fmt.Sprintf(
 				"Tool '%s' update validated and staged.\n\nStatus: staged only (non-off governance mode)\nPath: %s",
-				name, stageGoPath,
+				name, stageGoPath.String(),
 			),
 			Data: map[string]interface{}{
 				"tool_name": name,
-				"file_path": stageGoPath,
+				"file_path": stageGoPath.String(),
 				"staged":    true,
 				"live":      false,
 				"mode":      mode,
