@@ -91,37 +91,15 @@ func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResul
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	httpReq, err := http.NewRequestWithContext(reqCtx, method, evaluated.safeURL.String(), nil)
+	resp, err := g.executeValidatedFetch(reqCtx, method, evaluated.safeURL, req.Headers, req.UserAgent)
 	if err != nil {
-		decision.Allowed = false
-		decision.FinalStatus = RESEARCH_BLOCKED
-		decision.ReasonCode = REASON_URL_INVALID
-		g.logDecision(req, decision, result, time.Since(start))
-		return result, decision, err
-	}
-
-	for k, v := range req.Headers {
-		httpReq.Header.Set(k, v)
-	}
-	if ua := strings.TrimSpace(req.UserAgent); ua != "" {
-		httpReq.Header.Set("User-Agent", ua)
-	}
-
-	client := g.httpClientForRequest()
-	client.CheckRedirect = func(redirReq *http.Request, via []*http.Request) error {
-		if len(via) >= 10 {
-			return errors.New("stopped after 10 redirects")
+		if errors.Is(err, errInvalidValidatedRequest) {
+			decision.Allowed = false
+			decision.FinalStatus = RESEARCH_BLOCKED
+			decision.ReasonCode = REASON_URL_INVALID
+			g.logDecision(req, decision, result, time.Since(start))
+			return result, decision, err
 		}
-		safeURL, reason, ok := validateResearchURL(redirReq.URL.String(), g.Policy)
-		if !ok {
-			return redirectBlockedError{reason: reason}
-		}
-		redirReq.URL = safeURL.URL()
-		return nil
-	}
-
-	resp, err := client.Do(httpReq)
-	if err != nil {
 		if errors.Is(reqCtx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 			decision.Allowed = false
 			decision.FinalStatus = RESEARCH_BLOCKED
@@ -226,6 +204,71 @@ func (g *Gateway) httpClientForRequest() *http.Client {
 	}
 	copy := *g.Client
 	return &copy
+}
+
+// errInvalidValidatedRequest is returned when constructing the outbound HTTP
+// request fails for reasons other than transport, deadline, or redirect
+// blocking. It is used by the caller to classify a request as URL-invalid.
+var errInvalidValidatedRequest = errors.New("invalid validated research request")
+
+// executeValidatedFetch is the single centralized outbound HTTP sink for the
+// research-egress gateway. It accepts only the validatedURL safe typed
+// artifact; raw user input never reaches this function. Redirects are
+// revalidated into fresh validatedURL artifacts before they are followed.
+// All call sites in pkg/researchgate route their outbound HTTP through here.
+func (g *Gateway) executeValidatedFetch(
+	ctx context.Context,
+	method string,
+	safeURL validatedURL,
+	headers map[string]string,
+	userAgent string,
+) (*http.Response, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, method, safeURL.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errInvalidValidatedRequest, err)
+	}
+
+	for k, v := range headers {
+		httpReq.Header.Set(k, v)
+	}
+	if ua := strings.TrimSpace(userAgent); ua != "" {
+		httpReq.Header.Set("User-Agent", ua)
+	}
+
+	client := g.httpClientForRequest()
+	client.CheckRedirect = func(redirReq *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		revalidated, reason, ok := validateResearchURL(redirReq.URL.String(), g.Policy)
+		if !ok {
+			return redirectBlockedError{reason: reason}
+		}
+		redirReq.URL = revalidated.URL()
+		return nil
+	}
+
+	// Centralized validated research-egress sink. The URL is not consumed from
+	// raw user input: Fetch first runs validateResearchURL(...) to produce a
+	// validatedURL safe typed artifact, and only that artifact is carried to
+	// this sink. Validation rejects unsupported schemes, embedded URL
+	// credentials, private/loopback/link-local/cloud-metadata hosts, and
+	// unsafe redirects (revalidated above). Credential headers and
+	// credentialed normalized URLs are blocked earlier in the pipeline.
+	//
+	// This sink is intentional user-directed research egress, which CodeQL's
+	// go/request-forgery query cannot model. Negative tests prove the
+	// transport is not reached for invalid input:
+	//   - TestGatewayFetchUsesValidatedURLInTransport
+	//   - TestGatewayFetchBlockedURLNeverCallsTransport
+	//   - TestGatewayFetchBlocksUnsupportedSchemeAndCredentialsBeforeTransport
+	//   - TestGatewayBlocksRedirectToPrivateTarget
+	//   - TestGatewayBlocksRedirectToIPv6Unspecified
+	//   - TestGatewayBlocksRedirectToMetadataHost
+	//   - TestGatewayBlocksCredentialHeaders
+	//
+	// codeql[go/request-forgery]
+	return client.Do(httpReq)
 }
 
 func (g *Gateway) evaluateForExecution(ctx context.Context, req ResearchRequest) evaluatedRequest {
