@@ -38,6 +38,9 @@ func StaticScanGoSource(source string, caps []DynamicCapability) StaticScanResul
 		if err != nil {
 			continue
 		}
+		if imp.Name != nil && imp.Name.Name == "." {
+			return StaticScanResult{Allowed: false, ReasonCode: REASON_DYNAMIC_IMPORT_FORBIDDEN, Issues: []string{"dot import is forbidden: " + path}}
+		}
 		if reason, blocked := forbiddenImports[path]; blocked {
 			return StaticScanResult{Allowed: false, ReasonCode: reason, Issues: []string{"forbidden import: " + path}}
 		}
@@ -98,16 +101,20 @@ func classifyCall(call *ast.CallExpr, caps map[DynamicCapability]bool) (reason s
 		if !caps[CapabilityDeleteFile] {
 			return REASON_DYNAMIC_CAPABILITY_FORBIDDEN, "file delete sink requires dynamic.delete_file"
 		}
-	case "os.WriteFile", "os.Create":
+	case "os.WriteFile", "os.Create", "os.Symlink", "os.Link", "os.Rename", "os.Mkdir", "os.MkdirAll", "os.Chmod", "os.Chown", "os.Truncate":
 		if !caps[CapabilityWriteFile] {
-			return REASON_DYNAMIC_CAPABILITY_FORBIDDEN, "file write sink requires dynamic.write_file"
+			return REASON_DYNAMIC_CAPABILITY_FORBIDDEN, "file mutation sink requires dynamic.write_file"
 		}
 	case "os.Open", "os.ReadFile":
 		if !caps[CapabilityReadFile] {
 			return REASON_DYNAMIC_CAPABILITY_FORBIDDEN, "file read sink requires dynamic.read_file"
 		}
-	case "os.Getenv", "os.LookupEnv":
+	case "os.Getenv", "os.LookupEnv", "os.Environ", "os.Setenv":
 		return REASON_DYNAMIC_CREDENTIAL_ACCESS_FORBIDDEN, "environment variable access is forbidden in generated code"
+	case "os.Exit":
+		return REASON_DYNAMIC_EXEC_FORBIDDEN, "process termination is forbidden in generated code"
+	case "os.Hostname":
+		return REASON_DYNAMIC_CREDENTIAL_ACCESS_FORBIDDEN, "host environment access is forbidden in generated code"
 	}
 	return "", ""
 }

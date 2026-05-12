@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -131,6 +132,9 @@ func (t *CreateToolTool) Execute(ctx context.Context, params map[string]interfac
 	if !ok {
 		return &ToolResult{Success: false, Error: "name is required"}, fmt.Errorf("name required")
 	}
+	if err := selfmod.ValidateSafeArtifactName(name); err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("invalid tool name: %v", err)}, err
+	}
 
 	description, ok := params["description"].(string)
 	if !ok {
@@ -243,6 +247,9 @@ func (t *CreateToolTool) Execute(ctx context.Context, params map[string]interfac
 		}
 
 		stagePath := filepath.Join(".gorkbot", "staging", "tools", fmt.Sprintf("%s.go", name))
+		if _, blocked, reason, issue := selfmod.ValidateStagedTargetPath(filepath.ToSlash(stagePath)); blocked {
+			return &ToolResult{Success: false, Error: fmt.Sprintf("stage path rejected: %s (%s)", reason, issue)}, fmt.Errorf("stage path rejected: %s", reason)
+		}
 		if err := stageDynamicArtifact(stagePath, []byte(code)); err != nil {
 			return &ToolResult{Success: false, Error: fmt.Sprintf("failed to stage tool: %v", err)}, err
 		}
@@ -361,6 +368,7 @@ func generateToolCode(name, description, category, command string, params map[st
 		// Replace in command
 		commandBuilder = strings.ReplaceAll(commandBuilder, fmt.Sprintf("{{%s}}", paramName), fmt.Sprintf("\" + shellescape(%s) + \"", paramName))
 	}
+	commandLiteral := strconv.Quote(commandBuilder)
 
 	permissionStr := "true"
 	if !requiresPermission {
@@ -430,7 +438,7 @@ func (t *%s) Parameters() json.RawMessage {
 
 func (t *%s) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
 %s
-	command := "%s"
+	command := %s
 
 	bashTool := NewBashTool()
 	return bashTool.Execute(ctx, map[string]interface{}{
@@ -449,7 +457,7 @@ func (t *%s) Execute(ctx context.Context, params map[string]interface{}) (*ToolR
 		requiredJSON,
 		structName,
 		paramExtraction,
-		commandBuilder,
+		commandLiteral,
 	)
 }
 
@@ -779,6 +787,9 @@ func (t *ModifyToolTool) Execute(ctx context.Context, params map[string]interfac
 	if !ok || name == "" {
 		return &ToolResult{Success: false, Error: "name is required"}, fmt.Errorf("name required")
 	}
+	if err := selfmod.ValidateSafeArtifactName(name); err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("invalid tool name: %v", err)}, err
+	}
 
 	reg, ok := ctx.Value(registryContextKey).(*Registry)
 	if !ok || reg == nil {
@@ -911,6 +922,9 @@ func (t *ModifyToolTool) Execute(ctx context.Context, params map[string]interfac
 
 		stageDir := filepath.Join(".gorkbot", "staging", "tools")
 		stageGoPath := filepath.Join(stageDir, fmt.Sprintf("%s.go", name))
+		if _, blocked, reason, issue := selfmod.ValidateStagedTargetPath(filepath.ToSlash(stageGoPath)); blocked {
+			return &ToolResult{Success: false, Error: fmt.Sprintf("stage path rejected: %s (%s)", reason, issue)}, fmt.Errorf("stage path rejected: %s", reason)
+		}
 		if err := stageDynamicArtifact(stageGoPath, []byte(code)); err != nil {
 			return &ToolResult{Success: false, Error: fmt.Sprintf("failed to stage updated tool: %v", err)}, err
 		}

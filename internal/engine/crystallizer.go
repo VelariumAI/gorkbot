@@ -114,7 +114,7 @@ The Python code must read JSON from stdin, perform the operation, and print JSON
 
 func (c *Crystallizer) saveForgedPlugin(tool forgedTool) {
 	safeName := strings.ToLower(strings.TrimSpace(tool.Name))
-	if !regexp.MustCompile(`^[a-z0-9_\\-]+$`).MatchString(safeName) {
+	if !regexp.MustCompile(`^[a-z0-9_-]+$`).MatchString(safeName) {
 		c.orchestrator.Logger.Warn("Rejected forged tool with invalid name", "name", tool.Name)
 		return
 	}
@@ -156,22 +156,30 @@ func (c *Crystallizer) saveForgedPlugin(tool forgedTool) {
 	}
 
 	// Generate manifest.json
-	manifestJSON := fmt.Sprintf(`{
-  "name": "%s",
-  "description": "%s",
-  "author": "ToolForge",
-  "version": "1.0.0",
-  "entry_point": "main.py",
-  "parameters": {
-    "type": "object",
-    "properties": {
-       "args": { "type": "string", "description": "Arguments for the tool" }
-    }
-  }
-}`, safeName, tool.Description)
+	manifestPayload := map[string]any{
+		"name":        safeName,
+		"description": tool.Description,
+		"author":      "ToolForge",
+		"version":     "1.0.0",
+		"entry_point": "main.py",
+		"parameters": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"args": map[string]any{
+					"type":        "string",
+					"description": "Arguments for the tool",
+				},
+			},
+		},
+	}
+	manifestJSON, err := json.MarshalIndent(manifestPayload, "", "  ")
+	if err != nil {
+		c.orchestrator.Logger.Warn("Failed to marshal manifest", "error", err)
+		return
+	}
 
 	manifestPath := filepath.Join(pluginDir, "manifest.json")
-	if err := os.WriteFile(manifestPath, []byte(manifestJSON), 0644); err != nil {
+	if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
 		c.orchestrator.Logger.Warn("Failed to write manifest", "error", err)
 		return
 	}

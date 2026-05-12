@@ -63,6 +63,9 @@ func (t *DefineCommandTool) Execute(ctx context.Context, params map[string]inter
 		return &ToolResult{Success: false, Error: "name and prompt are required"}, nil
 	}
 	name = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(name)), "/")
+	if err := selfmod.ValidateSafeArtifactName(name); err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("invalid command name: %v", err)}, nil
+	}
 
 	mode := governanceModeFromContext(ctx)
 	if mode != governance.GOVERNANCE_OFF {
@@ -79,6 +82,9 @@ func (t *DefineCommandTool) Execute(ctx context.Context, params map[string]inter
 			}, nil
 		}
 		stagePath := filepath.Join(".gorkbot", "staging", "commands", name+".json")
+		if _, blocked, reason, issue := selfmod.ValidateStagedTargetPath(filepath.ToSlash(stagePath)); blocked {
+			return &ToolResult{Success: false, Error: fmt.Sprintf("stage path rejected: %s (%s)", reason, issue)}, nil
+		}
 		payload := map[string]string{"name": name, "description": desc, "prompt": prompt}
 		b, _ := json.MarshalIndent(payload, "", "  ")
 		if err := os.MkdirAll(filepath.Dir(stagePath), 0755); err != nil {
