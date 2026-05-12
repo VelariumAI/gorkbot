@@ -32,6 +32,24 @@ func TestClassifyGitPush(t *testing.T) {
 	}
 }
 
+func TestClassifySelfModificationMappings(t *testing.T) {
+	cases := []string{"create_tool", "modify_tool", "define_command", "rebuild"}
+	for _, tool := range cases {
+		if got := ClassifyTool(tool, nil); got != RISK_SELF_MODIFICATION {
+			t.Fatalf("%s -> got %s", tool, got)
+		}
+	}
+}
+
+func TestClassifySenseEvolve(t *testing.T) {
+	if got := ClassifyTool("sense_evolve", map[string]any{"dry_run": true}); got != RISK_READ_ONLY {
+		t.Fatalf("dry-run sense_evolve should be read-only, got %s", got)
+	}
+	if got := ClassifyTool("sense_evolve", map[string]any{"dry_run": false}); got != RISK_SELF_MODIFICATION {
+		t.Fatalf("mutating sense_evolve should be self-modification, got %s", got)
+	}
+}
+
 func TestClassifyHTTPRequestGetNoHeadersReadOnly(t *testing.T) {
 	if got := ClassifyTool("http_request", map[string]any{"method": "GET", "url": "https://example.com"}); got != RISK_READ_ONLY {
 		t.Fatalf("got %s", got)

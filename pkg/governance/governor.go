@@ -245,6 +245,12 @@ func (g *Governor) DecideAndApprove(ctx context.Context, action GovernedAction) 
 	if decision.Mode == GOVERNANCE_OFF {
 		return decision
 	}
+	if isHardBlockReason(decision.ReasonCode) {
+		decision.Allowed = false
+		decision.RequiresHuman = false
+		decision.FinalStatus = GOVERNANCE_BLOCKED
+		return decision
+	}
 	if !decision.RequiresHuman {
 		return decision
 	}
@@ -305,6 +311,15 @@ func (g *Governor) DecideAndApprove(ctx context.Context, action GovernedAction) 
 	}
 
 	return decision
+}
+
+func isHardBlockReason(reason string) bool {
+	if strings.HasPrefix(reason, "REASON_DYNAMIC_") &&
+		reason != REASON_DYNAMIC_CAPABILITY_REQUIRES_APPROVAL &&
+		reason != REASON_DYNAMIC_PROMOTION_REQUIRES_APPROVAL {
+		return true
+	}
+	return reason == REASON_SELF_MODIFICATION_REQUIRES_MANIFEST
 }
 
 func (g *Governor) approvalTimeout() time.Duration {

@@ -257,6 +257,41 @@ func TestGovernorSessionApprovalCachePreventsSecondPrompt(t *testing.T) {
 	}
 }
 
+func TestGovernorApprovalCannotOverrideHardDynamicBlock(t *testing.T) {
+	p := DefaultPolicy()
+	p.Mode = GOVERNANCE_ENFORCE
+	g := &Governor{
+		Policy: p,
+		Budget: execution.DefaultBudget(),
+		ApprovalHandler: ApprovalHandlerFunc(func(ctx context.Context, req ApprovalRequest) (ApprovalResult, error) {
+			return ApprovalResult{ActionID: req.ActionID, Decision: APPROVAL_GRANTED, Scope: APPROVAL_SESSION}, nil
+		}),
+	}
+	a := newAction("a-hard-1", RISK_SELF_MODIFICATION, "create_tool")
+	a.Parameters = map[string]any{
+		"manifest": map[string]any{
+			"name":             "bad",
+			"artifact_kind":    "dynamic_tool",
+			"risk_class":       "high",
+			"capabilities":     []any{"dynamic.skill.stage"},
+			"target_paths":     []any{".gorkbot/staging/tools/bad.go"},
+			"expected_effects": []any{"stage"},
+			"rollback_plan":    "delete",
+			"verified":         true,
+		},
+	}
+	d := g.DecideAndApprove(context.Background(), a)
+	if d.Allowed {
+		t.Fatalf("hard dynamic block must not be approvable: %#v", d)
+	}
+	if d.ReasonCode != REASON_DYNAMIC_AUTHORITY_FIELD_FORBIDDEN {
+		t.Fatalf("unexpected reason: %s", d.ReasonCode)
+	}
+	if d.RequiresHuman {
+		t.Fatalf("hard block should not request human approval")
+	}
+}
+
 func TestGovernorBreakerOpensAfterFailures(t *testing.T) {
 	p := DefaultPolicy()
 	p.Mode = GOVERNANCE_ENFORCE

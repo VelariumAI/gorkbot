@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"regexp"
 	"strings"
+
+	"github.com/google/uuid"
+	"github.com/velariumai/gorkbot/pkg/selfmod"
 )
 
 // Crystallizer daemon monitors conversation history for repeated tool patterns
@@ -109,43 +111,81 @@ The Python code must read JSON from stdin, perform the operation, and print JSON
 }
 
 func (c *Crystallizer) saveForgedPlugin(tool forgedTool) {
-	cwd, _ := os.Getwd()
-	pluginDir := filepath.Join(cwd, "plugins", "python", "auto_forged", tool.Name)
-	if err := os.MkdirAll(pluginDir, 0755); err != nil {
-		c.orchestrator.Logger.Warn("Failed to create plugin dir", "error", err)
+	safeName := strings.ToLower(strings.TrimSpace(tool.Name))
+	if !regexp.MustCompile(`^[a-z0-9_-]+$`).MatchString(safeName) {
+		c.orchestrator.Logger.Warn("Rejected forged tool with invalid name", "name", tool.Name)
+		return
+	}
+	mainPath, err := selfmod.NewPythonToolStagingPath(safeName, "main.py")
+	if err != nil {
+		c.orchestrator.Logger.Warn("Rejected forged tool staging path", "reason", err)
 		return
 	}
 
-	pyPath := filepath.Join(pluginDir, "main.py")
-	if err := os.WriteFile(pyPath, []byte(tool.PythonCode), 0755); err != nil {
+	manifest := map[string]any{
+		"name":             safeName,
+		"artifact_kind":    "tool_plugin_manifest",
+		"risk_class":       "high",
+		"capabilities":     []string{"dynamic.tool.register", "dynamic.tool.execute"},
+		"target_paths":     []string{mainPath.String()},
+		"expected_effects": []string{"stage python plugin for review"},
+		"rollback_plan":    "delete staged plugin directory",
+		"description":      tool.Description,
+	}
+	validation := selfmod.ValidateDynamicProposal(selfmod.ValidateInput{
+		OperationID: uuid.NewString(),
+		ToolName:    "toolforge.crystallizer",
+		Mode:        "GOVERNANCE_ENFORCE",
+		Parameters: map[string]any{
+			"manifest": manifest,
+		},
+	})
+	if validation.HardBlock || !validation.Allowed {
+		c.orchestrator.Logger.Warn("Rejected forged tool by selfmod policy", "reason", validation.ReasonCode, "issues", validation.Issues)
+		return
+	}
+
+	if err := selfmod.WriteStagedFile(mainPath, []byte(tool.PythonCode), 0755); err != nil {
 		c.orchestrator.Logger.Warn("Failed to write python code", "error", err)
 		return
 	}
 
 	// Generate manifest.json
-	manifest := fmt.Sprintf(`{
-  "name": "%s",
-  "description": "%s",
-  "author": "ToolForge",
-  "version": "1.0.0",
-  "entry_point": "main.py",
-  "parameters": {
-    "type": "object",
-    "properties": {
-       "args": { "type": "string", "description": "Arguments for the tool" }
-    }
-  }
-}`, tool.Name, tool.Description)
+	manifestPayload := map[string]any{
+		"name":        safeName,
+		"description": tool.Description,
+		"author":      "ToolForge",
+		"version":     "1.0.0",
+		"entry_point": "main.py",
+		"parameters": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"args": map[string]any{
+					"type":        "string",
+					"description": "Arguments for the tool",
+				},
+			},
+		},
+	}
+	manifestJSON, err := json.MarshalIndent(manifestPayload, "", "  ")
+	if err != nil {
+		c.orchestrator.Logger.Warn("Failed to marshal manifest", "error", err)
+		return
+	}
 
-	manifestPath := filepath.Join(pluginDir, "manifest.json")
-	if err := os.WriteFile(manifestPath, []byte(manifest), 0644); err != nil {
+	manifestPath, err := selfmod.NewPythonToolStagingPath(safeName, "manifest.json")
+	if err != nil {
+		c.orchestrator.Logger.Warn("Rejected forged manifest staging path", "reason", err)
+		return
+	}
+	if err := selfmod.WriteStagedFile(manifestPath, manifestJSON, 0644); err != nil {
 		c.orchestrator.Logger.Warn("Failed to write manifest", "error", err)
 		return
 	}
 
-	c.orchestrator.Logger.Info("Tool Crystallized Successfully!", "tool", tool.Name)
+	c.orchestrator.Logger.Info("Tool proposal staged by crystallizer", "tool", safeName, "path", mainPath.Dir())
 	// Optionally inform the AI via System message
 	if c.orchestrator.ConversationHistory != nil {
-		c.orchestrator.ConversationHistory.AddSystemMessage(fmt.Sprintf("[TOOL FORGE]: I have autonomously crystallized a new tool '%s'. It is now available.", tool.Name))
+		c.orchestrator.ConversationHistory.AddSystemMessage(fmt.Sprintf("[TOOL FORGE]: I staged a proposed tool '%s' for human/governance review. It is not active yet.", safeName))
 	}
 }

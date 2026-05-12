@@ -177,7 +177,7 @@ func TestCrystallizer_CheckAndForgeAndSave(t *testing.T) {
 
 	cr.CheckAndForge(context.Background())
 
-	toolDir := filepath.Join(tmp, "plugins", "python", "auto_forged", "auto_tool")
+	toolDir := filepath.Join(tmp, ".gorkbot", "staging", "python_tools", "auto_tool")
 	if _, err := os.Stat(filepath.Join(toolDir, "main.py")); err != nil {
 		t.Fatalf("expected forged main.py to exist: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestCrystallizer_CheckAndForgeAndSave(t *testing.T) {
 	msgs := orch.ConversationHistory.GetMessages()
 	found := false
 	for _, m := range msgs {
-		if m.Role == "system" && strings.Contains(m.Content, "autonomously crystallized") {
+		if m.Role == "system" && strings.Contains(m.Content, "staged a proposed tool") {
 			found = true
 			break
 		}
