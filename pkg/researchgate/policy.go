@@ -1,7 +1,6 @@
 package researchgate
 
 import (
-	"net/url"
 	"strings"
 	"time"
 )
@@ -105,36 +104,12 @@ func (p Policy) Evaluate(req ResearchRequest) ResearchDecision {
 		return decision
 	}
 
-	normalized, parsed, ok := validateURL(req.URL, p)
+	safeURL, reason, ok := validateResearchURL(req.URL, p)
 	if !ok {
-		decision.ReasonCode = REASON_URL_INVALID
+		decision.ReasonCode = reason
 		return decision
 	}
-	decision.NormalizedURL = normalized
-
-	if !IsSupportedScheme(parsed, p.AllowedSchemes) {
-		decision.ReasonCode = REASON_UNSUPPORTED_SCHEME
-		return decision
-	}
-	if IsCredentialedURL(parsed) && !p.AllowCredentials {
-		decision.ReasonCode = REASON_CREDENTIALS_FORBIDDEN
-		return decision
-	}
-
-	host := normalizedHost(parsed.Host)
-	if isHostBlocked(host, p.BlockedHosts) {
-		decision.ReasonCode = REASON_DOMAIN_BLOCKED
-		return decision
-	}
-	if len(p.AllowedHosts) > 0 && !isHostAllowed(host, p.AllowedHosts) {
-		decision.ReasonCode = REASON_DOMAIN_BLOCKED
-		return decision
-	}
-
-	if !p.AllowPrivateNetworks && (IsPrivateOrLocalHost(host) || HostLooksLikeCloudMetadata(host)) {
-		decision.ReasonCode = REASON_PRIVATE_NETWORK_BLOCKED
-		return decision
-	}
+	decision.NormalizedURL = safeURL.String()
 
 	if req.Kind == REQUEST_DOWNLOAD {
 		if !p.AllowDownloads {
@@ -164,18 +139,6 @@ func inferredMethod(kind RequestKind) string {
 	default:
 		return string(METHOD_GET)
 	}
-}
-
-func validateURL(raw string, policy Policy) (string, *url.URL, bool) {
-	normalized, err := NormalizeURL(raw)
-	if err != nil {
-		return "", nil, false
-	}
-	u, err := url.Parse(normalized)
-	if err != nil || u == nil {
-		return "", nil, false
-	}
-	return normalized, u, true
 }
 
 func hasCredentialMaterial(headers map[string]string, metadata map[string]any) bool {

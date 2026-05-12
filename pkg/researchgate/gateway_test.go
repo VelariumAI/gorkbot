@@ -15,6 +15,22 @@ import (
 	"time"
 )
 
+type recordingTransport struct {
+	calls int
+	urls  []string
+}
+
+func (t *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.calls++
+	t.urls = append(t.urls, req.URL.String())
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader("ok")),
+		Header:     make(http.Header),
+		Request:    req,
+	}, nil
+}
+
 func gatewayForServer(t *testing.T, p Policy, ts *httptest.Server, virtualHost string) (*Gateway, string) {
 	t.Helper()
 
@@ -37,6 +53,97 @@ func gatewayForServer(t *testing.T, p Policy, ts *httptest.Server, virtualHost s
 	g := New(p, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	g.Client = &http.Client{Transport: transport}
 	return g, virtualURL
+}
+
+func TestGatewayFetchUsesValidatedURLInTransport(t *testing.T) {
+	rt := &recordingTransport{}
+	g := New(DefaultPolicy(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	g.Client = &http.Client{Transport: rt}
+
+	req := ResearchRequest{
+		ID:        "safe-1",
+		Kind:      REQUEST_FETCH,
+		Method:    "GET",
+		URL:       " HTTPS://Example.COM:443/docs?q=1#frag ",
+		CreatedAt: time.Now().UTC(),
+	}
+	_, decision, err := g.Fetch(context.Background(), req)
+	if err != nil {
+		t.Fatalf("expected successful fetch: %v", err)
+	}
+	if !decision.Allowed {
+		t.Fatalf("expected allowed decision, got %#v", decision)
+	}
+	if rt.calls != 1 {
+		t.Fatalf("expected one transport call, got %d", rt.calls)
+	}
+	if len(rt.urls) != 1 || rt.urls[0] != "https://example.com:443/docs?q=1" {
+		t.Fatalf("expected normalized validated url, got %#v", rt.urls)
+	}
+}
+
+func TestGatewayFetchBlockedURLNeverCallsTransport(t *testing.T) {
+	rt := &recordingTransport{}
+	g := New(DefaultPolicy(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	g.Client = &http.Client{Transport: rt}
+
+	req := ResearchRequest{
+		ID:        "blocked-1",
+		Kind:      REQUEST_FETCH,
+		Method:    "GET",
+		URL:       "http://127.0.0.1/private",
+		CreatedAt: time.Now().UTC(),
+	}
+	_, decision, err := g.Fetch(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected blocked request error")
+	}
+	if decision.ReasonCode != REASON_PRIVATE_NETWORK_BLOCKED {
+		t.Fatalf("expected private network block, got %#v", decision)
+	}
+	if rt.calls != 0 {
+		t.Fatalf("transport should not be called for blocked url, got %d calls", rt.calls)
+	}
+}
+
+func TestGatewayFetchBlocksUnsupportedSchemeAndCredentialsBeforeTransport(t *testing.T) {
+	cases := []struct {
+		name   string
+		rawURL string
+		reason string
+	}{
+		{name: "unsupported_scheme", rawURL: "ftp://example.com/file", reason: REASON_UNSUPPORTED_SCHEME},
+		{name: "url_credentials", rawURL: "https://user:pass@example.com/secret", reason: REASON_CREDENTIALS_FORBIDDEN},
+		{name: "unspecified_ipv4", rawURL: "http://0.0.0.0/a", reason: REASON_PRIVATE_NETWORK_BLOCKED},
+		{name: "unspecified_ipv6", rawURL: "http://[::]/a", reason: REASON_PRIVATE_NETWORK_BLOCKED},
+		{name: "metadata_host", rawURL: "http://metadata.google.internal/a", reason: REASON_PRIVATE_NETWORK_BLOCKED},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &recordingTransport{}
+			g := New(DefaultPolicy(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+			g.Client = &http.Client{Transport: rt}
+
+			req := ResearchRequest{
+				ID:        "blocked-" + tc.name,
+				Kind:      REQUEST_FETCH,
+				Method:    "GET",
+				URL:       tc.rawURL,
+				CreatedAt: time.Now().UTC(),
+			}
+			_, decision, err := g.Fetch(context.Background(), req)
+			if err == nil {
+				t.Fatalf("expected blocked request for %s", tc.rawURL)
+			}
+			if decision.ReasonCode != tc.reason {
+				t.Fatalf("expected reason %s, got %#v", tc.reason, decision)
+			}
+			if rt.calls != 0 {
+				t.Fatalf("transport should not be called for blocked url, got %d calls", rt.calls)
+			}
+		})
+	}
 }
 
 func TestGatewayFetchPublicGET(t *testing.T) {
@@ -137,6 +244,40 @@ func TestGatewayBlocksRedirectToPrivateTarget(t *testing.T) {
 	}
 	if decision.ReasonCode != REASON_PRIVATE_NETWORK_BLOCKED {
 		t.Fatalf("expected private redirect block, got %#v", decision)
+	}
+}
+
+func TestGatewayBlocksRedirectToIPv6Unspecified(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://[::]/private", http.StatusFound)
+	}))
+	defer ts.Close()
+
+	g, vurl := gatewayForServer(t, DefaultPolicy(), ts, "public.test:80")
+	req := ResearchRequest{ID: "5b", Kind: REQUEST_FETCH, Method: "GET", URL: vurl, CreatedAt: time.Now().UTC()}
+	_, decision, err := g.Fetch(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected redirect block error")
+	}
+	if decision.ReasonCode != REASON_PRIVATE_NETWORK_BLOCKED {
+		t.Fatalf("expected private redirect block, got %#v", decision)
+	}
+}
+
+func TestGatewayBlocksRedirectToMetadataHost(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://metadata.google.internal/computeMetadata/v1", http.StatusFound)
+	}))
+	defer ts.Close()
+
+	g, vurl := gatewayForServer(t, DefaultPolicy(), ts, "public.test:80")
+	req := ResearchRequest{ID: "5c", Kind: REQUEST_FETCH, Method: "GET", URL: vurl, CreatedAt: time.Now().UTC()}
+	_, decision, err := g.Fetch(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected redirect block error")
+	}
+	if decision.ReasonCode != REASON_PRIVATE_NETWORK_BLOCKED {
+		t.Fatalf("expected metadata redirect block, got %#v", decision)
 	}
 }
 

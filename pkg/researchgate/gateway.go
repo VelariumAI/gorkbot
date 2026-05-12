@@ -23,6 +23,12 @@ type Gateway struct {
 	Cache  Cache
 }
 
+type evaluatedRequest struct {
+	req      ResearchRequest
+	decision ResearchDecision
+	safeURL  validatedURL
+}
+
 type redirectBlockedError struct {
 	reason string
 }
@@ -50,7 +56,8 @@ func (g *Gateway) Decide(ctx context.Context, req ResearchRequest) ResearchDecis
 
 func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResult, ResearchDecision, error) {
 	start := time.Now()
-	decision := g.Decide(ctx, req)
+	evaluated := g.evaluateForExecution(ctx, req)
+	decision := evaluated.decision
 
 	result := ResearchResult{
 		RequestID: req.ID,
@@ -84,7 +91,7 @@ func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResul
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	httpReq, err := http.NewRequestWithContext(reqCtx, method, decision.NormalizedURL, nil)
+	httpReq, err := http.NewRequestWithContext(reqCtx, method, evaluated.safeURL.String(), nil)
 	if err != nil {
 		decision.Allowed = false
 		decision.FinalStatus = RESEARCH_BLOCKED
@@ -105,21 +112,11 @@ func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResul
 		if len(via) >= 10 {
 			return errors.New("stopped after 10 redirects")
 		}
-		normalized, err := NormalizeURL(redirReq.URL.String())
-		if err != nil {
-			return redirectBlockedError{reason: REASON_URL_INVALID}
+		safeURL, reason, ok := validateResearchURL(redirReq.URL.String(), g.Policy)
+		if !ok {
+			return redirectBlockedError{reason: reason}
 		}
-		u, err := url.Parse(normalized)
-		if err != nil {
-			return redirectBlockedError{reason: REASON_URL_INVALID}
-		}
-		host := normalizedHost(u.Host)
-		if !g.Policy.AllowPrivateNetworks && (IsPrivateOrLocalHost(host) || HostLooksLikeCloudMetadata(host)) {
-			return redirectBlockedError{reason: REASON_PRIVATE_NETWORK_BLOCKED}
-		}
-		if !IsSupportedScheme(u, g.Policy.AllowedSchemes) {
-			return redirectBlockedError{reason: REASON_UNSUPPORTED_SCHEME}
-		}
+		redirReq.URL = safeURL.URL()
 		return nil
 	}
 
@@ -229,6 +226,24 @@ func (g *Gateway) httpClientForRequest() *http.Client {
 	}
 	copy := *g.Client
 	return &copy
+}
+
+func (g *Gateway) evaluateForExecution(ctx context.Context, req ResearchRequest) evaluatedRequest {
+	_ = ctx
+	decision := g.Decide(ctx, req)
+	if !decision.Allowed {
+		return evaluatedRequest{req: req, decision: decision}
+	}
+
+	safeURL, reason, ok := validateResearchURL(req.URL, g.Policy)
+	if !ok {
+		decision.Allowed = false
+		decision.FinalStatus = RESEARCH_BLOCKED
+		decision.ReasonCode = reason
+		return evaluatedRequest{req: req, decision: decision}
+	}
+	decision.NormalizedURL = safeURL.String()
+	return evaluatedRequest{req: req, decision: decision, safeURL: safeURL}
 }
 
 func (g *Gateway) logDecision(req ResearchRequest, decision ResearchDecision, result ResearchResult, dur time.Duration) {

@@ -10,6 +10,68 @@ import (
 
 var errInvalidURL = errors.New("invalid url")
 
+type validatedURL struct {
+	raw    string
+	parsed *url.URL
+	host   string
+}
+
+func (u validatedURL) String() string {
+	return u.raw
+}
+
+func (u validatedURL) URL() *url.URL {
+	if u.parsed == nil {
+		return nil
+	}
+	copy := *u.parsed
+	return &copy
+}
+
+func (u validatedURL) Host() string {
+	return u.host
+}
+
+func validateResearchURL(raw string, policy Policy) (validatedURL, string, bool) {
+	normalized, err := NormalizeURL(raw)
+	if err != nil {
+		return validatedURL{}, REASON_URL_INVALID, false
+	}
+
+	parsed, err := url.Parse(normalized)
+	if err != nil || parsed == nil {
+		return validatedURL{}, REASON_URL_INVALID, false
+	}
+
+	if !IsSupportedScheme(parsed, policy.AllowedSchemes) {
+		return validatedURL{}, REASON_UNSUPPORTED_SCHEME, false
+	}
+
+	if IsCredentialedURL(parsed) && !policy.AllowCredentials {
+		return validatedURL{}, REASON_CREDENTIALS_FORBIDDEN, false
+	}
+
+	host := normalizedHost(parsed.Host)
+	if host == "" {
+		return validatedURL{}, REASON_URL_INVALID, false
+	}
+	if isHostBlocked(host, policy.BlockedHosts) {
+		return validatedURL{}, REASON_DOMAIN_BLOCKED, false
+	}
+	if len(policy.AllowedHosts) > 0 && !isHostAllowed(host, policy.AllowedHosts) {
+		return validatedURL{}, REASON_DOMAIN_BLOCKED, false
+	}
+	if !policy.AllowPrivateNetworks && (IsPrivateOrLocalHost(host) || HostLooksLikeCloudMetadata(host)) {
+		return validatedURL{}, REASON_PRIVATE_NETWORK_BLOCKED, false
+	}
+
+	return validatedURL{
+		raw:    normalized,
+		parsed: parsed,
+		host:   host,
+	}, "", true
+}
+
 func NormalizeURL(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
