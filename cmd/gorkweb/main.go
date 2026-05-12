@@ -205,6 +205,8 @@ func main() {
 	puterRootFlag := fs.String("puter-root", "/Gorkbot", "Puter governed workspace root")
 	puterRepoFlag := fs.String("puter-repo", "VelariumAI/puter", "Pinned Puter fork repository owner/name")
 	puterRefFlag := fs.String("puter-ref", "f80016e4e6a6f8062b737a415a0b7c18008ade98", "Pinned Puter fork commit/tag reference")
+	puterDeploymentFlag := fs.String("puter-deployment", string(puteradapter.DeploymentLocal), "Puter deployment mode: local|self_hosted|saas")
+	puterEndpointFlag := fs.String("puter-endpoint", "", "Puter runtime endpoint for configured deployment mode")
 
 	// Pre-scan for --output-format=json to handle errors correctly
 	isJSON := false
@@ -233,11 +235,23 @@ func main() {
 		}
 		os.Exit(2)
 	}
+	puterDeploymentMode, ok := puteradapter.ParseDeploymentMode(*puterDeploymentFlag)
+	if !ok {
+		msg := fmt.Sprintf("invalid --puter-deployment value %q (expected local|self_hosted|saas)", *puterDeploymentFlag)
+		if isJSON {
+			outputErrorJSON(msg)
+		} else {
+			fmt.Fprintln(os.Stderr, msg)
+		}
+		os.Exit(2)
+	}
 	puterCfg := puteradapter.DefaultConfig()
 	puterCfg.Mode = puterMode
 	puterCfg.Root = *puterRootFlag
 	puterCfg.PuterRepo = *puterRepoFlag
 	puterCfg.PuterRef = *puterRefFlag
+	puterCfg.DeploymentMode = puterDeploymentMode
+	puterCfg.Endpoint = *puterEndpointFlag
 	if err := puterCfg.Validate(); err != nil {
 		msg := fmt.Sprintf("invalid puter workspace config: %v", err)
 		if isJSON {
@@ -253,6 +267,8 @@ func main() {
 		"repo", puterCfg.PuterRepo,
 		"ref", puterCfg.PuterRef,
 		"default_branch", puterCfg.PuterDefaultBranch,
+		"deployment_mode", puterCfg.DeploymentMode,
+		"endpoint", puterCfg.Endpoint,
 	)
 
 	// --join: observer-only mode — no orchestrator or TUI needed.

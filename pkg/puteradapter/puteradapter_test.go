@@ -7,6 +7,111 @@ import (
 	"time"
 )
 
+func TestConfigDefaultsAndWorkspaceOffNoEndpointRequired(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Mode != WorkspaceOff {
+		t.Fatalf("default mode=%q want=%q", cfg.Mode, WorkspaceOff)
+	}
+	if cfg.DeploymentMode != DeploymentLocal {
+		t.Fatalf("default deployment mode=%q want=%q", cfg.DeploymentMode, DeploymentLocal)
+	}
+	if cfg.Endpoint != "" {
+		t.Fatalf("default endpoint=%q want empty", cfg.Endpoint)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate default config: %v", err)
+	}
+}
+
+func TestParseDeploymentMode(t *testing.T) {
+	if mode, ok := ParseDeploymentMode(" self_hosted "); !ok || mode != DeploymentSelfHosted {
+		t.Fatalf("expected self_hosted mode parse success, got mode=%q ok=%v", mode, ok)
+	}
+	if _, ok := ParseDeploymentMode("edge"); ok {
+		t.Fatalf("expected invalid deployment mode to fail parse")
+	}
+}
+
+func TestConfigValidateLocalAcceptsLoopback(t *testing.T) {
+	cases := []string{
+		"http://localhost:4100",
+		"http://127.0.0.1:4100",
+		"http://[::1]:4100",
+	}
+	for _, endpoint := range cases {
+		cfg := DefaultConfig()
+		cfg.Mode = WorkspaceAudit
+		cfg.DeploymentMode = DeploymentLocal
+		cfg.Endpoint = endpoint
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected local endpoint %q accepted, got %v", endpoint, err)
+		}
+	}
+}
+
+func TestConfigValidateLocalRejectsPublicEndpoint(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Mode = WorkspaceAudit
+	cfg.DeploymentMode = DeploymentLocal
+	cfg.Endpoint = "http://example.com:4100"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected non-loopback local endpoint to be rejected")
+	}
+}
+
+func TestConfigValidateSaaSRequiresHTTPSUnlessExplicitlyAllowed(t *testing.T) {
+	cfgHTTPS := DefaultConfig()
+	cfgHTTPS.Mode = WorkspaceAudit
+	cfgHTTPS.DeploymentMode = DeploymentSaaS
+	cfgHTTPS.Endpoint = "https://puter.example.com"
+	if err := cfgHTTPS.Validate(); err != nil {
+		t.Fatalf("expected saas https endpoint accepted: %v", err)
+	}
+
+	cfgHTTP := DefaultConfig()
+	cfgHTTP.Mode = WorkspaceAudit
+	cfgHTTP.DeploymentMode = DeploymentSaaS
+	cfgHTTP.Endpoint = "http://puter.example.com"
+	if err := cfgHTTP.Validate(); err == nil {
+		t.Fatalf("expected saas http endpoint rejected without explicit allow")
+	}
+
+	cfgHTTPAllow := DefaultConfig()
+	cfgHTTPAllow.Mode = WorkspaceAudit
+	cfgHTTPAllow.DeploymentMode = DeploymentSaaS
+	cfgHTTPAllow.Endpoint = "http://puter.example.com"
+	cfgHTTPAllow.AllowInsecureSaaSEndpoint = true
+	if err := cfgHTTPAllow.Validate(); err != nil {
+		t.Fatalf("expected saas http endpoint accepted when explicitly allowed: %v", err)
+	}
+}
+
+func TestConfigValidateSelfHostedAllowsHTTPOrHTTPS(t *testing.T) {
+	cases := []string{
+		"http://10.0.0.12:4100",
+		"https://puter.internal.example",
+	}
+	for _, endpoint := range cases {
+		cfg := DefaultConfig()
+		cfg.Mode = WorkspaceAudit
+		cfg.DeploymentMode = DeploymentSelfHosted
+		cfg.Endpoint = endpoint
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected self_hosted endpoint %q accepted, got %v", endpoint, err)
+		}
+	}
+}
+
+func TestConfigValidateRejectsInvalidEndpoint(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Mode = WorkspaceAudit
+	cfg.DeploymentMode = DeploymentSelfHosted
+	cfg.Endpoint = "://bad endpoint"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected invalid endpoint to be rejected")
+	}
+}
+
 type mockClient struct {
 	lastFSWritePath PuterWorkspacePath
 	lastKVSetKey    PuterKVKey
