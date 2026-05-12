@@ -61,6 +61,7 @@ import (
 	"github.com/velariumai/gorkbot/pkg/providers"
 	"github.com/velariumai/gorkbot/pkg/registry"
 	"github.com/velariumai/gorkbot/pkg/research"
+	"github.com/velariumai/gorkbot/pkg/researchgate"
 	"github.com/velariumai/gorkbot/pkg/router"
 	"github.com/velariumai/gorkbot/pkg/scheduler"
 	"github.com/velariumai/gorkbot/pkg/schema"
@@ -214,6 +215,11 @@ func main() {
 	governanceNoApprovalCacheFlag := fs.Bool("governance-no-approval-cache", false, "Disable in-memory governance approval cache")
 	renderGuardOnUnavailableFlag := fs.String("render-guard-on-unavailable", "", "Renderer guard unavailable behavior: block|downgrade|audit")
 	renderGuardTimeoutFlag := fs.Duration("render-guard-timeout", 750*time.Millisecond, "Timeout for VCSE renderer guard verification")
+	researchEgressFlag := fs.String("research-egress", "", "Research egress mode: off|audit|enforce (default: enforce when governance!=off, else off)")
+	researchMaxResponseBytesFlag := fs.Int64("research-max-response-bytes", 512*1024, "Max bytes for research fetch responses")
+	researchTimeoutFlag := fs.Duration("research-timeout", 8*time.Second, "Default timeout for research fetch requests")
+	researchAllowPrivateNetworkFlag := fs.Bool("research-allow-private-network", false, "Allow research requests to private/internal network hosts")
+	researchAllowCredentialsFlag := fs.Bool("research-allow-credentials", false, "Allow research requests that include credentials")
 
 	// Pre-scan for --output-format=json to handle errors correctly
 	isJSON := false
@@ -268,6 +274,24 @@ func main() {
 		} else {
 			renderGuardOnUnavailable = governance.RenderGuardUnavailableDowngrade
 		}
+	}
+
+	researchEgressMode := strings.ToLower(strings.TrimSpace(*researchEgressFlag))
+	if researchEgressMode == "" {
+		if governanceMode == governance.GOVERNANCE_OFF {
+			researchEgressMode = "off"
+		} else {
+			researchEgressMode = "enforce"
+		}
+	}
+	if researchEgressMode != "off" && researchEgressMode != "audit" && researchEgressMode != "enforce" {
+		msg := fmt.Sprintf("invalid --research-egress value %q (expected off|audit|enforce)", *researchEgressFlag)
+		if isJSON {
+			outputErrorJSON(msg)
+		} else {
+			fmt.Fprintln(os.Stderr, msg)
+		}
+		os.Exit(2)
 	}
 
 	// --join: observer-only mode — no orchestrator or TUI needed.
@@ -556,6 +580,23 @@ func main() {
 	researchEngine := research.NewEngine(10, logger)
 	toolRegistry.SetResearchEngine(researchEngine)
 	logger.Info("Research engine initialized", "max_documents", 10)
+
+	researchPolicy := researchgate.DefaultPolicy()
+	researchPolicy.MaxResponseBytes = *researchMaxResponseBytesFlag
+	researchPolicy.DefaultTimeout = *researchTimeoutFlag
+	researchPolicy.AllowPrivateNetworks = *researchAllowPrivateNetworkFlag
+	researchPolicy.AllowCredentials = *researchAllowCredentialsFlag
+	researchPolicy.MaxTimeout = 20 * time.Second
+	researchGateway := researchgate.New(researchPolicy, logger)
+	toolRegistry.SetResearchGateway(researchGateway, researchEgressMode)
+	researchEngine.SetGateway(researchGateway, researchEgressMode)
+	logger.Info("Research egress configured",
+		"mode", researchEgressMode,
+		"max_response_bytes", researchPolicy.MaxResponseBytes,
+		"default_timeout", researchPolicy.DefaultTimeout.String(),
+		"allow_private_network", researchPolicy.AllowPrivateNetworks,
+		"allow_credentials", researchPolicy.AllowCredentials,
+	)
 
 	// Governance spine (PR-001): optional, default-off.
 	// VCSE is enabled when governance is active, or when vcse-url is explicitly provided.

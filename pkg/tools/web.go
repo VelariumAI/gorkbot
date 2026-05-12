@@ -5,10 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/velariumai/gorkbot/pkg/researchgate"
 )
 
 // WebFetchTool fetches content from URLs
@@ -75,6 +80,49 @@ func (t *WebFetchTool) Execute(ctx context.Context, params map[string]interface{
 	}
 
 	raw, _ := params["raw"].(bool)
+	method := "GET"
+	if m, ok := params["method"].(string); ok && strings.TrimSpace(m) != "" {
+		method = strings.ToUpper(strings.TrimSpace(m))
+	}
+
+	cfg := getResearchGatewayConfig(ctx)
+	if cfg.Gateway != nil {
+		req := researchgate.ResearchRequest{
+			ID:        uuid.NewString(),
+			Kind:      researchgate.REQUEST_FETCH,
+			Method:    method,
+			URL:       url,
+			Headers:   mapHeaders(params),
+			CreatedAt: time.Now().UTC(),
+		}
+		if timeout, ok := params["timeout"].(float64); ok && timeout > 0 {
+			req.TimeoutMS = int64(timeout * 1000)
+		}
+
+		if cfg.isAudit() {
+			decision := cfg.Gateway.Decide(ctx, req)
+			if !decision.Allowed {
+				slog.Warn("research egress audit block (web_fetch)", "reason_code", decision.ReasonCode, "url", url)
+			}
+		}
+
+		if cfg.isEnforce() {
+			result, decision, err := cfg.Gateway.Fetch(ctx, req)
+			if err != nil {
+				return &ToolResult{
+					Success:      false,
+					Error:        fmt.Sprintf("research egress blocked web_fetch: %s", decision.ReasonCode),
+					OutputFormat: FormatError,
+				}, err
+			}
+			return &ToolResult{
+				Success:      true,
+				Output:       result.BodyPreview,
+				Data:         map[string]interface{}{"url": result.URL, "status_code": result.StatusCode, "content_type": result.ContentType, "bytes_read": result.BytesRead, "sha256": result.SHA256},
+				OutputFormat: FormatText,
+			}, nil
+		}
+	}
 
 	// If raw HTML is requested, use simple curl
 	if raw {
@@ -311,6 +359,47 @@ func (t *HttpRequestTool) Execute(ctx context.Context, params map[string]interfa
 	if !ok {
 		return &ToolResult{Success: false, Error: "method is required", OutputFormat: FormatError}, fmt.Errorf("method required")
 	}
+	method = strings.ToUpper(strings.TrimSpace(method))
+
+	cfg := getResearchGatewayConfig(ctx)
+	if cfg.Gateway != nil {
+		req := researchgate.ResearchRequest{
+			ID:        uuid.NewString(),
+			Kind:      researchgate.REQUEST_FETCH,
+			Method:    method,
+			URL:       url,
+			Headers:   mapHeaders(params),
+			Metadata:  paramMetadata(params),
+			CreatedAt: time.Now().UTC(),
+		}
+		if method == string(researchgate.METHOD_HEAD) {
+			req.Kind = researchgate.REQUEST_HEAD
+		}
+
+		if cfg.isAudit() {
+			decision := cfg.Gateway.Decide(ctx, req)
+			if !decision.Allowed {
+				slog.Warn("research egress audit block (http_request)", "reason_code", decision.ReasonCode, "method", method)
+			}
+		}
+
+		if cfg.isEnforce() {
+			result, decision, err := cfg.Gateway.Fetch(ctx, req)
+			if err != nil {
+				return &ToolResult{
+					Success:      false,
+					Error:        fmt.Sprintf("research egress blocked http_request: %s", decision.ReasonCode),
+					OutputFormat: FormatError,
+				}, err
+			}
+			return &ToolResult{
+				Success:      true,
+				Output:       result.BodyPreview,
+				Data:         map[string]interface{}{"url": result.URL, "status_code": result.StatusCode, "content_type": result.ContentType, "bytes_read": result.BytesRead, "sha256": result.SHA256},
+				OutputFormat: FormatText,
+			}, nil
+		}
+	}
 
 	flags := fmt.Sprintf("-X %s", method)
 
@@ -464,6 +553,8 @@ func (t *DownloadFileTool) Parameters() json.RawMessage {
 }
 
 func (t *DownloadFileTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
+	// TODO(PR-004 follow-up): download_file remains on the legacy curl path.
+	// Route downloads through Research Gateway/future PDV queue before enabling governed large downloads by default.
 	url, ok := params["url"].(string)
 	if !ok {
 		return &ToolResult{Success: false, Error: "url is required", OutputFormat: FormatError}, fmt.Errorf("url required")
@@ -504,4 +595,30 @@ func (t *DownloadFileTool) Execute(ctx context.Context, params map[string]interf
 		"command": command,
 		"timeout": 300, // 5 minutes for downloads
 	})
+}
+
+func mapHeaders(params map[string]interface{}) map[string]string {
+	out := map[string]string{}
+	raw, ok := params["headers"]
+	if !ok || raw == nil {
+		return out
+	}
+	headers, ok := raw.(map[string]interface{})
+	if !ok {
+		return out
+	}
+	for k, v := range headers {
+		out[k] = fmt.Sprintf("%v", v)
+	}
+	return out
+}
+
+func paramMetadata(params map[string]interface{}) map[string]any {
+	out := map[string]any{}
+	for _, k := range []string{"auth", "authorization", "bearer", "token", "api_key", "api-key", "secret", "password", "cookie", "body", "json"} {
+		if v, ok := params[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
 }

@@ -1,7 +1,7 @@
 # Auto-generated promotion manifest.
 # Source allowlist: configs/promotion-allowlist.txt
 # Regenerate with: bash scripts/generate_promotion_manifest.sh
-# Generated at (UTC): 2026-05-11T23:57:55Z
+# Generated at (UTC): 2026-05-12T02:09:32Z
 
 .github/workflows/release.yml
 .github/workflows/universal-validator.yml
@@ -517,6 +517,16 @@ pkg/research/buffer.go
 pkg/research/engine.go
 pkg/research/research_test.go
 pkg/research/types.go
+pkg/researchgate/cache.go
+pkg/researchgate/decision.go
+pkg/researchgate/gateway.go
+pkg/researchgate/gateway_test.go
+pkg/researchgate/policy.go
+pkg/researchgate/policy_test.go
+pkg/researchgate/provenance.go
+pkg/researchgate/request.go
+pkg/researchgate/url.go
+pkg/researchgate/url_test.go
 pkg/router/adaptive.go
 pkg/router/feedback.go
 pkg/router/heuristics.go
@@ -663,6 +673,7 @@ pkg/tools/python_sandbox.go
 pkg/tools/rebuild.go
 pkg/tools/registry.go
 pkg/tools/registry_test.go
+pkg/tools/research_gateway_context.go
 pkg/tools/research_tools.go
 pkg/tools/rules.go
 pkg/tools/rules_param_test.go
@@ -689,6 +700,7 @@ pkg/tools/user_cmd_tool.go
 pkg/tools/vision.go
 pkg/tools/vision_install.go
 pkg/tools/web.go
+pkg/tools/web_researchgate_test.go
 pkg/tools/worktrees.go
 pkg/tools/x_pull.go
 pkg/tui/hotkeys/manager.go
