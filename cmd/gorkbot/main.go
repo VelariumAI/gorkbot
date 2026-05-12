@@ -30,11 +30,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/velariumai/gorkbot/internal/bootstrap"
 	"github.com/velariumai/gorkbot/internal/designsystem"
 	"github.com/velariumai/gorkbot/internal/engine"
 	"github.com/velariumai/gorkbot/internal/engine/consultation"
-	engprov "github.com/velariumai/gorkbot/internal/engine/providers"
-	"github.com/velariumai/gorkbot/internal/events"
 	"github.com/velariumai/gorkbot/internal/inline"
 	"github.com/velariumai/gorkbot/internal/llm"
 	"github.com/velariumai/gorkbot/internal/platform"
@@ -42,7 +41,6 @@ import (
 	"github.com/velariumai/gorkbot/orchestrator"
 	"github.com/velariumai/gorkbot/pkg/a2a"
 	"github.com/velariumai/gorkbot/pkg/adaptive"
-	"github.com/velariumai/gorkbot/pkg/ai"
 	"github.com/velariumai/gorkbot/pkg/auth"
 	"github.com/velariumai/gorkbot/pkg/billing"
 	"github.com/velariumai/gorkbot/pkg/channels/bridge"
@@ -53,7 +51,6 @@ import (
 	"github.com/velariumai/gorkbot/pkg/config"
 	"github.com/velariumai/gorkbot/pkg/discovery"
 	gorkenv "github.com/velariumai/gorkbot/pkg/env"
-	"github.com/velariumai/gorkbot/pkg/execution"
 	"github.com/velariumai/gorkbot/pkg/governance"
 	"github.com/velariumai/gorkbot/pkg/memory"
 	"github.com/velariumai/gorkbot/pkg/persist"
@@ -61,20 +58,16 @@ import (
 	"github.com/velariumai/gorkbot/pkg/providers"
 	"github.com/velariumai/gorkbot/pkg/puteradapter"
 	"github.com/velariumai/gorkbot/pkg/registry"
-	"github.com/velariumai/gorkbot/pkg/research"
-	"github.com/velariumai/gorkbot/pkg/researchgate"
 	"github.com/velariumai/gorkbot/pkg/router"
 	"github.com/velariumai/gorkbot/pkg/scheduler"
 	"github.com/velariumai/gorkbot/pkg/schema"
 	"github.com/velariumai/gorkbot/pkg/security"
-	"github.com/velariumai/gorkbot/pkg/sense"
 	"github.com/velariumai/gorkbot/pkg/skills"
 	"github.com/velariumai/gorkbot/pkg/subagents"
 	"github.com/velariumai/gorkbot/pkg/theme"
 	"github.com/velariumai/gorkbot/pkg/tools"
 	"github.com/velariumai/gorkbot/pkg/tui/hotkeys"
 	"github.com/velariumai/gorkbot/pkg/usercommands"
-	"github.com/velariumai/gorkbot/pkg/vcseclient"
 	"github.com/velariumai/gorkbot/pkg/vectorstore"
 	"github.com/velariumai/gorkbot/pkg/webhook"
 )
@@ -262,37 +255,9 @@ func main() {
 		}
 	})
 
-	renderGuardOnUnavailable := strings.ToLower(strings.TrimSpace(*renderGuardOnUnavailableFlag))
-	if renderGuardOnUnavailable != "" &&
-		renderGuardOnUnavailable != governance.RenderGuardUnavailableBlock &&
-		renderGuardOnUnavailable != governance.RenderGuardUnavailableDowngrade &&
-		renderGuardOnUnavailable != governance.RenderGuardUnavailableAudit {
-		msg := fmt.Sprintf("invalid --render-guard-on-unavailable value %q (expected block|downgrade|audit)", *renderGuardOnUnavailableFlag)
-		if isJSON {
-			outputErrorJSON(msg)
-		} else {
-			fmt.Fprintln(os.Stderr, msg)
-		}
-		os.Exit(2)
-	}
-	if renderGuardOnUnavailable == "" {
-		if governanceMode == governance.GOVERNANCE_AUDIT {
-			renderGuardOnUnavailable = governance.RenderGuardUnavailableAudit
-		} else {
-			renderGuardOnUnavailable = governance.RenderGuardUnavailableDowngrade
-		}
-	}
-
-	researchEgressMode := strings.ToLower(strings.TrimSpace(*researchEgressFlag))
-	if researchEgressMode == "" {
-		if governanceMode == governance.GOVERNANCE_OFF {
-			researchEgressMode = "off"
-		} else {
-			researchEgressMode = "enforce"
-		}
-	}
-	if researchEgressMode != "off" && researchEgressMode != "audit" && researchEgressMode != "enforce" {
-		msg := fmt.Sprintf("invalid --research-egress value %q (expected off|audit|enforce)", *researchEgressFlag)
+	renderGuardOnUnavailable, err := bootstrap.ResolveRenderGuardOnUnavailable(*renderGuardOnUnavailableFlag, governanceMode)
+	if err != nil {
+		msg := err.Error()
 		if isJSON {
 			outputErrorJSON(msg)
 		} else {
@@ -301,9 +266,9 @@ func main() {
 		os.Exit(2)
 	}
 
-	puterMode, ok := puteradapter.ParseWorkspaceMode(*puterWorkspaceFlag)
-	if !ok {
-		msg := fmt.Sprintf("invalid --puter-workspace value %q (expected off|audit|enforce)", *puterWorkspaceFlag)
+	researchEgressMode, err := bootstrap.ResolveResearchEgressMode(*researchEgressFlag, governanceMode)
+	if err != nil {
+		msg := err.Error()
 		if isJSON {
 			outputErrorJSON(msg)
 		} else {
@@ -311,25 +276,17 @@ func main() {
 		}
 		os.Exit(2)
 	}
-	puterDeploymentMode, ok := puteradapter.ParseDeploymentMode(*puterDeploymentFlag)
-	if !ok {
-		msg := fmt.Sprintf("invalid --puter-deployment value %q (expected local|self_hosted|saas)", *puterDeploymentFlag)
-		if isJSON {
-			outputErrorJSON(msg)
-		} else {
-			fmt.Fprintln(os.Stderr, msg)
-		}
-		os.Exit(2)
-	}
-	puterCfg := puteradapter.DefaultConfig()
-	puterCfg.Mode = puterMode
-	puterCfg.Root = *puterRootFlag
-	puterCfg.PuterRepo = *puterRepoFlag
-	puterCfg.PuterRef = *puterRefFlag
-	puterCfg.DeploymentMode = puterDeploymentMode
-	puterCfg.Endpoint = *puterEndpointFlag
-	if err := puterCfg.Validate(); err != nil {
-		msg := fmt.Sprintf("invalid puter workspace config: %v", err)
+
+	puterCfg, err := bootstrap.BuildPuterConfig(
+		*puterWorkspaceFlag,
+		*puterRootFlag,
+		*puterRepoFlag,
+		*puterRefFlag,
+		*puterDeploymentFlag,
+		*puterEndpointFlag,
+	)
+	if err != nil {
+		msg := err.Error()
 		if isJSON {
 			outputErrorJSON(msg)
 		} else {
@@ -359,173 +316,34 @@ func main() {
 	}
 
 	// 4. Provider Setup & Dynamic Routing
-
-	// 4.0 Initialize unified KeyStore + Provider Manager.
-	// This replaces the previous per-provider env var reads and supports
-	// all 5 providers: xAI, Google, Anthropic, OpenAI, MiniMax.
-	keyStore := providers.NewKeyStore(env.ConfigDir)
-	provMgr := providers.NewManager(keyStore, logger)
-	provMgr.SetVerboseThoughts(*verboseThoughts)
-	// Store as global singleton so orchestrator methods can access it.
-	providers.SetGlobalProviderManager(provMgr)
-	engine.SetProviderManager(provMgr)
-
-	// Provider Agnosticism: Load ALL available API keys
-	grokKey, _ := keyStore.Get(providers.ProviderXAI)
-	geminiKey, _ := keyStore.Get(providers.ProviderGoogle)
-	anthropicKey, _ := keyStore.Get(providers.ProviderAnthropic)
-	openaiKey, _ := keyStore.Get(providers.ProviderOpenAI)
-	minimaxKey, _ := keyStore.Get(providers.ProviderMiniMax)
-	openrouterKey, _ := keyStore.Get(providers.ProviderOpenRouter)
-	moonshotKey, _ := keyStore.Get(providers.ProviderMoonshot)
-	credCtx, credCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	resolvedGeminiKey, geminiOAuthToken, geminiAuthMode := providers.ResolveGoogleCredentials(credCtx, env.ConfigDir, geminiKey, logger)
-	credCancel()
-	resolvedOpenAIKey, openaiOAuthToken, openaiAuthMode := providers.ResolveOpenAICredentials(env.ConfigDir, openaiKey, logger)
-	resolvedAnthropicKey, anthropicOAuthToken, anthropicAuthMode := providers.ResolveAnthropicCredentials(env.ConfigDir, anthropicKey, logger)
-
-	// Read Provider Selection (Provider Agnosticism)
-	primaryOverride := os.Getenv("GORKBOT_PRIMARY")
-	consultantOverride := os.Getenv("GORKBOT_CONSULTANT")
-	// Legacy support for model overrides (deprecated)
-	primaryModelOverride := os.Getenv("GORKBOT_PRIMARY_MODEL")
-	consultantModelOverride := os.Getenv("GORKBOT_CONSULTANT_MODEL")
-
-	keyState := map[string]string{
-		"XAI_API_KEY":        grokKey,
-		"GEMINI_API_KEY":     geminiKey,
-		"ANTHROPIC_API_KEY":  anthropicKey,
-		"OPENAI_API_KEY":     openaiKey,
-		"MINIMAX_API_KEY":    minimaxKey,
-		"OPENROUTER_API_KEY": openrouterKey,
-		"MOONSHOT_API_KEY":   moonshotKey,
-	}
-
-	var configured []string
-	var placeholder []string
-	for envName, keyVal := range keyState {
-		trimmed := strings.TrimSpace(keyVal)
-		if trimmed == "" {
-			continue
-		}
-		if hasConfiguredProviderKey(trimmed) {
-			configured = append(configured, envName)
-			continue
-		}
-		placeholder = append(placeholder, envName)
-	}
-	if geminiAuthMode == "oauth" {
-		configured = append(configured, "GOOGLE_OAUTH")
-	}
-	if openaiAuthMode == "oauth" {
-		configured = append(configured, "OPENAI_OAUTH")
-	}
-	if anthropicAuthMode == "oauth" {
-		configured = append(configured, "ANTHROPIC_OAUTH")
-	}
-
-	if len(configured) == 0 {
-		logger.Warn("No valid AI provider API keys configured. Set at least one provider API key before model calls.")
-		logger.Info("Provider key env vars", "supported", strings.Join([]string{
-			"XAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "MINIMAX_API_KEY", "OPENROUTER_API_KEY", "MOONSHOT_API_KEY",
-		}, ", "))
-	}
-	if len(placeholder) > 0 {
-		logger.Warn("Placeholder provider API keys detected; these providers will be treated as unavailable",
-			"env_vars", strings.Join(placeholder, ", "))
-	}
-	if geminiAuthMode == "oauth" {
-		logger.Info("Google provider using OAuth sign-in credentials (API key fallback available)")
-	}
-	if openaiAuthMode == "oauth" {
-		logger.Info("OpenAI provider using OAuth/session credentials (API key fallback available)")
-	}
-	if anthropicAuthMode == "oauth" {
-		logger.Info("Anthropic provider using OAuth/session credentials (API key fallback available)")
-	}
-
-	// Initialize Registry
-	reg := registry.NewModelRegistry(logger)
-	startupCtx := context.Background()
-
-	// Register ALL providers that have valid API keys (Provider Agnosticism)
-	if hasConfiguredProviderKey(grokKey) {
-		baseGrok := ai.NewGrokProvider(strings.TrimSpace(grokKey), primaryModelOverride)
-		if err := reg.RegisterProvider(startupCtx, baseGrok); err != nil {
-			logger.Error("Failed to register Grok provider", "error", err)
-		}
-	}
-	if hasConfiguredProviderKey(resolvedGeminiKey) || strings.TrimSpace(geminiOAuthToken) != "" {
-		baseGemini := ai.NewGeminiProviderWithAuth(strings.TrimSpace(resolvedGeminiKey), strings.TrimSpace(geminiOAuthToken), consultantModelOverride, *verboseThoughts)
-		if err := reg.RegisterProvider(startupCtx, baseGemini); err != nil {
-			logger.Error("Failed to register Gemini provider", "error", err)
-		}
-	}
-	if hasConfiguredProviderKey(resolvedAnthropicKey) || strings.TrimSpace(anthropicOAuthToken) != "" {
-		baseAnthropic := ai.NewAnthropicProviderWithAuth(strings.TrimSpace(resolvedAnthropicKey), strings.TrimSpace(anthropicOAuthToken), "")
-		if err := reg.RegisterProvider(startupCtx, baseAnthropic); err != nil {
-			logger.Error("Failed to register Anthropic provider", "error", err)
-		}
-	}
-	if hasConfiguredProviderKey(resolvedOpenAIKey) || strings.TrimSpace(openaiOAuthToken) != "" {
-		baseOpenAI := ai.NewOpenAIProviderWithAuth(strings.TrimSpace(resolvedOpenAIKey), strings.TrimSpace(openaiOAuthToken), "")
-		if err := reg.RegisterProvider(startupCtx, baseOpenAI); err != nil {
-			logger.Error("Failed to register OpenAI provider", "error", err)
-		}
-	}
-	if hasConfiguredProviderKey(minimaxKey) {
-		baseMiniMax := ai.NewMiniMaxProvider(strings.TrimSpace(minimaxKey), "")
-		if err := reg.RegisterProvider(startupCtx, baseMiniMax); err != nil {
-			logger.Error("Failed to register MiniMax provider", "error", err)
-		}
-	}
-	if hasConfiguredProviderKey(openrouterKey) {
-		baseOpenRouter := ai.NewOpenRouterProvider(strings.TrimSpace(openrouterKey), "")
-		if err := reg.RegisterProvider(startupCtx, baseOpenRouter); err != nil {
-			logger.Error("Failed to register OpenRouter provider", "error", err)
-		}
-	}
-	if hasConfiguredProviderKey(moonshotKey) {
-		baseMoonshot := ai.NewMoonshotProvider(strings.TrimSpace(moonshotKey), "")
-		if err := reg.RegisterProvider(startupCtx, baseMoonshot); err != nil {
-			logger.Error("Failed to register Moonshot provider", "error", err)
-		}
-	}
-
-	// Initialize Router
-	r := router.NewRouter(reg, logger)
-
-	// Load AppState early so provider bias can be applied before SelectSystemModels().
 	appState := config.NewAppStateManager(env.ConfigDir)
-	if init := appState.Get(); init.PrimaryProvider != "" {
-		r.PrimaryBiasProvider = init.PrimaryProvider
-	}
-	if init := appState.Get(); init.SecondaryProvider != "" {
-		r.ConsultantBiasProvider = init.SecondaryProvider
-	}
-
-	// Select Providers (Provider Agnosticism)
-	// This uses provider-agnostic selection: explicit override > first available > error
-	var primary ai.AIProvider
-	var consultant ai.AIProvider
-	var sysConfig *router.SystemConfiguration
-	primaryModelName := "Primary AI"
-	consultantModelName := ""
-
-	// Use the new agnostic provider selection
-	var primaryErr error
-	primary, consultant, primaryErr = SelectProviders(
-		reg,
-		primaryOverride,    // GORKBOT_PRIMARY env var (provider name)
-		consultantOverride, // GORKBOT_CONSULTANT env var (provider name)
-		logger,
-	)
-
-	if primaryErr != nil {
-		logger.Error("Provider selection failed", "error", primaryErr)
-		fmt.Fprintf(os.Stderr, "Error: %v\n", primaryErr)
+	primaryOverride, consultantOverride, primaryModelOverride, consultantModelOverride := bootstrap.ReadProviderOverridesFromEnv()
+	providerSetup, err := bootstrap.SetupProviders(bootstrap.ProviderSetupOptions{
+		ConfigDir:               env.ConfigDir,
+		Logger:                  logger,
+		VerboseThoughts:         *verboseThoughts,
+		PrimaryOverride:         primaryOverride,
+		ConsultantOverride:      consultantOverride,
+		PrimaryModelOverride:    primaryModelOverride,
+		ConsultantModelOverride: consultantModelOverride,
+		AppState:                appState,
+		SelectProviders:         SelectProviders,
+	})
+	if err != nil {
+		logger.Error("Provider selection failed", "error", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+
+	provMgr := providerSetup.ProviderManager
+	keyStore := providerSetup.KeyStore
+	reg := providerSetup.Registry
+	primary := providerSetup.Primary
+	consultant := providerSetup.Consultant
+	sysConfig := providerSetup.SystemConfig
+	primaryModelName := providerSetup.PrimaryModelName
+	consultantModelName := providerSetup.ConsultantModelName
+	geminiKey := providerSetup.RawGeminiKey
 
 	// Validate provider configuration
 	if err := ValidateProviderConfig(primary, consultant, logger); err != nil {
@@ -534,113 +352,34 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Update display names
-	if primary != nil {
-		primaryModelName = primary.GetMetadata().Name
-	}
-	if consultant != nil {
-		consultantModelName = consultant.GetMetadata().Name
-	}
-
-	// Attempt Dynamic Model Selection (optional optimization)
-	sysConfig, err = r.SelectSystemModels()
-	if err == nil {
-		logger.Info("Dynamic Model Selection Successful",
-			"primary", sysConfig.PrimaryModel.ID,
-			"specialist", sysConfig.SpecialistModel.ID,
-			"reason", sysConfig.Reasoning)
-	} else {
-		logger.Debug("Dynamic Model Selection unavailable, using default models", "error", err)
-		// This is not a critical error - providers will use their defaults
-	}
-
-	// 4.2 Initialize Process Manager (For Advanced Shell Execution)
-	processManager := process.NewManager()
-
-	// 4.5. Tool System Setup
-	permissionMgr, err := tools.NewPermissionManager(env.ConfigDir)
+	toolSetup, err := bootstrap.SetupTools(bootstrap.ToolSetupOptions{
+		ConfigDir:                   env.ConfigDir,
+		Logger:                      logger,
+		KeyStore:                    keyStore,
+		Primary:                     primary,
+		Consultant:                  consultant,
+		ResearchEgressMode:          researchEgressMode,
+		ResearchMaxResponseBytes:    *researchMaxResponseBytesFlag,
+		ResearchTimeout:             *researchTimeoutFlag,
+		ResearchAllowPrivateNetwork: *researchAllowPrivateNetworkFlag,
+		ResearchAllowCredentials:    *researchAllowCredentialsFlag,
+	})
 	if err != nil {
-		logger.Error("Failed to initialize permission manager", "error", err)
+		logger.Error("Failed to register default tools", "error", err)
+		os.Exit(1)
 	}
+	defer toolSetup.Cleanup()
 
-	analytics, err := tools.NewAnalytics(env.ConfigDir)
-	if err != nil {
-		logger.Error("Failed to initialize analytics", "error", err)
-	}
+	processManager := toolSetup.ProcessManager
+	toolRegistry := toolSetup.ToolRegistry
+	senseInputSanitizer := toolSetup.SenseInputSanitizer
+	senseTracer := toolSetup.SenseTracer
+	subAgentManager := toolSetup.SubAgentManager
+	discMgr := toolSetup.DiscoveryManager
+	schedStore := toolSetup.SchedulerStore
+	sched := toolSetup.Scheduler
+	userCmdLoader := toolSetup.UserCommandLoader
 
-	// Structured SQLite audit log — records every tool execution asynchronously.
-	// Stored at <configDir>/audit.db with schema defined in audit_db.go.
-	auditPruneCtx, auditPruneCancel := context.WithCancel(context.Background())
-	defer auditPruneCancel()
-	auditDB, auditErr := tools.InitAuditDB(env.ConfigDir)
-	if auditErr != nil {
-		logger.Warn("Audit DB init failed — tool executions will not be logged to audit.db",
-			"error", auditErr)
-	}
-	if auditDB != nil {
-		// Start 12-hour background pruner; caps the DB at DefaultAuditMaxRecords rows.
-		auditDB.StartPruner(auditPruneCtx, tools.DefaultAuditMaxRecords)
-		defer auditDB.Close()
-		logger.Info("Audit DB initialized", "path", filepath.Join(env.ConfigDir, "audit.db"))
-	}
-
-	toolRegistry := tools.NewRegistry(permissionMgr)
-	toolRegistry.SetAnalytics(analytics)
-	toolRegistry.SetAIProvider(primary)
-	toolRegistry.SetConsultantProvider(consultant)
-	toolRegistry.SetConfigDir(env.ConfigDir)
-	if auditDB != nil {
-		toolRegistry.SetAuditDB(auditDB)
-	}
-
-	// ── SENSE Stabilization Middleware ────────────────────────────────────────
-	// Wire InputSanitizer: validates every tool call parameter before execution.
-	// This enforces control-char rejection, path sandboxing, and resource-name
-	// validation on ALL tool invocations — adversarial-by-default posture.
-	senseInputSanitizer, sanitizerErr := sense.NewInputSanitizer()
-	if sanitizerErr != nil {
-		logger.Warn("SENSE input sanitizer init failed — proceeding without sanitization",
-			"error", sanitizerErr)
-	} else {
-		toolRegistry.SetInputSanitizer(senseInputSanitizer)
-		logger.Info("SENSE input sanitizer active", "cwd", senseInputSanitizer.CWD())
-	}
-
-	// ── SENSE Event Tracer ────────────────────────────────────────────────────
-	// Wire SENSETracer: writes daily JSONL files to <configDir>/sense/traces/.
-	// The trace analyzer (/self check) reads these files to classify failures.
-	senseTraceDir := filepath.Join(env.ConfigDir, "sense", "traces")
-	senseSessionID := fmt.Sprintf("%d", time.Now().Unix())
-	senseTracer := sense.NewSENSETracer(senseTraceDir, senseSessionID)
-	toolRegistry.SetSENSETracer(senseTracer)
-	defer senseTracer.Close()
-	logger.Info("SENSE tracer active", "trace_dir", senseTraceDir)
-	// SENSETracer is also stored on the orchestrator (set after orch is created
-	// below) so streaming can emit context-overflow and provider-error events.
-
-	// ── Research Engine (context-efficient web browsing) ──────────────────────
-	// Initialize the Deep Research Engine for browser_search/open/find tools.
-	// Document content stays in a ring buffer and never enters conversation.
-	researchEngine := research.NewEngine(10, logger)
-	toolRegistry.SetResearchEngine(researchEngine)
-	logger.Info("Research engine initialized", "max_documents", 10)
-
-	researchPolicy := researchgate.DefaultPolicy()
-	researchPolicy.MaxResponseBytes = *researchMaxResponseBytesFlag
-	researchPolicy.DefaultTimeout = *researchTimeoutFlag
-	researchPolicy.AllowPrivateNetworks = *researchAllowPrivateNetworkFlag
-	researchPolicy.AllowCredentials = *researchAllowCredentialsFlag
-	researchPolicy.MaxTimeout = 20 * time.Second
-	researchGateway := researchgate.New(researchPolicy, logger)
-	toolRegistry.SetResearchGateway(researchGateway, researchEgressMode)
-	researchEngine.SetGateway(researchGateway, researchEgressMode)
-	logger.Info("Research egress configured",
-		"mode", researchEgressMode,
-		"max_response_bytes", researchPolicy.MaxResponseBytes,
-		"default_timeout", researchPolicy.DefaultTimeout.String(),
-		"allow_private_network", researchPolicy.AllowPrivateNetworks,
-		"allow_credentials", researchPolicy.AllowCredentials,
-	)
 	logger.Info("Puter workspace adapter configured",
 		"mode", puterCfg.Mode,
 		"root", puterCfg.Root,
@@ -651,139 +390,28 @@ func main() {
 		"endpoint", puterCfg.Endpoint,
 	)
 
-	// Governance spine (PR-001): optional, default-off.
-	// VCSE is enabled when governance is active, or when vcse-url is explicitly provided.
-	vcseEnabled := governanceMode != governance.GOVERNANCE_OFF || vcseURLExplicit
-	govPolicy := governance.DefaultPolicy()
-	govPolicy.Mode = governanceMode
+	workspaceRoot := ""
 	if cwd, err := os.Getwd(); err == nil {
-		govPolicy.WorkspaceRoot = cwd
+		workspaceRoot = cwd
 	}
-	gov := &governance.Governor{
-		Policy:               govPolicy,
-		Budget:               execution.DefaultBudget(),
-		Breakers:             execution.NewDefaultBreakerSet(),
-		Progress:             execution.NewProgressTracker(),
-		ApprovalHandler:      toolRegistry,
-		ApprovalTimeout:      *governanceApprovalTimeoutFlag,
-		MaxInflightApprovals: *governanceMaxInflightApprovalsFlag,
-		RenderGuardTimeout:   *renderGuardTimeoutFlag,
-		RenderGuardPolicy: governance.RendererGuardPolicy{
-			RenderMode: string(governance.RENDER_MODE_CANONICAL_ONLY),
-		},
+	govSetup := bootstrap.SetupGovernance(bootstrap.GovernanceSetupOptions{
+		Mode:                     governanceMode,
+		WorkspaceRoot:            workspaceRoot,
+		VCSEURL:                  *vcseURLFlag,
+		VCSETimeout:              *vcseTimeoutFlag,
+		VCSEEnabledExplicit:      vcseURLExplicit,
+		ApprovalTimeout:          *governanceApprovalTimeoutFlag,
+		MaxInflightApprovals:     *governanceMaxInflightApprovalsFlag,
+		NoApprovalCache:          *governanceNoApprovalCacheFlag,
+		RenderGuardTimeout:       *renderGuardTimeoutFlag,
 		RenderGuardOnUnavailable: renderGuardOnUnavailable,
+		ToolRegistry:             toolRegistry,
+		Logger:                   logger,
+	})
+	if govSetup.GovernorWired {
+		defer govSetup.Shutdown()
 	}
-	if !*governanceNoApprovalCacheFlag {
-		gov.ApprovalCache = governance.NewApprovalCache()
-	}
-	if vcseEnabled {
-		gov.VCSE = vcseclient.New(vcseclient.Config{
-			BaseURL: *vcseURLFlag,
-			Timeout: *vcseTimeoutFlag,
-			Enabled: true,
-		})
-	}
-	if governanceMode != governance.GOVERNANCE_OFF {
-		gov.ApprovalRuntime = governance.NewApprovalRuntime(*governanceMaxInflightApprovalsFlag)
-		defer gov.Shutdown()
-		toolRegistry.SetGovernor(gov)
-		logger.Info("Governance enabled",
-			"mode", governanceMode,
-			"vcse_enabled", vcseEnabled,
-			"vcse_url", *vcseURLFlag,
-			"vcse_timeout", vcseTimeoutFlag.String(),
-			"approval_timeout", governanceApprovalTimeoutFlag.String(),
-			"approval_max_inflight", gov.ApprovalRuntime.MaxInflight(),
-			"approval_cache_enabled", !*governanceNoApprovalCacheFlag,
-			"render_guard_timeout", renderGuardTimeoutFlag.String(),
-			"render_guard_on_unavailable", renderGuardOnUnavailable,
-		)
-	} else {
-		logger.Info("Governance disabled", "mode", governanceMode)
-	}
-
-	if err := toolRegistry.RegisterDefaultTools(); err != nil {
-		logger.Error("Failed to register default tools", "error", err)
-		os.Exit(1)
-	}
-
-	// Register PostNotifyTool (wired to Telegram/Discord backends later, after bots start).
-	postNotifyTool := tools.NewPostNotifyTool(tools.NewNotificationRouter(nil, nil, "", 0))
-	if err := toolRegistry.Register(postNotifyTool); err != nil {
-		logger.Debug("post_notify already registered", "error", err)
-	}
-
-	// Register Process Tools
-	if err := toolRegistry.Register(tools.NewStartManagedProcessTool(processManager)); err != nil {
-		logger.Warn("Failed to register StartManagedProcessTool", "error", err)
-	}
-	if err := toolRegistry.Register(tools.NewListManagedProcessesTool(processManager)); err != nil {
-		logger.Warn("Failed to register ListManagedProcessesTool", "error", err)
-	}
-	if err := toolRegistry.Register(tools.NewStopManagedProcessTool(processManager)); err != nil {
-		logger.Warn("Failed to register StopManagedProcessTool", "error", err)
-	}
-	if err := toolRegistry.Register(tools.NewReadManagedProcessOutputTool(processManager)); err != nil {
-		logger.Warn("Failed to register ReadManagedProcessOutputTool", "error", err)
-	}
-
-	// 4.6 Subagent System Setup
-	subAgentManager := subagents.NewManager()
-
-	// 4.6.1 Discovery Manager — polls all 5 providers for live model lists.
-	discMgr := discovery.NewManagerWithKeys(keyStore, logger)
-	discCtx := context.Background()
-	discMgr.Start(discCtx)
-
-	// Register subagent tools manually (they were moved out of default tools to break dependency cycle)
-	if err := toolRegistry.Register(subagents.NewSpawnAgentTool(subAgentManager, toolRegistry)); err != nil {
-		logger.Warn("Failed to register SpawnAgentTool", "error", err)
-	}
-	if err := toolRegistry.Register(subagents.NewCheckAgentStatusTool(subAgentManager)); err != nil {
-		logger.Warn("Failed to register CheckAgentStatusTool", "error", err)
-	}
-	if err := toolRegistry.Register(subagents.NewListAgentsTool(subAgentManager)); err != nil {
-		logger.Warn("Failed to register ListAgentsTool", "error", err)
-	}
-	if err := toolRegistry.Register(subagents.NewCollectAgentTool(subAgentManager)); err != nil {
-		logger.Warn("Failed to register CollectAgentTool", "error", err)
-	}
-	// Discovery-aware recursive delegation tool.
-	if err := toolRegistry.Register(subagents.NewSpawnSubAgentTool(subAgentManager, toolRegistry, discMgr)); err != nil {
-		logger.Warn("Failed to register SpawnSubAgentTool", "error", err)
-	}
-
-	// Load any dynamic tools the agent previously created (no restart needed)
-	if err := toolRegistry.LoadDynamicTools(env.ConfigDir); err != nil {
-		logger.Warn("Failed to load dynamic tools", "error", err)
-	}
-
-	// Scheduler
-	schedStore, err := scheduler.NewStore(env.ConfigDir)
-	if err != nil {
-		logger.Warn("Failed to init scheduler store", "err", err)
-	}
-	var sched *scheduler.Scheduler
-	if schedStore != nil {
-		sched = scheduler.NewScheduler(schedStore, nil, logger)
-	}
-
-	// User commands
-	userCmdLoader, err := usercommands.NewLoader(env.ConfigDir)
-	if err != nil {
-		logger.Warn("Failed to init user command loader", "err", err)
-		userCmdLoader = nil
-	}
-
-	// Wire scheduler and user command loader into tool registry
-	if sched != nil {
-		toolRegistry.SetScheduler(sched)
-	}
-	if userCmdLoader != nil {
-		toolRegistry.SetUserCmdLoader(userCmdLoader)
-	}
-
-	logger.Info("Tool system initialized", "tool_count", len(toolRegistry.List()))
+	gov := govSetup.Governor
 
 	if *describeFlag {
 		fmt.Println(schema.GetSchema(toolRegistry.ListAll()))
@@ -801,7 +429,7 @@ func main() {
 	}
 
 	// 6. Orchestration Engine with ProviderCoordinator
-	provCoord := engprov.NewProviderCoordinator(provMgr, primary, consultant, discMgr, events.NewBus(), logger)
+	provCoord := bootstrap.NewProviderCoordinator(provMgr, primary, consultant, discMgr, logger)
 	orch := engine.NewOrchestrator(provCoord, toolRegistry, logger, *watchdogFlag)
 	orch.Governor = gov
 
