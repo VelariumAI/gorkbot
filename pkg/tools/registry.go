@@ -43,6 +43,7 @@ var bypassSanitizerKey = &contextKey{"bypassSanitizer"}
 
 // researchGatewayContextKey is the context key for research egress gateway config.
 var researchGatewayContextKey = &contextKey{"researchGateway"}
+var governanceDecisionContextKey = &contextKey{"governanceDecision"}
 
 var governanceApprovalUnavailableOnce sync.Once
 
@@ -805,9 +806,13 @@ func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, 
 	r.mu.RLock()
 	gov := r.governor
 	r.mu.RUnlock()
+	var govDecision governance.GovernanceDecision
+	var hasGovDecision bool
 	if gov != nil {
 		action := buildGovernedAction(normalizedName, normalizedParams)
 		decision := gov.DecideAndApprove(ctx, action)
+		govDecision = decision
+		hasGovDecision = true
 		logGovernanceDecision(decision, normalizedName, normalizedParams)
 		logGovernanceApproval(decision, normalizedName)
 		if decision.Mode != governance.GOVERNANCE_AUDIT && !decision.Allowed {
@@ -858,6 +863,9 @@ func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, 
 			Mode:    r.researchEgressMode,
 		}
 		ctxWithRegistry = context.WithValue(ctxWithRegistry, researchGatewayContextKey, cfg)
+	}
+	if hasGovDecision {
+		ctxWithRegistry = context.WithValue(ctxWithRegistry, governanceDecisionContextKey, govDecision)
 	}
 
 	var result *ToolResult
@@ -1006,6 +1014,18 @@ func buildGovernedAction(toolName string, params map[string]interface{}) governa
 	}
 }
 
+func governanceModeFromContext(ctx context.Context) governance.Mode {
+	if ctx == nil {
+		return governance.GOVERNANCE_OFF
+	}
+	v := ctx.Value(governanceDecisionContextKey)
+	decision, ok := v.(governance.GovernanceDecision)
+	if !ok {
+		return governance.GOVERNANCE_OFF
+	}
+	return decision.Mode
+}
+
 func logGovernanceDecision(decision governance.GovernanceDecision, toolName string, params map[string]interface{}) {
 	safeParams := redactSensitiveParams(params)
 	paramsJSON := ""
@@ -1072,15 +1092,17 @@ func redactSensitiveValue(v interface{}) interface{} {
 
 func isSensitiveParamKey(k string) bool {
 	key := strings.ToLower(strings.TrimSpace(k))
+	key = strings.ReplaceAll(key, "-", "_")
 	switch key {
-	case "api_key", "token", "password", "secret", "authorization", "cookie":
+	case "api_key", "token", "password", "passwd", "secret", "authorization", "cookie", "bearer", "credential", "private_key", "access_key", "refresh_token", "session":
 		return true
 	}
-	if strings.Contains(key, "token") || strings.Contains(key, "secret") || strings.Contains(key, "password") {
-		return true
-	}
-	if strings.Contains(key, "api-key") || strings.Contains(key, "api_key") {
-		return true
+	for _, needle := range []string{
+		"token", "secret", "password", "passwd", "authorization", "cookie", "api_key", "bearer", "credential", "private_key", "access_key", "refresh_token", "x_api_key",
+	} {
+		if strings.Contains(key, needle) {
+			return true
+		}
 	}
 	return false
 }

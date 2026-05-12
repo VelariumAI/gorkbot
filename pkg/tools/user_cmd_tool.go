@@ -4,8 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
+	"github.com/velariumai/gorkbot/pkg/governance"
+	"github.com/velariumai/gorkbot/pkg/selfmod"
 	"github.com/velariumai/gorkbot/pkg/usercommands"
 )
 
@@ -42,7 +47,8 @@ func (t *DefineCommandTool) Parameters() json.RawMessage {
 		"properties": {
 			"name": {"type": "string", "description": "Command name without the leading slash (e.g. 'summarize')"},
 			"description": {"type": "string", "description": "Short description of what the command does"},
-			"prompt": {"type": "string", "description": "Prompt template. Use {{args}} where the user's arguments should be inserted."}
+			"prompt": {"type": "string", "description": "Prompt template. Use {{args}} where the user's arguments should be inserted."},
+			"manifest": {"description": "Self-modification manifest (required in non-off governance modes). Accepts object or JSON string."}
 		},
 		"required": ["name", "description", "prompt"]
 	}`)
@@ -57,6 +63,35 @@ func (t *DefineCommandTool) Execute(ctx context.Context, params map[string]inter
 		return &ToolResult{Success: false, Error: "name and prompt are required"}, nil
 	}
 	name = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(name)), "/")
+
+	mode := governanceModeFromContext(ctx)
+	if mode != governance.GOVERNANCE_OFF {
+		validation := selfmod.ValidateDynamicProposal(selfmod.ValidateInput{
+			OperationID: uuid.NewString(),
+			ToolName:    "define_command",
+			Mode:        string(mode),
+			Parameters:  paramsToAny(params),
+		})
+		if !validation.Allowed || validation.HardBlock {
+			return &ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("dynamic proposal blocked: %s", validation.ReasonCode),
+			}, nil
+		}
+		stagePath := filepath.Join(".gorkbot", "staging", "commands", name+".json")
+		payload := map[string]string{"name": name, "description": desc, "prompt": prompt}
+		b, _ := json.MarshalIndent(payload, "", "  ")
+		if err := os.MkdirAll(filepath.Dir(stagePath), 0755); err != nil {
+			return &ToolResult{Success: false, Error: fmt.Sprintf("failed to create staging dir: %v", err)}, nil
+		}
+		if err := os.WriteFile(stagePath, b, 0600); err != nil {
+			return &ToolResult{Success: false, Error: fmt.Sprintf("failed to stage command: %v", err)}, nil
+		}
+		return &ToolResult{
+			Success: true,
+			Output:  fmt.Sprintf("Command /%s validated and staged at %s (not active yet).", name, stagePath),
+		}, nil
+	}
 
 	loader, ok := ctx.Value(UserCommandLoaderKey).(*usercommands.Loader)
 	if !ok || loader == nil {

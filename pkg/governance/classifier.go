@@ -25,7 +25,13 @@ func ClassifyTool(toolName string, params map[string]any) RiskClass {
 		return RISK_DESTRUCTIVE
 	case "bash", "structured_bash", "code_exec", "python_sandbox", "jupyter", "browser_control", "android_control", "android_system", "adb_setup", "spawn_agent", "spawn_subagent", "run_pipeline", "puter.bridge.host", "puter.auth.request":
 		return RISK_PRIVILEGED_BRIDGE
-	case "create_tool", "rebuild":
+	case "create_tool", "modify_tool", "define_command", "rebuild":
+		return RISK_SELF_MODIFICATION
+	case "sense_evolve":
+		dryRun, _ := params["dry_run"].(bool)
+		if dryRun {
+			return RISK_READ_ONLY
+		}
 		return RISK_SELF_MODIFICATION
 	case "git_push", "post_notify", "webhook", "puter.hosting.publish", "puter.network.fetch":
 		return RISK_EXTERNAL_SIDE_EFFECT

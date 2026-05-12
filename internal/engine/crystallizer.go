@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+
+	"github.com/google/uuid"
+	"github.com/velariumai/gorkbot/pkg/selfmod"
 )
 
 // Crystallizer daemon monitors conversation history for repeated tool patterns
@@ -109,8 +113,37 @@ The Python code must read JSON from stdin, perform the operation, and print JSON
 }
 
 func (c *Crystallizer) saveForgedPlugin(tool forgedTool) {
+	safeName := strings.ToLower(strings.TrimSpace(tool.Name))
+	if !regexp.MustCompile(`^[a-z0-9_\\-]+$`).MatchString(safeName) {
+		c.orchestrator.Logger.Warn("Rejected forged tool with invalid name", "name", tool.Name)
+		return
+	}
+
+	manifest := map[string]any{
+		"name":             safeName,
+		"artifact_kind":    "tool_plugin_manifest",
+		"risk_class":       "high",
+		"capabilities":     []string{"dynamic.tool.register", "dynamic.tool.execute"},
+		"target_paths":     []string{filepath.ToSlash(filepath.Join(".gorkbot", "staging", "python_tools", safeName, "main.py"))},
+		"expected_effects": []string{"stage python plugin for review"},
+		"rollback_plan":    "delete staged plugin directory",
+		"description":      tool.Description,
+	}
+	validation := selfmod.ValidateDynamicProposal(selfmod.ValidateInput{
+		OperationID: uuid.NewString(),
+		ToolName:    "toolforge.crystallizer",
+		Mode:        "GOVERNANCE_ENFORCE",
+		Parameters: map[string]any{
+			"manifest": manifest,
+		},
+	})
+	if validation.HardBlock || !validation.Allowed {
+		c.orchestrator.Logger.Warn("Rejected forged tool by selfmod policy", "reason", validation.ReasonCode, "issues", validation.Issues)
+		return
+	}
+
 	cwd, _ := os.Getwd()
-	pluginDir := filepath.Join(cwd, "plugins", "python", "auto_forged", tool.Name)
+	pluginDir := filepath.Join(cwd, ".gorkbot", "staging", "python_tools", safeName)
 	if err := os.MkdirAll(pluginDir, 0755); err != nil {
 		c.orchestrator.Logger.Warn("Failed to create plugin dir", "error", err)
 		return
@@ -123,7 +156,7 @@ func (c *Crystallizer) saveForgedPlugin(tool forgedTool) {
 	}
 
 	// Generate manifest.json
-	manifest := fmt.Sprintf(`{
+	manifestJSON := fmt.Sprintf(`{
   "name": "%s",
   "description": "%s",
   "author": "ToolForge",
@@ -135,17 +168,17 @@ func (c *Crystallizer) saveForgedPlugin(tool forgedTool) {
        "args": { "type": "string", "description": "Arguments for the tool" }
     }
   }
-}`, tool.Name, tool.Description)
+}`, safeName, tool.Description)
 
 	manifestPath := filepath.Join(pluginDir, "manifest.json")
-	if err := os.WriteFile(manifestPath, []byte(manifest), 0644); err != nil {
+	if err := os.WriteFile(manifestPath, []byte(manifestJSON), 0644); err != nil {
 		c.orchestrator.Logger.Warn("Failed to write manifest", "error", err)
 		return
 	}
 
-	c.orchestrator.Logger.Info("Tool Crystallized Successfully!", "tool", tool.Name)
+	c.orchestrator.Logger.Info("Tool proposal staged by crystallizer", "tool", safeName, "path", pluginDir)
 	// Optionally inform the AI via System message
 	if c.orchestrator.ConversationHistory != nil {
-		c.orchestrator.ConversationHistory.AddSystemMessage(fmt.Sprintf("[TOOL FORGE]: I have autonomously crystallized a new tool '%s'. It is now available.", tool.Name))
+		c.orchestrator.ConversationHistory.AddSystemMessage(fmt.Sprintf("[TOOL FORGE]: I staged a proposed tool '%s' for human/governance review. It is not active yet.", safeName))
 	}
 }

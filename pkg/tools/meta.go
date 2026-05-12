@@ -8,6 +8,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/google/uuid"
+	"github.com/velariumai/gorkbot/pkg/governance"
+	"github.com/velariumai/gorkbot/pkg/selfmod"
 )
 
 // CreateToolTool is the "DIY tool" that allows creating new tools
@@ -62,6 +66,22 @@ func validateCommandTemplate(command string) []string {
 	return violations
 }
 
+func stageDynamicArtifact(path string, content []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, content, 0600)
+}
+
+func paramsToAny(in map[string]interface{}) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 func (t *CreateToolTool) Parameters() json.RawMessage {
 	schema := map[string]interface{}{
 		"type": "object",
@@ -95,6 +115,9 @@ func (t *CreateToolTool) Parameters() json.RawMessage {
 				"type":        "string",
 				"description": "Default permission policy applied when the tool is first encountered",
 				"enum":        []string{"always", "session", "once", "never"},
+			},
+			"manifest": map[string]interface{}{
+				"description": "Self-modification manifest (required in non-off governance modes). Accepts object or JSON string.",
 			},
 		},
 		"required": []string{"name", "description", "command"},
@@ -193,8 +216,59 @@ func (t *CreateToolTool) Execute(ctx context.Context, params map[string]interfac
 		DefaultPermission:  defaultPermission,
 	}
 
-	// Get registry from context and register the tool live.
+	// Generate code once so both off-mode and governed staging can use the same source.
+	paramDefs := make(map[string]string, len(toolParams))
+	for k, v := range toolParams {
+		paramDefs[k] = v.Type
+	}
+	code := generateToolCode(name, description, category, command, paramDefs, requiresPermission, defaultPermission)
+
+	// Get registry from context and register the tool live when allowed.
 	reg, hasRegistry := ctx.Value(registryContextKey).(*Registry)
+	mode := governanceModeFromContext(ctx)
+
+	if mode != governance.GOVERNANCE_OFF {
+		validation := selfmod.ValidateDynamicProposal(selfmod.ValidateInput{
+			OperationID:    uuid.NewString(),
+			ToolName:       "create_tool",
+			Mode:           string(mode),
+			Parameters:     paramsToAny(params),
+			GeneratedGoSrc: code,
+		})
+		if !validation.Allowed || validation.HardBlock {
+			return &ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("dynamic proposal blocked: %s (%s)", validation.ReasonCode, strings.Join(validation.IssuesCopy(), "; ")),
+			}, fmt.Errorf("dynamic proposal blocked: %s", validation.ReasonCode)
+		}
+
+		stagePath := filepath.Join(".gorkbot", "staging", "tools", fmt.Sprintf("%s.go", name))
+		if err := stageDynamicArtifact(stagePath, []byte(code)); err != nil {
+			return &ToolResult{Success: false, Error: fmt.Sprintf("failed to stage tool: %v", err)}, err
+		}
+
+		manifestPath := filepath.Join(".gorkbot", "staging", "tools", fmt.Sprintf("%s.manifest.json", name))
+		if manifestRaw, ok := params["manifest"]; ok && manifestRaw != nil {
+			if b, err := json.MarshalIndent(manifestRaw, "", "  "); err == nil {
+				_ = stageDynamicArtifact(manifestPath, b)
+			}
+		}
+
+		return &ToolResult{
+			Success: true,
+			Output: fmt.Sprintf(
+				"Dynamic tool '%s' validated and staged.\n\nStatus: staged only (non-off governance mode)\nPath: %s",
+				name, stagePath,
+			),
+			Data: map[string]interface{}{
+				"tool_name": name,
+				"file_path": stagePath,
+				"staged":    true,
+				"live":      false,
+				"mode":      mode,
+			},
+		}, nil
+	}
 
 	var persistErr error
 	if hasRegistry && reg != nil {
@@ -202,12 +276,6 @@ func (t *CreateToolTool) Execute(ctx context.Context, params map[string]interfac
 	}
 
 	// Always also write the Go stub into pkg/tools/custom/ as a reference.
-	paramDefs := make(map[string]string, len(toolParams))
-	for k, v := range toolParams {
-		paramDefs[k] = v.Type
-	}
-	code := generateToolCode(name, description, category, command, paramDefs, requiresPermission, defaultPermission)
-
 	customDir := "pkg/tools/custom"
 	filePath := filepath.Join(customDir, fmt.Sprintf("%s.go", name))
 	if err := os.MkdirAll(customDir, 0755); err == nil {
@@ -696,6 +764,9 @@ func (t *ModifyToolTool) Parameters() json.RawMessage {
 				"description": "Default permission policy",
 				"enum":        []string{"always", "session", "once", "never"},
 			},
+			"manifest": map[string]interface{}{
+				"description": "Self-modification manifest (required in non-off governance modes). Accepts object or JSON string.",
+			},
 		},
 		"required": []string{"name"},
 	}
@@ -810,6 +881,56 @@ func (t *ModifyToolTool) Execute(ctx context.Context, params map[string]interfac
 				"%q is a compiled-in tool; you must provide a 'command' to override its behaviour",
 				name,
 			),
+		}, nil
+	}
+
+	mode := governanceModeFromContext(ctx)
+	if mode != governance.GOVERNANCE_OFF {
+		paramDefs := make(map[string]string, len(cfg.Parameters))
+		for k, v := range cfg.Parameters {
+			paramDefs[k] = v.Type
+		}
+		code := generateToolCode(
+			cfg.Name, cfg.Description, cfg.Category, cfg.Command,
+			paramDefs, cfg.RequiresPermission, cfg.DefaultPermission,
+		)
+
+		validation := selfmod.ValidateDynamicProposal(selfmod.ValidateInput{
+			OperationID:    uuid.NewString(),
+			ToolName:       "modify_tool",
+			Mode:           string(mode),
+			Parameters:     paramsToAny(params),
+			GeneratedGoSrc: code,
+		})
+		if !validation.Allowed || validation.HardBlock {
+			return &ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("dynamic proposal blocked: %s (%s)", validation.ReasonCode, strings.Join(validation.IssuesCopy(), "; ")),
+			}, fmt.Errorf("dynamic proposal blocked: %s", validation.ReasonCode)
+		}
+
+		stageDir := filepath.Join(".gorkbot", "staging", "tools")
+		stageGoPath := filepath.Join(stageDir, fmt.Sprintf("%s.go", name))
+		if err := stageDynamicArtifact(stageGoPath, []byte(code)); err != nil {
+			return &ToolResult{Success: false, Error: fmt.Sprintf("failed to stage updated tool: %v", err)}, err
+		}
+		stageCfgPath := filepath.Join(stageDir, fmt.Sprintf("%s.config.json", name))
+		if b, err := json.MarshalIndent(cfg, "", "  "); err == nil {
+			_ = stageDynamicArtifact(stageCfgPath, b)
+		}
+		return &ToolResult{
+			Success: true,
+			Output: fmt.Sprintf(
+				"Tool '%s' update validated and staged.\n\nStatus: staged only (non-off governance mode)\nPath: %s",
+				name, stageGoPath,
+			),
+			Data: map[string]interface{}{
+				"tool_name": name,
+				"file_path": stageGoPath,
+				"staged":    true,
+				"live":      false,
+				"mode":      mode,
+			},
 		}, nil
 	}
 

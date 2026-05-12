@@ -1,9 +1,10 @@
 package governance
 
 import (
-	"encoding/json"
 	"path/filepath"
 	"strings"
+
+	"github.com/velariumai/gorkbot/pkg/selfmod"
 )
 
 // Policy contains fast deterministic local governance checks.
@@ -103,8 +104,15 @@ func (p Policy) Evaluate(action GovernedAction) GovernanceDecision {
 			return decision
 		}
 	case RISK_SELF_MODIFICATION:
-		if p.SelfModificationRequireManifest && !HasSelfModificationManifest(action) {
-			decision.Issues = append(decision.Issues, REASON_SELF_MODIFICATION_REQUIRES_MANIFEST)
+		if p.SelfModificationRequireManifest {
+			selfDecision := selfmod.ValidateDynamicProposal(selfmod.ValidateInput{
+				OperationID: action.ID,
+				ToolName:    action.ToolName,
+				Mode:        string(p.Mode),
+				Parameters:  action.Parameters,
+			})
+			decision.Issues = append(decision.Issues, selfDecision.IssuesCopy()...)
+
 			if p.Mode == GOVERNANCE_AUDIT {
 				decision.Allowed = true
 				decision.FinalStatus = GOVERNANCE_AUDIT_ONLY
@@ -112,23 +120,24 @@ func (p Policy) Evaluate(action GovernedAction) GovernanceDecision {
 				decision.ApprovedAction = &action
 				return decision
 			}
-			decision.Allowed = false
-			decision.FinalStatus = GOVERNANCE_BLOCKED
-			decision.ReasonCode = REASON_SELF_MODIFICATION_REQUIRES_MANIFEST
-			return decision
+
+			if selfDecision.HardBlock || !selfDecision.Allowed {
+				decision.Allowed = false
+				decision.RequiresHuman = false
+				decision.FinalStatus = GOVERNANCE_BLOCKED
+				decision.ReasonCode = selfDecision.ReasonCode
+				return decision
+			}
+
+			if selfDecision.RequiresApproval {
+				decision.Allowed = false
+				decision.RequiresHuman = true
+				decision.FinalStatus = GOVERNANCE_REQUIRES_HUMAN
+				decision.ReasonCode = selfDecision.ReasonCode
+				return decision
+			}
 		}
-		decision.RequiresHuman = true
-		decision.Issues = append(decision.Issues, "self modification requires approval")
-		if p.Mode == GOVERNANCE_AUDIT {
-			decision.Allowed = true
-			decision.FinalStatus = GOVERNANCE_AUDIT_ONLY
-			decision.ReasonCode = REASON_AUDIT_MODE
-			decision.ApprovedAction = &action
-			return decision
-		}
-		decision.Allowed = false
-		decision.FinalStatus = GOVERNANCE_REQUIRES_HUMAN
-		decision.ReasonCode = REASON_POLICY_BLOCKED
+		decision.ApprovedAction = &action
 		return decision
 	case RISK_PRIVILEGED_BRIDGE:
 		if p.PrivilegedBridgeRequireApproval {
@@ -183,70 +192,6 @@ func (p Policy) Evaluate(action GovernedAction) GovernanceDecision {
 	return decision
 }
 
-// HasSelfModificationManifest checks for minimal manifest structure in action parameters.
-func HasSelfModificationManifest(action GovernedAction) bool {
-	for _, p := range action.Provenance {
-		if strings.EqualFold(p.Kind, "manifest") && p.Ref != "" {
-			return true
-		}
-	}
-	if action.Parameters == nil {
-		return false
-	}
-
-	for _, key := range []string{"manifest", "tool_manifest", "governance_manifest"} {
-		v, ok := action.Parameters[key]
-		if !ok || v == nil {
-			continue
-		}
-		if manifest, ok := parseManifest(v); ok {
-			if manifestHasRequiredFields(manifest) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func parseManifest(v any) (map[string]any, bool) {
-	switch t := v.(type) {
-	case map[string]any:
-		return t, true
-	case string:
-		raw := strings.TrimSpace(t)
-		if raw == "" {
-			return nil, false
-		}
-		var out map[string]any
-		if err := json.Unmarshal([]byte(raw), &out); err != nil {
-			return nil, false
-		}
-		return out, true
-	default:
-		return nil, false
-	}
-}
-
-func manifestHasRequiredFields(manifest map[string]any) bool {
-	if manifest == nil {
-		return false
-	}
-	name, _ := manifest["name"].(string)
-	riskClass, _ := manifest["risk_class"].(string)
-	caps := manifest["capabilities"]
-	if strings.TrimSpace(name) == "" || strings.TrimSpace(riskClass) == "" {
-		return false
-	}
-	switch t := caps.(type) {
-	case []any:
-		return len(t) > 0
-	case []string:
-		return len(t) > 0
-	default:
-		return false
-	}
-}
-
 func isWithinRoot(target, root string) bool {
 	tClean := filepath.Clean(target)
 	rClean := filepath.Clean(root)
@@ -254,4 +199,13 @@ func isWithinRoot(target, root string) bool {
 		return true
 	}
 	return strings.HasPrefix(tClean, rClean+string(filepath.Separator))
+}
+
+// HasSelfModificationManifest checks if self-mod manifest extraction succeeds.
+func HasSelfModificationManifest(action GovernedAction) bool {
+	if action.Parameters == nil {
+		return false
+	}
+	_, err := selfmod.ExtractManifest(action.Parameters)
+	return err == nil
 }
