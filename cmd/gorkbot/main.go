@@ -59,6 +59,7 @@ import (
 	"github.com/velariumai/gorkbot/pkg/persist"
 	"github.com/velariumai/gorkbot/pkg/process"
 	"github.com/velariumai/gorkbot/pkg/providers"
+	"github.com/velariumai/gorkbot/pkg/puteradapter"
 	"github.com/velariumai/gorkbot/pkg/registry"
 	"github.com/velariumai/gorkbot/pkg/research"
 	"github.com/velariumai/gorkbot/pkg/researchgate"
@@ -220,6 +221,10 @@ func main() {
 	researchTimeoutFlag := fs.Duration("research-timeout", 8*time.Second, "Default timeout for research fetch requests")
 	researchAllowPrivateNetworkFlag := fs.Bool("research-allow-private-network", false, "Allow research requests to private/internal network hosts")
 	researchAllowCredentialsFlag := fs.Bool("research-allow-credentials", false, "Allow research requests that include credentials")
+	puterWorkspaceFlag := fs.String("puter-workspace", string(puteradapter.WorkspaceOff), "Puter workspace mode: off|audit|enforce")
+	puterRootFlag := fs.String("puter-root", "/Gorkbot", "Puter governed workspace root")
+	puterRepoFlag := fs.String("puter-repo", "VelariumAI/puter", "Pinned Puter fork repository owner/name")
+	puterRefFlag := fs.String("puter-ref", "f80016e4e6a6f8062b737a415a0b7c18008ade98", "Pinned Puter fork commit/tag reference")
 
 	// Pre-scan for --output-format=json to handle errors correctly
 	isJSON := false
@@ -286,6 +291,31 @@ func main() {
 	}
 	if researchEgressMode != "off" && researchEgressMode != "audit" && researchEgressMode != "enforce" {
 		msg := fmt.Sprintf("invalid --research-egress value %q (expected off|audit|enforce)", *researchEgressFlag)
+		if isJSON {
+			outputErrorJSON(msg)
+		} else {
+			fmt.Fprintln(os.Stderr, msg)
+		}
+		os.Exit(2)
+	}
+
+	puterMode, ok := puteradapter.ParseWorkspaceMode(*puterWorkspaceFlag)
+	if !ok {
+		msg := fmt.Sprintf("invalid --puter-workspace value %q (expected off|audit|enforce)", *puterWorkspaceFlag)
+		if isJSON {
+			outputErrorJSON(msg)
+		} else {
+			fmt.Fprintln(os.Stderr, msg)
+		}
+		os.Exit(2)
+	}
+	puterCfg := puteradapter.DefaultConfig()
+	puterCfg.Mode = puterMode
+	puterCfg.Root = *puterRootFlag
+	puterCfg.PuterRepo = *puterRepoFlag
+	puterCfg.PuterRef = *puterRefFlag
+	if err := puterCfg.Validate(); err != nil {
+		msg := fmt.Sprintf("invalid puter workspace config: %v", err)
 		if isJSON {
 			outputErrorJSON(msg)
 		} else {
@@ -596,6 +626,13 @@ func main() {
 		"default_timeout", researchPolicy.DefaultTimeout.String(),
 		"allow_private_network", researchPolicy.AllowPrivateNetworks,
 		"allow_credentials", researchPolicy.AllowCredentials,
+	)
+	logger.Info("Puter workspace adapter configured",
+		"mode", puterCfg.Mode,
+		"root", puterCfg.Root,
+		"repo", puterCfg.PuterRepo,
+		"ref", puterCfg.PuterRef,
+		"default_branch", puterCfg.PuterDefaultBranch,
 	)
 
 	// Governance spine (PR-001): optional, default-off.
