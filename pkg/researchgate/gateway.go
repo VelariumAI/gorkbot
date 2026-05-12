@@ -28,7 +28,7 @@ type redirectBlockedError struct {
 }
 
 func (e redirectBlockedError) Error() string {
-	return "redirect blocked"
+	return "redirect blocked: " + e.reason
 }
 
 func New(policy Policy, logger *slog.Logger) *Gateway {
@@ -70,7 +70,8 @@ func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResul
 	}
 
 	cacheKey := method + " " + decision.NormalizedURL
-	if g.Cache != nil && (req.Kind == REQUEST_FETCH || req.Kind == REQUEST_HEAD) {
+	cacheAllowed := !hasCredentialMaterial(req.Headers, req.Metadata) && !isCredentialedNormalizedURL(decision.NormalizedURL)
+	if g.Cache != nil && cacheAllowed && (req.Kind == REQUEST_FETCH || req.Kind == REQUEST_HEAD) {
 		if cached, ok := g.Cache.Get(cacheKey); ok {
 			cached.RequestID = req.ID
 			cached.FromCache = true
@@ -164,7 +165,7 @@ func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResul
 	}
 
 	if method == string(METHOD_HEAD) {
-		if g.Cache != nil && (req.Kind == REQUEST_FETCH || req.Kind == REQUEST_HEAD) {
+		if g.Cache != nil && cacheAllowed && (req.Kind == REQUEST_FETCH || req.Kind == REQUEST_HEAD) {
 			g.Cache.Put(cacheKey, result, defaultCacheTTL)
 		}
 		g.logDecision(req, decision, result, time.Since(start))
@@ -203,12 +204,23 @@ func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResul
 	result.SHA256 = hex.EncodeToString(sum[:])
 	result.BodyPreview = string(buf)
 
-	if g.Cache != nil && (req.Kind == REQUEST_FETCH || req.Kind == REQUEST_HEAD) {
+	if g.Cache != nil && cacheAllowed && (req.Kind == REQUEST_FETCH || req.Kind == REQUEST_HEAD) {
 		g.Cache.Put(cacheKey, result, defaultCacheTTL)
 	}
 
 	g.logDecision(req, decision, result, time.Since(start))
 	return result, decision, nil
+}
+
+func isCredentialedNormalizedURL(raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u == nil {
+		return false
+	}
+	return IsCredentialedURL(u)
 }
 
 func (g *Gateway) httpClientForRequest() *http.Client {

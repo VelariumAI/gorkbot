@@ -183,7 +183,7 @@ func hasCredentialMaterial(headers map[string]string, metadata map[string]any) b
 		"authorization", "cookie", "x-api-key", "x-auth-token", "proxy-authorization", "api-key", "bearer",
 	}
 	credentialMetaKeys := []string{
-		"api_key", "api-key", "token", "secret", "password", "credential", "auth", "cookie",
+		"api_key", "api-key", "token", "secret", "password", "credential", "auth", "cookie", "bearer",
 	}
 
 	for k := range headers {

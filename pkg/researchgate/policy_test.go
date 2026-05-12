@@ -59,7 +59,9 @@ func TestPolicyBlocksPrivateAndMetadataHosts(t *testing.T) {
 		"http://localhost./a",
 		"http://127.0.0.1/a",
 		"http://127.1/a",
+		"http://0.0.0.0/a",
 		"http://[::1]/a",
+		"http://[::]/a",
 		"http://10.0.0.5/a",
 		"http://172.16.0.9/a",
 		"http://192.168.1.9/a",
@@ -105,6 +107,13 @@ func TestPolicyBlocksCredentialsInHeadersAndURL(t *testing.T) {
 	decision = p.Evaluate(req)
 	if decision.Allowed || decision.ReasonCode != REASON_CREDENTIALS_FORBIDDEN {
 		t.Fatalf("expected blocked url credentials, got %#v", decision)
+	}
+
+	req = mkReq(REQUEST_FETCH, "GET", "https://example.com")
+	req.Metadata = map[string]any{"bearer": "secret-token"}
+	decision = p.Evaluate(req)
+	if decision.Allowed || decision.ReasonCode != REASON_CREDENTIALS_FORBIDDEN {
+		t.Fatalf("expected blocked bearer metadata, got %#v", decision)
 	}
 }
 

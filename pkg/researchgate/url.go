@@ -79,6 +79,10 @@ func IsPrivateOrLocalHost(host string) bool {
 		return false
 	}
 
+	if addr.IsUnspecified() {
+		return true
+	}
+
 	if addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() {
 		return true
 	}

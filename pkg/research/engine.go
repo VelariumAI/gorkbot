@@ -48,6 +48,8 @@ func (e *Engine) Search(ctx context.Context, query string, topK int) ([]SearchRe
 		topK = 10
 	}
 
+	// TODO(PR-004 follow-up): Search policy/fetch routing through Research Gateway is deferred.
+	// browser_open/fetchPage is gateway-gated in PR-004; full search provider routing is future work.
 	// DuckDuckGo lite via curl
 	escaped := shellEscape(query)
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c",

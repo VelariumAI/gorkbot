@@ -553,6 +553,8 @@ func (t *DownloadFileTool) Parameters() json.RawMessage {
 }
 
 func (t *DownloadFileTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
+	// TODO(PR-004 follow-up): download_file remains on the legacy curl path.
+	// Route downloads through Research Gateway/future PDV queue before enabling governed large downloads by default.
 	url, ok := params["url"].(string)
 	if !ok {
 		return &ToolResult{Success: false, Error: "url is required", OutputFormat: FormatError}, fmt.Errorf("url required")
