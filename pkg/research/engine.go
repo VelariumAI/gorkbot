@@ -10,6 +10,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/velariumai/gorkbot/pkg/researchgate"
 )
 
 // Engine provides three research primitives: Search, Open, Find.
@@ -17,6 +20,8 @@ import (
 type Engine struct {
 	buffer *DocBuffer
 	logger *slog.Logger
+	gate   *researchgate.Gateway
+	mode   string
 }
 
 // NewEngine creates a research engine with the given buffer capacity.
@@ -28,6 +33,13 @@ func NewEngine(maxDocs int, logger *slog.Logger) *Engine {
 		buffer: NewDocBuffer(maxDocs),
 		logger: logger,
 	}
+}
+
+// SetGateway wires a research egress gateway into the engine.
+// mode values: off|audit|enforce.
+func (e *Engine) SetGateway(g *researchgate.Gateway, mode string) {
+	e.gate = g
+	e.mode = strings.ToLower(strings.TrimSpace(mode))
 }
 
 // Search performs a web search and returns structured results (no page content).
@@ -146,6 +158,35 @@ func (e *Engine) ListBuffered() []DocumentSummary {
 
 // fetchPage tries scrapling → lynx → curl fallback chain.
 func (e *Engine) fetchPage(ctx context.Context, url string) (content, title string, err error) {
+	if e.gate != nil && (e.mode == "enforce" || e.mode == "audit") {
+		req := researchgate.ResearchRequest{
+			ID:        uuid.NewString(),
+			Kind:      researchgate.REQUEST_FETCH,
+			Method:    string(researchgate.METHOD_GET),
+			URL:       url,
+			CreatedAt: time.Now().UTC(),
+		}
+
+		if e.mode == "audit" {
+			decision := e.gate.Decide(ctx, req)
+			if !decision.Allowed {
+				e.logger.Warn("research egress audit block (browser_open)", "reason_code", decision.ReasonCode)
+			}
+		}
+
+		if e.mode == "enforce" {
+			result, decision, fetchErr := e.gate.Fetch(ctx, req)
+			if fetchErr != nil {
+				return "", "", fmt.Errorf("research gateway blocked fetch: %s", decision.ReasonCode)
+			}
+			if strings.TrimSpace(result.BodyPreview) != "" {
+				title = extractTitle(result.BodyPreview)
+				return result.BodyPreview, title, nil
+			}
+			return "", "", fmt.Errorf("empty body preview from research gateway")
+		}
+	}
+
 	escaped := shellEscape(url)
 
 	// Try lynx first (most common on Termux)

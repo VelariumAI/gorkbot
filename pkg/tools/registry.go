@@ -17,6 +17,7 @@ import (
 	"github.com/velariumai/gorkbot/pkg/governance"
 	"github.com/velariumai/gorkbot/pkg/persist"
 	"github.com/velariumai/gorkbot/pkg/research"
+	"github.com/velariumai/gorkbot/pkg/researchgate"
 	"github.com/velariumai/gorkbot/pkg/scheduler"
 	"github.com/velariumai/gorkbot/pkg/sense"
 	"github.com/velariumai/gorkbot/pkg/usercommands"
@@ -39,6 +40,9 @@ var observabilityHubContextKey = &contextKey{"observability"}
 
 // bypassSanitizerKey is the context key for requesting sanitizer bypass (legacy).
 var bypassSanitizerKey = &contextKey{"bypassSanitizer"}
+
+// researchGatewayContextKey is the context key for research egress gateway config.
+var researchGatewayContextKey = &contextKey{"researchGateway"}
 
 var governanceApprovalUnavailableOnce sync.Once
 
@@ -107,6 +111,10 @@ type Registry struct {
 	// researchEngine is the shared deep-research engine for browser_* tools.
 	// Document content lives here and never enters conversation history.
 	researchEngine *research.Engine
+	// researchGateway is an optional egress policy choke point for research reads.
+	researchGateway *researchgate.Gateway
+	// researchEgressMode controls enforcement: off|audit|enforce.
+	researchEgressMode string
 
 	// governor is an optional governance gate for audit/enforcement decisions.
 	governor interface {
@@ -300,6 +308,15 @@ func (r *Registry) SetResearchEngine(e *research.Engine) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.researchEngine = e
+}
+
+// SetResearchGateway wires an optional research egress gateway into the registry.
+// Mode values: off|audit|enforce.
+func (r *Registry) SetResearchGateway(g *researchgate.Gateway, mode string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.researchGateway = g
+	r.researchEgressMode = strings.ToLower(strings.TrimSpace(mode))
 }
 
 // SetGovernor wires an optional governance decision engine into the registry.
@@ -833,6 +850,14 @@ func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, 
 	// Inject research engine if available
 	if r.researchEngine != nil {
 		ctxWithRegistry = context.WithValue(ctxWithRegistry, researchEngineContextKey, r.researchEngine)
+	}
+	// Inject research gateway config if available
+	if r.researchGateway != nil {
+		cfg := researchGatewayConfig{
+			Gateway: r.researchGateway,
+			Mode:    r.researchEgressMode,
+		}
+		ctxWithRegistry = context.WithValue(ctxWithRegistry, researchGatewayContextKey, cfg)
 	}
 
 	var result *ToolResult
