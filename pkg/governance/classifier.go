@@ -17,17 +17,17 @@ func ClassifyTool(toolName string, params map[string]any) RiskClass {
 	}
 
 	switch name {
-	case "read_file", "list_directory", "file_info", "git_status", "git_diff", "git_log", "system_info", "disk_usage", "list_tools", "tool_info", "context_stats":
+	case "read_file", "list_directory", "file_info", "git_status", "git_diff", "git_log", "system_info", "disk_usage", "list_tools", "tool_info", "context_stats", "puter.fs.read", "puter.kv.get", "puter.app.preview":
 		return RISK_READ_ONLY
 	case "write_file", "edit_file", "download_file", "git_commit", "puter.fs.write", "puter.kv.set":
 		return RISK_LOCAL_MUTATION
-	case "delete_file", "kill_process", "stop_managed_process":
+	case "delete_file", "kill_process", "stop_managed_process", "puter.fs.delete", "puter.kv.delete":
 		return RISK_DESTRUCTIVE
-	case "bash", "structured_bash", "code_exec", "python_sandbox", "jupyter", "browser_control", "android_control", "android_system", "adb_setup", "spawn_agent", "spawn_subagent", "run_pipeline":
+	case "bash", "structured_bash", "code_exec", "python_sandbox", "jupyter", "browser_control", "android_control", "android_system", "adb_setup", "spawn_agent", "spawn_subagent", "run_pipeline", "puter.bridge.host", "puter.auth.request":
 		return RISK_PRIVILEGED_BRIDGE
 	case "create_tool", "rebuild":
 		return RISK_SELF_MODIFICATION
-	case "git_push", "post_notify", "webhook", "puter.hosting.publish":
+	case "git_push", "post_notify", "webhook", "puter.hosting.publish", "puter.network.fetch":
 		return RISK_EXTERNAL_SIDE_EFFECT
 	case "http_request":
 		return classifyHTTPRequest(params)

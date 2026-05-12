@@ -73,3 +73,30 @@ func TestClassifyUnknown(t *testing.T) {
 		t.Fatalf("got %s", got)
 	}
 }
+
+func TestClassifyPuterReadOnlyMappings(t *testing.T) {
+	cases := []string{"puter.fs.read", "puter.app.preview", "puter.kv.get"}
+	for _, tool := range cases {
+		if got := ClassifyTool(tool, nil); got != RISK_READ_ONLY {
+			t.Fatalf("%s -> got %s", tool, got)
+		}
+	}
+}
+
+func TestClassifyPuterMutationAndDestructiveMappings(t *testing.T) {
+	if got := ClassifyTool("puter.fs.write", nil); got != RISK_LOCAL_MUTATION {
+		t.Fatalf("puter.fs.write -> got %s", got)
+	}
+	if got := ClassifyTool("puter.fs.delete", nil); got != RISK_DESTRUCTIVE {
+		t.Fatalf("puter.fs.delete -> got %s", got)
+	}
+}
+
+func TestClassifyPuterExternalAndBridgeMappings(t *testing.T) {
+	if got := ClassifyTool("puter.hosting.publish", nil); got != RISK_EXTERNAL_SIDE_EFFECT {
+		t.Fatalf("puter.hosting.publish -> got %s", got)
+	}
+	if got := ClassifyTool("puter.bridge.host", nil); got != RISK_PRIVILEGED_BRIDGE {
+		t.Fatalf("puter.bridge.host -> got %s", got)
+	}
+}
