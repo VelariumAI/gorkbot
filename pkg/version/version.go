@@ -3,12 +3,12 @@ package version
 import "fmt"
 
 // Internal versioning (development)
-const InternalVersion = "6.2.0"
+const InternalVersion = "6.3.0"
 
 // Public versioning (user-facing releases)
 const PublicMajor = 1
-const PublicMinor = 6
-const PublicBuild = 2
+const PublicMinor = 7
+const PublicBuild = 0
 const PublicRevision = 0 // 0 = no revision suffix
 const PublicStatus = "rc" // alpha|beta|rc|"" (stable)
 

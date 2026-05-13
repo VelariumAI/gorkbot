@@ -8,7 +8,7 @@ import (
 )
 
 // Version of the Gorkbot application
-const Version = "6.2.0"
+const Version = "6.3.0"
 
 // EnvConfig holds the system-specific paths.
 type EnvConfig struct {

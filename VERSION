@@ -1,20 +1,20 @@
 # Gorkbot Versioning
 
 ## Public Release Version
-1.6.2-rc
+1.7.0-rc
 
 ## Internal Development Version
-6.2.0
+6.3.0
 
 ## Release Notes
 
-### Public Version (1.6.0-rc)
+### Public Version (1.7.0-rc)
 - **Status**: Release Candidate - production hardening and promotion readiness
 - **Target Audience**: Advanced users, developers, early adopters
-- **Date**: April 4, 2026
+- **Date**: May 13, 2026
 
 ### Internal Versioning
-- Application: 6.2.0
+- Application: 6.3.0
 - SENSE: 1.9.0
 - SRE: 1.0.0
 - XSKILL: 1.0.0
@@ -27,7 +27,7 @@ Public: `major.minor[.build[.revision]]-(alpha|beta|rc)`
 ### Major (1)
 Architectural paradigm shifts or complete rewrites. Incremented when foundational changes break compatibility.
 
-### Minor (2)
+### Minor (7)
 Feature additions, significant improvements, or architectural refinements. Incremented when new capabilities ship.
 
 ### Build (0)
