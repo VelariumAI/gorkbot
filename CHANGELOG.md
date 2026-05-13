@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remediated API key exposure from git history
 - Fixed input validation to allow punctuation in user queries
 
+## 1.7.0-rc - 2026-05-13
+
+### Added
+- Governance runtime baseline and approval-path foundations across execution flows
+- Governed research egress gateway for policy-controlled external read access
+- Optional governed Puter workspace adapter for workspace-scoped operations
+
+### Changed
+- VCSE client and renderer guard boundary handling for final-answer correctness flow
+- Dynamic tool and self-modification safety hardening around governed execution paths
+- Bootstrap/runtime wiring extraction for clearer startup composition and release maintainability
+- Public repository refresh including README updates and Apache-2.0 licensing
+
 ## [5.3.0] - 2026-03-20
 
 ### Added
@@ -46,5 +59,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 See git history for versions prior to 5.3.0.
 
-[Unreleased]: https://github.com/VelariumAI/gorkbot/compare/v5.3.0...HEAD
+[Unreleased]: https://github.com/VelariumAI/gorkbot/compare/v1.7.0-rc...HEAD
+[1.7.0-rc]: https://github.com/VelariumAI/gorkbot/releases/tag/v1.7.0-rc
 [5.3.0]: https://github.com/VelariumAI/gorkbot/releases/tag/v5.3.0

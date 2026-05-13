@@ -98,21 +98,21 @@ Subsystems maintain their own version tracks:
 
 ## Current Version Mapping
 
-### As of April 5, 2026
+### As of May 13, 2026
 
 | Version Type | Current | Notes |
 |--------------|---------|-------|
-| **Internal** | 6.2.0 | Latest development version |
-| **Public** | 1.6.2-rc | Release candidate with promotion-grade hardening |
+| **Internal** | 6.3.0 | Latest development version |
+| **Public** | 1.7.0-rc | Release candidate with promotion-grade hardening |
 | **SENSE** | 1.9.0 | On independent track |
 | **SRE** | 1.0.0 | On independent track |
 | **XSKILL** | 1.0.0 | On independent track |
 
-### Rationale for 1.6.2-rc
+### Rationale for 1.7.0-rc
 
-- **Internal 6.2.0 → Public 1.6.1**:
+- **Internal 6.3.0 → Public 1.7.0-rc**:
   - Major=1: First public generation ensures clear versioning boundary between dev and public
-  - Minor=6: Reflects substantial cross-system maturity and production hardening
+  - Minor=7: Reflects release-candidate maturity after governance, hardening, and runtime extraction milestones
   - Build=0: Baseline build for this release candidate
   - Status=rc: Release candidate with full promotion/readiness focus before stable cut
 
@@ -133,7 +133,7 @@ Subsystems maintain their own version tracks:
 - `CHANGELOG.md` (in memory): Historical version notes
 
 ### Metadata
-- Git tags: Follow `v{public}` convention (e.g., `v1.6.2-rc`)
+- Git tags: Follow `v{public}` convention (e.g., `v1.7.0-rc`)
 - Release notes: Tagged in commit messages or GitHub releases
 
 ---
