@@ -2,6 +2,7 @@ package replay
 
 import (
 	"testing"
+	"time"
 
 	"github.com/velariumai/gorkbot/pkg/trace"
 )
@@ -126,4 +127,60 @@ func TestComparatorMalformedInputDoesNotPanic(t *testing.T) {
 		Candidate:    CandidateSpec{ID: "c7", Kind: CandidateKindUnknown},
 	}
 	_ = DeterministicComparator{}.Compare(c, CandidateOutcome{})
+}
+
+func TestComparatorRepairOperationsNotDoubleCounted(t *testing.T) {
+	now := time.Now().UTC()
+	tr := trace.Trajectory{
+		TrajectoryID: "traj-repair",
+		Status:       "success",
+		Outcome:      "success",
+		StartedAt:    now.Add(-time.Second),
+		FinishedAt:   now,
+		OperatorPath: []trace.Operator{trace.OperatorPlan, trace.OperatorRepair, trace.OperatorExecute},
+	}
+	ev := trace.Event{
+		EventID:    "ev-repair",
+		TrajectoryID: tr.TrajectoryID,
+		Timestamp:  now,
+		Component:  "test",
+		Operator:   trace.OperatorRepair,
+		EventKind:  "repair",
+	}
+	out := outcomeFromTrajectory(tr, []trace.Event{ev})
+	if out.RepairOperations != 1 {
+		t.Fatalf("expected repair operations to avoid double count, got %d", out.RepairOperations)
+	}
+}
+
+func TestClassifySignalDoesNotTreatFailoverAsFailure(t *testing.T) {
+	if got, ok := classifySignal("failover_complete"); ok {
+		t.Fatalf("expected failover_complete to be unclassified, got ok=true value=%v", got)
+	}
+}
+
+func TestComparatorInvalidBaselinePrecedence(t *testing.T) {
+	c := Case{
+		ID:           "case-invalid-baseline",
+		TrajectoryID: "",
+		Baseline:     trace.Trajectory{},
+		Candidate:    CandidateSpec{ID: "c1", Kind: CandidateKindPolicy},
+	}
+	cand := CandidateOutcome{
+		Trajectory: testTrajectory("success", "success", 100, 1000),
+	}
+	cmp := DeterministicComparator{}.Compare(c, cand)
+	if cmp.Verdict != VerdictInvalid {
+		t.Fatalf("expected invalid verdict, got %s", cmp.Verdict)
+	}
+	found := false
+	for i := range cmp.Regressions {
+		if cmp.Regressions[i].Code == "baseline_invalid" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected baseline_invalid regression to be present")
+	}
 }

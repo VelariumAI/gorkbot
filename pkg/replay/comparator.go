@@ -31,6 +31,8 @@ func (DeterministicComparator) Compare(c Case, candidate CandidateOutcome) Compa
 	}
 
 	if baseline.Invalid {
+		// Invalid/missing baseline takes precedence because replay cannot establish
+		// a trustworthy comparison target in that state.
 		cmp.Regressions = append(cmp.Regressions, Regression{Code: "baseline_invalid", Message: baseline.InvalidReason})
 		cmp.Verdict = VerdictInvalid
 		return cmp
@@ -175,9 +177,11 @@ func outcomeFromTrajectory(t trace.Trajectory, events []trace.Event) Outcome {
 			out.Retries++
 		}
 	}
-	for i := range tn.OperatorPath {
-		if tn.OperatorPath[i] == trace.OperatorRepair {
-			out.RepairOperations++
+	if out.RepairOperations == 0 {
+		for i := range tn.OperatorPath {
+			if tn.OperatorPath[i] == trace.OperatorRepair {
+				out.RepairOperations++
+			}
 		}
 	}
 	out.EventKinds = eventKinds
@@ -206,15 +210,21 @@ func classifySignal(v string) (bool, bool) {
 	if s == "" {
 		return false, false
 	}
-	successes := []string{"success", "succeeded", "ok", "done", "pass", "passed", "completed", "complete", "allowed", "approved"}
+	successes := []string{"success", "succeeded", "pass", "passed", "ok", "completed"}
 	for i := range successes {
-		if s == successes[i] || strings.Contains(s, successes[i]) {
+		if s == successes[i] {
 			return true, true
 		}
 	}
-	failures := []string{"fail", "failed", "error", "blocked", "invalid", "denied", "reject", "rejected", "timeout", "panic", "abort"}
+	failures := []string{"failure", "failed", "fail", "error", "errored", "invalid"}
 	for i := range failures {
-		if s == failures[i] || strings.Contains(s, failures[i]) {
+		if s == failures[i] {
+			return false, true
+		}
+	}
+	inconclusive := []string{"inconclusive", "unknown", "skipped", "missing"}
+	for i := range inconclusive {
+		if s == inconclusive[i] {
 			return false, true
 		}
 	}

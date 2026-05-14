@@ -46,3 +46,28 @@ func TestMemoryStoreSaveLoadList(t *testing.T) {
 		t.Fatalf("expected result case id %q, got %q", c.ID, loadedRes.CaseID)
 	}
 }
+
+func TestMemoryStoreSaveResultTrimsKey(t *testing.T) {
+	store := NewMemoryStore()
+	res := Result{CaseID: " case-id ", CandidateID: "c1", Verdict: VerdictPass}
+
+	if err := store.SaveResult(context.Background(), res); err != nil {
+		t.Fatalf("save result failed: %v", err)
+	}
+
+	loaded, err := store.LoadResult(context.Background(), "case-id")
+	if err != nil {
+		t.Fatalf("load result failed: %v", err)
+	}
+	if loaded.CaseID != "case-id" {
+		t.Fatalf("expected trimmed case id %q, got %q", "case-id", loaded.CaseID)
+	}
+
+	loaded2, err := store.LoadResult(context.Background(), " case-id ")
+	if err != nil {
+		t.Fatalf("load result with padded id failed: %v", err)
+	}
+	if loaded2.CaseID != "case-id" {
+		t.Fatalf("expected trimmed case id %q, got %q", "case-id", loaded2.CaseID)
+	}
+}

@@ -65,15 +65,17 @@ func (s *MemoryStore) ListCases(_ context.Context) ([]CaseSummary, error) {
 }
 
 func (s *MemoryStore) SaveResult(_ context.Context, r Result) error {
-	if strings.TrimSpace(r.CaseID) == "" {
+	key := strings.TrimSpace(r.CaseID)
+	if key == "" {
 		return fmt.Errorf("%w: result case id required", ErrInvalidCase)
 	}
 	norm := cloneResult(r)
+	norm.CaseID = key
 	norm.BaselineOutcome = normalizeOutcome(norm.BaselineOutcome)
 	norm.CandidateOutcome = normalizeOutcome(norm.CandidateOutcome)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.results[r.CaseID] = norm
+	s.results[key] = norm
 	return nil
 }
 
