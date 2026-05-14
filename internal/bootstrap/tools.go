@@ -14,6 +14,7 @@ import (
 	"github.com/velariumai/gorkbot/pkg/research"
 	"github.com/velariumai/gorkbot/pkg/researchgate"
 	"github.com/velariumai/gorkbot/pkg/scheduler"
+	"github.com/velariumai/gorkbot/pkg/selfmod"
 	"github.com/velariumai/gorkbot/pkg/sense"
 	"github.com/velariumai/gorkbot/pkg/subagents"
 	"github.com/velariumai/gorkbot/pkg/tools"
@@ -99,6 +100,8 @@ func SetupTools(opts ToolSetupOptions) (*ToolSetup, error) {
 	senseSessionID := fmt.Sprintf("%d", time.Now().Unix())
 	senseTracer := sense.NewSENSETracer(senseTraceDir, senseSessionID)
 	toolRegistry.SetSENSETracer(senseTracer)
+	toolRegistry.SetTraceSink(senseTracer.CanonicalSink(), senseTracer.CanonicalMode())
+	selfmod.SetTraceSink(senseTracer.CanonicalSink(), senseTracer.CanonicalMode())
 	logger.Info("SENSE tracer active", "trace_dir", senseTraceDir)
 
 	researchEngine := research.NewEngine(10, logger)
@@ -113,6 +116,7 @@ func SetupTools(opts ToolSetupOptions) (*ToolSetup, error) {
 	researchPolicy.MaxTimeout = 20 * time.Second
 	researchGateway := researchgate.New(researchPolicy, logger)
 	toolRegistry.SetResearchGateway(researchGateway, opts.ResearchEgressMode)
+	researchGateway.SetTraceSink(senseTracer.CanonicalSink(), senseTracer.CanonicalMode())
 	researchEngine.SetGateway(researchGateway, opts.ResearchEgressMode)
 	logger.Info("Research egress configured",
 		"mode", opts.ResearchEgressMode,

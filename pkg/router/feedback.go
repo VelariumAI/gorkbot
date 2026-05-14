@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/velariumai/gorkbot/pkg/trace"
 )
 
 // FeedbackRecord is a single persisted routing outcome (JSONL format).
@@ -25,19 +28,23 @@ type FeedbackRecord struct {
 // FeedbackManager persists routing outcomes to a JSONL file and feeds them
 // into an AdaptiveRouter so future routing decisions improve over time.
 type FeedbackManager struct {
-	mu       sync.Mutex
-	logger   *slog.Logger
-	path     string // ~/.config/gorkbot/router_feedback.jsonl
-	file     *os.File
-	adaptive *AdaptiveRouter
+	mu        sync.Mutex
+	logger    *slog.Logger
+	path      string // ~/.config/gorkbot/router_feedback.jsonl
+	file      *os.File
+	adaptive  *AdaptiveRouter
+	traceSink trace.Sink
+	traceMode trace.Mode
 }
 
 // NewFeedbackManager creates a FeedbackManager that persists to dir/router_feedback.jsonl.
 // Pass configDir = "" to disable persistence (log-only mode).
 func NewFeedbackManager(configDir string, logger *slog.Logger) *FeedbackManager {
 	fm := &FeedbackManager{
-		logger:   logger,
-		adaptive: NewAdaptiveRouter(500),
+		logger:    logger,
+		adaptive:  NewAdaptiveRouter(500),
+		traceSink: trace.NoopSink{},
+		traceMode: trace.ModeOff,
 	}
 	if configDir == "" {
 		return fm
@@ -53,6 +60,16 @@ func NewFeedbackManager(configDir string, logger *slog.Logger) *FeedbackManager 
 		fm.file = f
 	}
 	return fm
+}
+
+func (fm *FeedbackManager) SetTraceSink(sink trace.Sink, mode trace.Mode) {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	if sink == nil {
+		sink = trace.NoopSink{}
+	}
+	fm.traceSink = sink
+	fm.traceMode = mode
 }
 
 // loadHistory pre-seeds the AdaptiveRouter from persisted records.
@@ -109,6 +126,26 @@ func (fm *FeedbackManager) RecordOutcome(category QueryCategory, modelID string,
 	if fm.file != nil {
 		data, _ := json.Marshal(rec)
 		fmt.Fprintf(fm.file, "%s\n", data)
+	}
+
+	if fm.traceSink != nil && fm.traceMode != trace.ModeOff {
+		ev := trace.NewEvent("router", "provider_feedback")
+		ev.Operator = trace.OperatorClassify
+		ev.Decision = "route_feedback"
+		ev.Status = "ok"
+		if !success {
+			ev.Status = "error"
+		}
+		ev.RedactionState = trace.RedactionRedacted
+		ev.ArtifactRefs = []trace.Ref{
+			trace.NewRef("model", modelID, "", 0),
+		}
+		ev.Metadata = trace.NewMetadata(map[string]string{
+			"category": string(category),
+			"score":    fmt.Sprintf("%.4f", score),
+			"success":  fmt.Sprintf("%t", success),
+		})
+		_ = trace.Emit(context.Background(), fm.traceSink, fm.traceMode, ev)
 	}
 }
 

@@ -982,6 +982,7 @@ func main() {
 
 	// 6.5.2 Feedback manager — persists adaptive routing outcomes to disk.
 	orch.Feedback = router.NewFeedbackManager(env.ConfigDir, logger)
+	orch.Feedback.SetTraceSink(senseTracer.CanonicalSink(), senseTracer.CanonicalMode())
 	defer orch.Feedback.Close()
 
 	// 6.5.3 Discovery manager is already wired into ProviderCoordinator during initialization

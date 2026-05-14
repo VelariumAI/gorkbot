@@ -12,15 +12,19 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/velariumai/gorkbot/pkg/trace"
 )
 
 const defaultCacheTTL = 5 * time.Minute
 
 type Gateway struct {
-	Policy Policy
-	Client *http.Client
-	Logger *slog.Logger
-	Cache  Cache
+	Policy    Policy
+	Client    *http.Client
+	Logger    *slog.Logger
+	Cache     Cache
+	TraceSink trace.Sink
+	TraceMode trace.Mode
 }
 
 type evaluatedRequest struct {
@@ -42,11 +46,21 @@ func New(policy Policy, logger *slog.Logger) *Gateway {
 		logger = slog.Default()
 	}
 	return &Gateway{
-		Policy: policy,
-		Client: &http.Client{},
-		Logger: logger,
-		Cache:  NewMemoryCache(),
+		Policy:    policy,
+		Client:    &http.Client{},
+		Logger:    logger,
+		Cache:     NewMemoryCache(),
+		TraceSink: trace.NoopSink{},
+		TraceMode: trace.ModeOff,
 	}
+}
+
+func (g *Gateway) SetTraceSink(sink trace.Sink, mode trace.Mode) {
+	if sink == nil {
+		sink = trace.NoopSink{}
+	}
+	g.TraceSink = sink
+	g.TraceMode = mode
 }
 
 func (g *Gateway) Decide(ctx context.Context, req ResearchRequest) ResearchDecision {
@@ -317,4 +331,32 @@ func (g *Gateway) logDecision(req ResearchRequest, decision ResearchDecision, re
 		"duration_ms", dur.Milliseconds(),
 		"from_cache", result.FromCache,
 	)
+
+	if g.TraceSink != nil && g.TraceMode != trace.ModeOff {
+		ev := trace.NewEvent("researchgate", "research_egress")
+		ev.Operator = trace.OperatorRetrieve
+		ev.Decision = trace.RedactString(decision.FinalStatus, 64)
+		ev.ReasonCode = trace.RedactString(decision.ReasonCode, 128)
+		ev.Duration = dur.Milliseconds()
+		ev.Status = "ok"
+		if !decision.Allowed {
+			ev.Status = "blocked"
+		}
+		ev.RedactionState = trace.RedactionRedacted
+		ev.ArtifactRefs = []trace.Ref{
+			trace.NewRef("url", decision.NormalizedURL, result.SHA256, result.BytesRead),
+		}
+		ev.ReceiptRefs = []trace.Ref{
+			trace.NewRef("request_id", req.ID, "", 0),
+		}
+		ev.Metadata = trace.NewMetadata(map[string]string{
+			"kind":         string(req.Kind),
+			"method":       strings.ToUpper(strings.TrimSpace(req.Method)),
+			"status_code":  fmt.Sprintf("%d", result.StatusCode),
+			"bytes_read":   fmt.Sprintf("%d", result.BytesRead),
+			"from_cache":   fmt.Sprintf("%t", result.FromCache),
+			"content_type": trace.RedactString(result.ContentType, 64),
+		})
+		_ = trace.Emit(context.Background(), g.TraceSink, g.TraceMode, ev)
+	}
 }

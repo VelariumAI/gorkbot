@@ -21,6 +21,7 @@ package sense
 // no-ops and drainLoop is never started.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -28,6 +29,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/velariumai/gorkbot/pkg/trace"
 )
 
 // TraceEventKind is the semantic classification of a SENSE trace event.
@@ -60,6 +63,8 @@ const (
 	KindSRECorrection TraceEventKind = "sre_correction"
 	// KindSREEnsemble records SRE ensemble execution.
 	KindSREEnsemble TraceEventKind = "sre_ensemble"
+	// KindCanonicalEvent stores a canonical trajectory event envelope.
+	KindCanonicalEvent TraceEventKind = "canonical_event"
 )
 
 // traceBufSize is the number of serialised trace lines the channel can hold
@@ -113,7 +118,23 @@ type SENSETracer struct {
 	writeCh chan []byte
 	// wg tracks the drainLoop goroutine so Close() can wait for full flush.
 	wg sync.WaitGroup
+
+	canonicalSink trace.Sink
+	canonicalMode trace.Mode
 }
+
+type canonicalSenseSink struct {
+	tracer *SENSETracer
+}
+
+func (s canonicalSenseSink) Emit(ctx context.Context, event trace.Event) error {
+	if s.tracer == nil {
+		return nil
+	}
+	return s.tracer.Emit(ctx, event)
+}
+
+func (canonicalSenseSink) Close() error { return nil }
 
 // NewSENSETracer creates a tracer that writes to traceDir.  The directory is
 // created (mode 0700) if it does not exist.  sessionID is embedded in every
@@ -122,9 +143,12 @@ type SENSETracer struct {
 // If the directory cannot be created, the tracer operates in no-op mode:
 // all LogXxx calls return without error or panicking.
 func NewSENSETracer(traceDir, sessionID string) *SENSETracer {
+	mode := trace.ParseMode(os.Getenv("GORKBOT_TRACE_MODE"))
 	t := &SENSETracer{
-		traceDir:  traceDir,
-		sessionID: sessionID,
+		traceDir:      traceDir,
+		sessionID:     sessionID,
+		canonicalMode: mode,
+		canonicalSink: trace.NoopSink{},
 	}
 	if err := os.MkdirAll(traceDir, 0700); err != nil {
 		// Degrade silently — tracing should never crash the app.
@@ -134,6 +158,9 @@ func NewSENSETracer(traceDir, sessionID string) *SENSETracer {
 	t.writeCh = make(chan []byte, traceBufSize)
 	t.wg.Add(1)
 	go t.drainLoop()
+	if mode != trace.ModeOff {
+		t.canonicalSink = canonicalSenseSink{tracer: t}
+	}
 	return t
 }
 
@@ -198,6 +225,8 @@ func (t *SENSETracer) write(ev SENSETrace) {
 	default:
 		// Buffer full — event dropped. Prefer responsiveness over completeness.
 	}
+
+	t.emitCanonicalFromSense(ev)
 }
 
 // LogToolSuccess records a successful tool execution.
@@ -318,6 +347,21 @@ func (t *SENSETracer) TraceDir() string { return t.traceDir }
 // IsEnabled returns true when the tracer is writing events to disk.
 func (t *SENSETracer) IsEnabled() bool { return !t.disabled }
 
+// CanonicalMode returns the currently configured canonical trace mode.
+func (t *SENSETracer) CanonicalMode() trace.Mode { return t.canonicalMode }
+
+// CanonicalSink returns the active canonical sink.
+func (t *SENSETracer) CanonicalSink() trace.Sink { return t.canonicalSink }
+
+// SetCanonicalSink configures canonical event emission for trajectory mode.
+func (t *SENSETracer) SetCanonicalSink(sink trace.Sink, mode trace.Mode) {
+	if sink == nil {
+		sink = trace.NoopSink{}
+	}
+	t.canonicalSink = sink
+	t.canonicalMode = mode
+}
+
 // Close flushes all buffered events, waits for drainLoop to finish, and
 // closes the underlying trace file.  Subsequent LogXxx calls become no-ops.
 func (t *SENSETracer) Close() {
@@ -326,7 +370,133 @@ func (t *SENSETracer) Close() {
 		t.wg.Wait()      // wait for full flush before returning
 		t.writeCh = nil
 	}
+	switch t.canonicalSink.(type) {
+	case nil:
+	case canonicalSenseSink:
+	default:
+		_ = t.canonicalSink.Close()
+	}
 	t.disabled = true
+}
+
+// Emit writes one canonical trace event envelope via the existing async queue.
+func (t *SENSETracer) Emit(_ context.Context, event trace.Event) error {
+	if t.disabled || t.writeCh == nil || t.canonicalMode == trace.ModeOff {
+		return nil
+	}
+	ev := trace.ApplyMode(t.canonicalMode, event).Normalized()
+	if err := ev.Validate(); err != nil {
+		return err
+	}
+	if ev.Timestamp.IsZero() {
+		ev.Timestamp = time.Now().UTC()
+	}
+	line := struct {
+		Timestamp  string         `json:"ts"`
+		SessionID  string         `json:"sid,omitempty"`
+		Kind       TraceEventKind `json:"kind"`
+		TraceEvent trace.Event    `json:"trace_event"`
+	}{
+		Timestamp:  ev.Timestamp.UTC().Format(time.RFC3339Nano),
+		SessionID:  t.sessionID,
+		Kind:       KindCanonicalEvent,
+		TraceEvent: ev,
+	}
+	b, err := json.Marshal(line)
+	if err != nil {
+		return nil
+	}
+	b = append(b, '\n')
+	select {
+	case t.writeCh <- b:
+	default:
+	}
+	return nil
+}
+
+func (t *SENSETracer) emitCanonicalFromSense(ev SENSETrace) {
+	if t.canonicalMode == trace.ModeOff || t.canonicalSink == nil {
+		return
+	}
+	canon := trace.NewEvent("sense", string(ev.Kind))
+	if parsed, err := time.Parse(time.RFC3339Nano, ev.Timestamp); err == nil {
+		canon.Timestamp = parsed.UTC()
+	}
+	canon.Operator = senseKindOperator(ev.Kind)
+	canon.Decision = senseDecision(ev.Kind)
+	canon.ReasonCode = senseReasonCode(ev.Kind, ev.Labels)
+	canon.Provider = ev.ProviderID
+	canon.Duration = ev.DurationMS
+	canon.Status = senseStatus(ev.Kind, ev.Error)
+	canon.ErrorClass = senseErrorClass(ev.Labels)
+	canon.RedactionState = trace.RedactionRedacted
+	canon.Metadata = trace.NewMetadata(map[string]string{
+		"session_id":     ev.SessionID,
+		"tool":           ev.ToolName,
+		"label_count":    fmt.Sprintf("%d", len(ev.Labels)),
+		"context_tokens": fmt.Sprintf("%d", ev.ContextTokens),
+	})
+	_ = trace.Emit(context.Background(), t.canonicalSink, t.canonicalMode, canon)
+}
+
+func senseKindOperator(kind TraceEventKind) trace.Operator {
+	switch kind {
+	case KindToolSuccess, KindToolFailure:
+		return trace.OperatorExecute
+	case KindSanitizerReject:
+		return trace.OperatorReject
+	case KindParamError, KindContextOverflow:
+		return trace.OperatorVerify
+	case KindProviderError:
+		return trace.OperatorRepair
+	case KindSREGrounding, KindSREPhase:
+		return trace.OperatorPlan
+	case KindSRECorrection:
+		return trace.OperatorRepair
+	case KindSREEnsemble:
+		return trace.OperatorSummarize
+	default:
+		return trace.OperatorUnknown
+	}
+}
+
+func senseDecision(kind TraceEventKind) string {
+	switch kind {
+	case KindToolSuccess:
+		return "success"
+	case KindToolFailure, KindProviderError, KindContextOverflow, KindParamError, KindSanitizerReject:
+		return "failure"
+	default:
+		return ""
+	}
+}
+
+func senseStatus(kind TraceEventKind, errMsg string) string {
+	if errMsg != "" {
+		return "error"
+	}
+	switch kind {
+	case KindToolSuccess:
+		return "ok"
+	case KindToolFailure, KindProviderError, KindContextOverflow, KindParamError, KindSanitizerReject:
+		return "error"
+	default:
+		return "info"
+	}
+}
+
+func senseReasonCode(kind TraceEventKind, labels []string) string {
+	if len(labels) > 0 {
+		return trace.RedactString(labels[0], 64)
+	}
+	return trace.RedactString(string(kind), 64)
+}
+
+func senseErrorClass(labels []string) string {
+	if len(labels) == 0 {
+		return ""
+	}
+	return trace.RedactString(labels[0], 64)
 }
 
 // ── Internal helpers ───────────────────────────────────────────────────────
