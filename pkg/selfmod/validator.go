@@ -50,10 +50,13 @@ var forbiddenAuthorityKeys = map[string]bool{
 	"disable_logging":       true,
 }
 
-func ValidateDynamicProposal(input ValidateInput) DynamicValidationDecision {
-	decision := DynamicValidationDecision{
+func ValidateDynamicProposal(input ValidateInput) (decision DynamicValidationDecision) {
+	decision = DynamicValidationDecision{
 		Allowed: true,
 	}
+	defer func() {
+		emitValidationTrace(decision, decision.Receipt)
+	}()
 
 	rawManifest, hasManifest := extractManifestRaw(input.Parameters)
 	if !hasManifest {

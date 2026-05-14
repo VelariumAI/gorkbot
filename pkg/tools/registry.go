@@ -20,6 +20,7 @@ import (
 	"github.com/velariumai/gorkbot/pkg/researchgate"
 	"github.com/velariumai/gorkbot/pkg/scheduler"
 	"github.com/velariumai/gorkbot/pkg/sense"
+	"github.com/velariumai/gorkbot/pkg/trace"
 	"github.com/velariumai/gorkbot/pkg/usercommands"
 )
 
@@ -121,6 +122,8 @@ type Registry struct {
 	governor interface {
 		DecideAndApprove(context.Context, governance.GovernedAction) governance.GovernanceDecision
 	}
+	traceSink trace.Sink
+	traceMode trace.Mode
 
 	DryRun bool // If true, validation succeeds but tool execution returns a mocked success
 }
@@ -160,6 +163,8 @@ func NewRegistry(permissionMgr *PermissionManager) *Registry {
 		analytics:          nil, // Will be set separately
 		sessionPerms:       make(map[string]bool),
 		disabledCategories: make(map[ToolCategory]bool),
+		traceSink:          trace.NoopSink{},
+		traceMode:          trace.ModeOff,
 	}
 }
 
@@ -246,6 +251,17 @@ func (r *Registry) SetSENSETracer(t senseTracerIface) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.senseTracer = t
+}
+
+// SetTraceSink configures optional canonical trajectory emission.
+func (r *Registry) SetTraceSink(sink trace.Sink, mode trace.Mode) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if sink == nil {
+		sink = trace.NoopSink{}
+	}
+	r.traceSink = sink
+	r.traceMode = mode
 }
 
 // SetInputSanitizer wires the SENSE stabilization middleware into the registry.
@@ -805,6 +821,8 @@ func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, 
 	// Optional governance pass (audit/enforce based on mode).
 	r.mu.RLock()
 	gov := r.governor
+	traceSink := r.traceSink
+	traceMode := r.traceMode
 	r.mu.RUnlock()
 	var govDecision governance.GovernanceDecision
 	var hasGovDecision bool
@@ -815,6 +833,7 @@ func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, 
 		hasGovDecision = true
 		logGovernanceDecision(decision, normalizedName, normalizedParams)
 		logGovernanceApproval(decision, normalizedName)
+		emitGovernanceTrace(ctx, traceSink, traceMode, action, decision, normalizedName)
 		if decision.Mode != governance.GOVERNANCE_AUDIT && !decision.Allowed {
 			msg := fmt.Sprintf("governance blocked tool %q: %s", normalizedName, strings.TrimPrefix(decision.ReasonCode, "REASON_"))
 			return &ToolResult{
@@ -1058,6 +1077,56 @@ func logGovernanceApproval(decision governance.GovernanceDecision, toolName stri
 		"status", decision.FinalStatus,
 		"reason", decision.ReasonCode,
 	)
+}
+
+func emitGovernanceTrace(
+	ctx context.Context,
+	sink trace.Sink,
+	mode trace.Mode,
+	action governance.GovernedAction,
+	decision governance.GovernanceDecision,
+	toolName string,
+) {
+	if sink == nil || mode == trace.ModeOff {
+		return
+	}
+	ev := trace.NewEvent("governance", "governance_decision")
+	ev.EventID = trace.NewEventID()
+	ev.TrajectoryID = trace.RedactString(action.MissionID, 256)
+	ev.Operator = trace.OperatorVerify
+	ev.Decision = decision.FinalStatus
+	ev.ReasonCode = decision.ReasonCode
+	ev.Status = statusFromGovernanceDecision(decision)
+	ev.ErrorClass = trace.RedactString(string(decision.RiskClass), 64)
+	ev.Duration = decision.DurationMS
+	ev.RedactionState = trace.RedactionRedacted
+	ev.ArtifactRefs = []trace.Ref{
+		trace.NewRef("workspace", action.Workspace, "", 0),
+	}
+	ev.ValidationRefs = []trace.Ref{
+		trace.NewRef("tool", toolName, "", 0),
+		trace.NewRef("mode", string(decision.Mode), "", 0),
+	}
+	ev.ReceiptRefs = []trace.Ref{
+		trace.NewRef("action_id", decision.ActionID, "", 0),
+	}
+	ev.Metadata = trace.NewMetadata(map[string]string{
+		"requires_human": fmt.Sprintf("%t", decision.RequiresHuman),
+		"allowed":        fmt.Sprintf("%t", decision.Allowed),
+		"issue_count":    fmt.Sprintf("%d", len(decision.Issues)),
+	})
+	_ = trace.Emit(ctx, sink, mode, ev)
+}
+
+func statusFromGovernanceDecision(decision governance.GovernanceDecision) string {
+	switch decision.FinalStatus {
+	case governance.GOVERNANCE_ALLOWED:
+		return "ok"
+	case governance.GOVERNANCE_AUDIT_ONLY, governance.GOVERNANCE_DEGRADED:
+		return "audit"
+	default:
+		return "blocked"
+	}
 }
 
 func redactSensitiveParams(params map[string]interface{}) map[string]interface{} {

@@ -64,6 +64,7 @@ import (
 	"github.com/velariumai/gorkbot/pkg/scheduler"
 	"github.com/velariumai/gorkbot/pkg/schema"
 	"github.com/velariumai/gorkbot/pkg/security"
+	"github.com/velariumai/gorkbot/pkg/selfmod"
 	"github.com/velariumai/gorkbot/pkg/sense"
 	"github.com/velariumai/gorkbot/pkg/skills"
 	"github.com/velariumai/gorkbot/pkg/subagents"
@@ -526,6 +527,8 @@ func main() {
 	senseSessionID := fmt.Sprintf("%d", time.Now().Unix())
 	senseTracer := sense.NewSENSETracer(senseTraceDir, senseSessionID)
 	toolRegistry.SetSENSETracer(senseTracer)
+	toolRegistry.SetTraceSink(senseTracer.CanonicalSink(), senseTracer.CanonicalMode())
+	selfmod.SetTraceSink(senseTracer.CanonicalSink(), senseTracer.CanonicalMode())
 	defer senseTracer.Close()
 	logger.Info("SENSE tracer active", "trace_dir", senseTraceDir)
 	// SENSETracer is also stored on the orchestrator (set after orch is created
@@ -997,6 +1000,7 @@ func main() {
 
 	// 6.5.2 Feedback manager — persists adaptive routing outcomes to disk.
 	orch.Feedback = router.NewFeedbackManager(env.ConfigDir, logger)
+	orch.Feedback.SetTraceSink(senseTracer.CanonicalSink(), senseTracer.CanonicalMode())
 	defer orch.Feedback.Close()
 
 	// 6.5.3 Discovery manager is already wired into ProviderCoordinator during initialization
