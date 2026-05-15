@@ -1,7 +1,7 @@
 # Auto-generated promotion manifest.
 # Source allowlist: configs/promotion-allowlist.txt
 # Regenerate with: bash scripts/generate_promotion_manifest.sh
-# Generated at (UTC): 2026-05-14T17:27:43Z
+# Generated at (UTC): 2026-05-15T00:25:54Z
 
 .github/workflows/release.yml
 .github/workflows/universal-validator.yml
@@ -461,10 +461,25 @@ pkg/governance/render_guard.go
 pkg/governance/render_guard_service.go
 pkg/governance/render_guard_test.go
 pkg/governance/risk.go
+pkg/harness/artifact.go
+pkg/harness/artifact_test.go
+pkg/harness/assertion.go
+pkg/harness/assertion_test.go
+pkg/harness/doc.go
+pkg/harness/errors.go
+pkg/harness/evaluator.go
+pkg/harness/evaluator_test.go
 pkg/harness/harness_test.go
 pkg/harness/initializer.go
+pkg/harness/loader.go
+pkg/harness/loader_test.go
+pkg/harness/registry.go
+pkg/harness/registry_test.go
+pkg/harness/report.go
+pkg/harness/report_test.go
 pkg/harness/store.go
 pkg/harness/types.go
+pkg/harness/util.go
 pkg/harness/verifier.go
 pkg/harness/worker.go
 pkg/hitl/confidence_scorer.go
