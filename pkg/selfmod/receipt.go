@@ -8,29 +8,32 @@ import (
 	"sync"
 	"time"
 
+	"github.com/velariumai/gorkbot/pkg/harness"
 	"github.com/velariumai/gorkbot/pkg/trace"
 )
 
 type DynamicValidationReceipt struct {
-	OperationID      string    `json:"operation_id"`
-	ArtifactKind     string    `json:"artifact_kind"`
-	ArtifactName     string    `json:"artifact_name"`
-	TargetPaths      []string  `json:"target_paths"`
-	Capabilities     []string  `json:"capabilities"`
-	RiskClass        string    `json:"risk_class"`
-	Allowed          bool      `json:"allowed"`
-	RequiresApproval bool      `json:"requires_approval"`
-	ReasonCode       string    `json:"reason_code"`
-	IssuesCount      int       `json:"issues_count"`
-	ManifestHash     string    `json:"manifest_hash"`
-	ArtifactHash     string    `json:"artifact_hash"`
-	CreatedAt        time.Time `json:"created_at"`
+	OperationID      string                `json:"operation_id"`
+	ArtifactKind     string                `json:"artifact_kind"`
+	ArtifactName     string                `json:"artifact_name"`
+	TargetPaths      []string              `json:"target_paths"`
+	Capabilities     []string              `json:"capabilities"`
+	RiskClass        string                `json:"risk_class"`
+	Allowed          bool                  `json:"allowed"`
+	RequiresApproval bool                  `json:"requires_approval"`
+	ReasonCode       string                `json:"reason_code"`
+	IssuesCount      int                   `json:"issues_count"`
+	ManifestHash     string                `json:"manifest_hash"`
+	ArtifactHash     string                `json:"artifact_hash"`
+	CreatedAt        time.Time             `json:"created_at"`
+	AuditSummary     *harness.AuditSummary `json:"audit_summary,omitempty"`
 }
 
 var (
-	traceMu   sync.RWMutex
-	traceSink trace.Sink = trace.NoopSink{}
-	traceMode trace.Mode = trace.ModeOff
+	traceMu      sync.RWMutex
+	traceSink    trace.Sink       = trace.NoopSink{}
+	traceMode    trace.Mode       = trace.ModeOff
+	auditRuntime *harness.Runtime = harness.NewRuntime(harness.ModeOff, nil)
 )
 
 func SetTraceSink(sink trace.Sink, mode trace.Mode) {
@@ -41,6 +44,21 @@ func SetTraceSink(sink trace.Sink, mode trace.Mode) {
 	}
 	traceSink = sink
 	traceMode = mode
+}
+
+func SetHarnessRuntime(runtime *harness.Runtime) {
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	if runtime == nil {
+		runtime = harness.NewRuntime(harness.ModeOff, nil)
+	}
+	auditRuntime = runtime
+}
+
+func harnessRuntime() *harness.Runtime {
+	traceMu.RLock()
+	defer traceMu.RUnlock()
+	return auditRuntime
 }
 
 func emitValidationTrace(decision DynamicValidationDecision, receipt DynamicValidationReceipt) {
@@ -76,6 +94,11 @@ func emitValidationTrace(decision DynamicValidationDecision, receipt DynamicVali
 		"issue_count":       intString(receipt.IssuesCount),
 		"target_count":      intString(len(receipt.TargetPaths)),
 	})
+	if receipt.AuditSummary != nil {
+		ev.ValidationRefs = append(ev.ValidationRefs, trace.NewRef("harness_report", receipt.AuditSummary.ReportID, "", 0))
+		ev.Metadata["harness_mode"] = string(receipt.AuditSummary.Mode)
+		ev.Metadata["harness_status"] = string(receipt.AuditSummary.Status)
+	}
 	if !receipt.CreatedAt.IsZero() {
 		ev.Timestamp = receipt.CreatedAt.UTC()
 	}

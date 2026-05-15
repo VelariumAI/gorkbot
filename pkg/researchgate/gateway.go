@@ -13,18 +13,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/velariumai/gorkbot/pkg/harness"
 	"github.com/velariumai/gorkbot/pkg/trace"
 )
 
 const defaultCacheTTL = 5 * time.Minute
 
 type Gateway struct {
-	Policy    Policy
-	Client    *http.Client
-	Logger    *slog.Logger
-	Cache     Cache
-	TraceSink trace.Sink
-	TraceMode trace.Mode
+	Policy         Policy
+	Client         *http.Client
+	Logger         *slog.Logger
+	Cache          Cache
+	TraceSink      trace.Sink
+	TraceMode      trace.Mode
+	HarnessRuntime *harness.Runtime
 }
 
 type evaluatedRequest struct {
@@ -46,12 +48,13 @@ func New(policy Policy, logger *slog.Logger) *Gateway {
 		logger = slog.Default()
 	}
 	return &Gateway{
-		Policy:    policy,
-		Client:    &http.Client{},
-		Logger:    logger,
-		Cache:     NewMemoryCache(),
-		TraceSink: trace.NoopSink{},
-		TraceMode: trace.ModeOff,
+		Policy:         policy,
+		Client:         &http.Client{},
+		Logger:         logger,
+		Cache:          NewMemoryCache(),
+		TraceSink:      trace.NoopSink{},
+		TraceMode:      trace.ModeOff,
+		HarnessRuntime: harness.NewRuntime(harness.ModeOff, nil),
 	}
 }
 
@@ -61,6 +64,13 @@ func (g *Gateway) SetTraceSink(sink trace.Sink, mode trace.Mode) {
 	}
 	g.TraceSink = sink
 	g.TraceMode = mode
+}
+
+func (g *Gateway) SetHarnessRuntime(runtime *harness.Runtime) {
+	if runtime == nil {
+		runtime = harness.NewRuntime(harness.ModeOff, nil)
+	}
+	g.HarnessRuntime = runtime
 }
 
 func (g *Gateway) Decide(ctx context.Context, req ResearchRequest) ResearchDecision {
@@ -81,7 +91,7 @@ func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResul
 	}
 
 	if !decision.Allowed {
-		g.logDecision(req, decision, result, time.Since(start))
+		result = g.logDecision(req, decision, result, time.Since(start))
 		return result, decision, fmt.Errorf("research request blocked: %s", decision.ReasonCode)
 	}
 
@@ -96,7 +106,7 @@ func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResul
 		if cached, ok := g.Cache.Get(cacheKey); ok {
 			cached.RequestID = req.ID
 			cached.FromCache = true
-			g.logDecision(req, decision, cached, time.Since(start))
+			cached = g.logDecision(req, decision, cached, time.Since(start))
 			return cached, decision, nil
 		}
 	}
@@ -111,14 +121,14 @@ func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResul
 			decision.Allowed = false
 			decision.FinalStatus = RESEARCH_BLOCKED
 			decision.ReasonCode = REASON_URL_INVALID
-			g.logDecision(req, decision, result, time.Since(start))
+			result = g.logDecision(req, decision, result, time.Since(start))
 			return result, decision, err
 		}
 		if errors.Is(reqCtx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 			decision.Allowed = false
 			decision.FinalStatus = RESEARCH_BLOCKED
 			decision.ReasonCode = REASON_TIMEOUT
-			g.logDecision(req, decision, result, time.Since(start))
+			result = g.logDecision(req, decision, result, time.Since(start))
 			return result, decision, err
 		}
 		var redirectErr redirectBlockedError
@@ -126,10 +136,10 @@ func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResul
 			decision.Allowed = false
 			decision.FinalStatus = RESEARCH_BLOCKED
 			decision.ReasonCode = redirectErr.reason
-			g.logDecision(req, decision, result, time.Since(start))
+			result = g.logDecision(req, decision, result, time.Since(start))
 			return result, decision, err
 		}
-		g.logDecision(req, decision, result, time.Since(start))
+		result = g.logDecision(req, decision, result, time.Since(start))
 		return result, decision, err
 	}
 	defer resp.Body.Close()
@@ -148,7 +158,7 @@ func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResul
 			decision.RequiresHuman = true
 			decision.FinalStatus = RESEARCH_REQUIRES_HUMAN
 			decision.ReasonCode = REASON_DOWNLOAD_REQUIRES_QUEUE
-			g.logDecision(req, decision, result, time.Since(start))
+			result = g.logDecision(req, decision, result, time.Since(start))
 			return result, decision, fmt.Errorf("download requires approval")
 		}
 	}
@@ -157,7 +167,7 @@ func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResul
 		if g.Cache != nil && cacheAllowed && (req.Kind == REQUEST_FETCH || req.Kind == REQUEST_HEAD) {
 			g.Cache.Put(cacheKey, result, defaultCacheTTL)
 		}
-		g.logDecision(req, decision, result, time.Since(start))
+		result = g.logDecision(req, decision, result, time.Since(start))
 		return result, decision, nil
 	}
 
@@ -171,10 +181,10 @@ func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResul
 			decision.Allowed = false
 			decision.FinalStatus = RESEARCH_BLOCKED
 			decision.ReasonCode = REASON_TIMEOUT
-			g.logDecision(req, decision, result, time.Since(start))
+			result = g.logDecision(req, decision, result, time.Since(start))
 			return result, decision, readErr
 		}
-		g.logDecision(req, decision, result, time.Since(start))
+		result = g.logDecision(req, decision, result, time.Since(start))
 		return result, decision, readErr
 	}
 
@@ -184,7 +194,7 @@ func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResul
 		decision.ReasonCode = REASON_RESPONSE_TOO_LARGE
 		result.BytesRead = maxBytes
 		result.BodyPreview = string(buf[:maxBytes])
-		g.logDecision(req, decision, result, time.Since(start))
+		result = g.logDecision(req, decision, result, time.Since(start))
 		return result, decision, fmt.Errorf("response too large")
 	}
 
@@ -197,7 +207,7 @@ func (g *Gateway) Fetch(ctx context.Context, req ResearchRequest) (ResearchResul
 		g.Cache.Put(cacheKey, result, defaultCacheTTL)
 	}
 
-	g.logDecision(req, decision, result, time.Since(start))
+	result = g.logDecision(req, decision, result, time.Since(start))
 	return result, decision, nil
 }
 
@@ -303,7 +313,11 @@ func (g *Gateway) evaluateForExecution(ctx context.Context, req ResearchRequest)
 	return evaluatedRequest{req: req, decision: decision, safeURL: safeURL}
 }
 
-func (g *Gateway) logDecision(req ResearchRequest, decision ResearchDecision, result ResearchResult, dur time.Duration) {
+func (g *Gateway) logDecision(req ResearchRequest, decision ResearchDecision, result ResearchResult, dur time.Duration) ResearchResult {
+	if result.AuditSummary == nil {
+		result.AuditSummary = g.runHarnessAudit(req, decision, result, dur)
+	}
+
 	host := ""
 	if decision.NormalizedURL != "" {
 		if u, err := url.Parse(decision.NormalizedURL); err == nil {
@@ -357,6 +371,14 @@ func (g *Gateway) logDecision(req ResearchRequest, decision ResearchDecision, re
 			"from_cache":   fmt.Sprintf("%t", result.FromCache),
 			"content_type": trace.RedactString(result.ContentType, 64),
 		})
+		if result.AuditSummary != nil {
+			ev.ValidationRefs = append(ev.ValidationRefs,
+				trace.NewRef("harness_report", result.AuditSummary.ReportID, "", 0),
+			)
+			ev.Metadata["harness_status"] = string(result.AuditSummary.Status)
+			ev.Metadata["harness_mode"] = string(result.AuditSummary.Mode)
+		}
 		_ = trace.Emit(context.Background(), g.TraceSink, g.TraceMode, ev)
 	}
+	return result
 }

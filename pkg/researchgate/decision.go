@@ -2,6 +2,8 @@ package researchgate
 
 import "time"
 
+import "github.com/velariumai/gorkbot/pkg/harness"
+
 const (
 	RESEARCH_ALLOWED        = "RESEARCH_ALLOWED"
 	RESEARCH_BLOCKED        = "RESEARCH_BLOCKED"
@@ -40,16 +42,17 @@ type ResearchDecision struct {
 }
 
 type ResearchResult struct {
-	RequestID   string         `json:"request_id"`
-	URL         string         `json:"url,omitempty"`
-	Query       string         `json:"query,omitempty"`
-	StatusCode  int            `json:"status_code,omitempty"`
-	ContentType string         `json:"content_type,omitempty"`
-	BytesRead   int64          `json:"bytes_read,omitempty"`
-	SHA256      string         `json:"sha256,omitempty"`
-	StoredAt    string         `json:"stored_at,omitempty"`
-	FetchedAt   time.Time      `json:"fetched_at"`
-	FromCache   bool           `json:"from_cache"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
-	BodyPreview string         `json:"body_preview,omitempty"`
+	RequestID    string                `json:"request_id"`
+	URL          string                `json:"url,omitempty"`
+	Query        string                `json:"query,omitempty"`
+	StatusCode   int                   `json:"status_code,omitempty"`
+	ContentType  string                `json:"content_type,omitempty"`
+	BytesRead    int64                 `json:"bytes_read,omitempty"`
+	SHA256       string                `json:"sha256,omitempty"`
+	StoredAt     string                `json:"stored_at,omitempty"`
+	FetchedAt    time.Time             `json:"fetched_at"`
+	FromCache    bool                  `json:"from_cache"`
+	Metadata     map[string]any        `json:"metadata,omitempty"`
+	BodyPreview  string                `json:"body_preview,omitempty"`
+	AuditSummary *harness.AuditSummary `json:"audit_summary,omitempty"`
 }

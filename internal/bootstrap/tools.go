@@ -9,6 +9,7 @@ import (
 
 	"github.com/velariumai/gorkbot/pkg/ai"
 	"github.com/velariumai/gorkbot/pkg/discovery"
+	"github.com/velariumai/gorkbot/pkg/harness"
 	"github.com/velariumai/gorkbot/pkg/process"
 	"github.com/velariumai/gorkbot/pkg/providers"
 	"github.com/velariumai/gorkbot/pkg/research"
@@ -32,6 +33,7 @@ type ToolSetupOptions struct {
 	ResearchTimeout             time.Duration
 	ResearchAllowPrivateNetwork bool
 	ResearchAllowCredentials    bool
+	HarnessMode                 harness.Mode
 }
 
 type ToolSetup struct {
@@ -79,10 +81,16 @@ func SetupTools(opts ToolSetupOptions) (*ToolSetup, error) {
 	}
 
 	toolRegistry := tools.NewRegistry(permissionMgr)
+	harnessRuntime := harness.NewRuntime(opts.HarnessMode, nil)
+	if harnessRuntime.Mode() == harness.ModeAudit {
+		harnessRuntime = harness.NewRuntime(harness.ModeAudit, harness.NewRegistry(harness.WithFailClosedUnsupported(false)))
+	}
 	toolRegistry.SetAnalytics(analytics)
 	toolRegistry.SetAIProvider(opts.Primary)
 	toolRegistry.SetConsultantProvider(opts.Consultant)
 	toolRegistry.SetConfigDir(opts.ConfigDir)
+	toolRegistry.SetHarnessRuntime(harnessRuntime)
+	selfmod.SetHarnessRuntime(harnessRuntime)
 	if auditDB != nil {
 		toolRegistry.SetAuditDB(auditDB)
 	}
@@ -115,6 +123,7 @@ func SetupTools(opts ToolSetupOptions) (*ToolSetup, error) {
 	researchPolicy.AllowCredentials = opts.ResearchAllowCredentials
 	researchPolicy.MaxTimeout = 20 * time.Second
 	researchGateway := researchgate.New(researchPolicy, logger)
+	researchGateway.SetHarnessRuntime(harnessRuntime)
 	toolRegistry.SetResearchGateway(researchGateway, opts.ResearchEgressMode)
 	researchGateway.SetTraceSink(senseTracer.CanonicalSink(), senseTracer.CanonicalMode())
 	researchEngine.SetGateway(researchGateway, opts.ResearchEgressMode)
@@ -125,6 +134,7 @@ func SetupTools(opts ToolSetupOptions) (*ToolSetup, error) {
 		"allow_private_network", researchPolicy.AllowPrivateNetworks,
 		"allow_credentials", researchPolicy.AllowCredentials,
 	)
+	logger.Info("Harness runtime configured", "mode", harnessRuntime.Mode())
 
 	if err := toolRegistry.RegisterDefaultTools(); err != nil {
 		if auditDB != nil {

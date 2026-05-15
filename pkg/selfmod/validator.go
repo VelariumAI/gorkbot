@@ -55,6 +55,7 @@ func ValidateDynamicProposal(input ValidateInput) (decision DynamicValidationDec
 		Allowed: true,
 	}
 	defer func() {
+		decision = applyHarnessAudit(input, decision)
 		emitValidationTrace(decision, decision.Receipt)
 	}()
 

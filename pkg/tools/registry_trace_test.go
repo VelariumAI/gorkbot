@@ -35,7 +35,7 @@ func TestEmitGovernanceTrace(t *testing.T) {
 		FinalStatus: governance.GOVERNANCE_BLOCKED,
 		ReasonCode:  governance.REASON_POLICY_BLOCKED,
 	}
-	emitGovernanceTrace(context.Background(), sink, trace.ModeAudit, action, decision, "bash")
+	emitGovernanceTrace(context.Background(), sink, trace.ModeAudit, action, decision, "bash", nil)
 	if len(sink.events) != 1 {
 		t.Fatalf("expected one trace event, got %d", len(sink.events))
 	}

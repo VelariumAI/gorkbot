@@ -9,6 +9,7 @@ import (
 
 	"github.com/velariumai/gorkbot/pkg/ai"
 	"github.com/velariumai/gorkbot/pkg/governance"
+	"github.com/velariumai/gorkbot/pkg/harness"
 	"github.com/velariumai/gorkbot/pkg/registry"
 	"github.com/velariumai/gorkbot/pkg/tools"
 )
@@ -55,6 +56,18 @@ func TestResolveResearchEgressModeDefaults(t *testing.T) {
 	}
 	if enforceMode != "enforce" {
 		t.Fatalf("expected enforce default, got %q", enforceMode)
+	}
+}
+
+func TestResolveHarnessModeDefaults(t *testing.T) {
+	if got := ResolveHarnessMode(""); got != harness.ModeOff {
+		t.Fatalf("expected default harness mode off, got %q", got)
+	}
+	if got := ResolveHarnessMode("audit"); got != harness.ModeAudit {
+		t.Fatalf("expected harness mode audit, got %q", got)
+	}
+	if got := ResolveHarnessMode("unknown"); got != harness.ModeOff {
+		t.Fatalf("expected unknown harness mode to resolve off, got %q", got)
 	}
 }
 

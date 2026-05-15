@@ -363,6 +363,7 @@ func main() {
 		ResearchTimeout:             *researchTimeoutFlag,
 		ResearchAllowPrivateNetwork: *researchAllowPrivateNetworkFlag,
 		ResearchAllowCredentials:    *researchAllowCredentialsFlag,
+		HarnessMode:                 bootstrap.ResolveHarnessMode(os.Getenv("GORKBOT_HARNESS_MODE")),
 	})
 	if err != nil {
 		logger.Error("Failed to register default tools", "error", err)
