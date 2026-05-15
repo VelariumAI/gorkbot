@@ -1,7 +1,7 @@
 # Auto-generated promotion manifest.
 # Source allowlist: configs/promotion-allowlist.txt
 # Regenerate with: bash scripts/generate_promotion_manifest.sh
-# Generated at (UTC): 2026-05-15T00:25:54Z
+# Generated at (UTC): 2026-05-15T03:18:23Z
 
 .github/workflows/release.yml
 .github/workflows/universal-validator.yml
@@ -471,12 +471,16 @@ pkg/harness/evaluator.go
 pkg/harness/evaluator_test.go
 pkg/harness/harness_test.go
 pkg/harness/initializer.go
+pkg/harness/integration.go
+pkg/harness/integration_test.go
 pkg/harness/loader.go
 pkg/harness/loader_test.go
 pkg/harness/registry.go
 pkg/harness/registry_test.go
 pkg/harness/report.go
 pkg/harness/report_test.go
+pkg/harness/runtime.go
+pkg/harness/runtime_test.go
 pkg/harness/store.go
 pkg/harness/types.go
 pkg/harness/util.go
@@ -570,6 +574,8 @@ pkg/researchgate/cache.go
 pkg/researchgate/decision.go
 pkg/researchgate/gateway.go
 pkg/researchgate/gateway_test.go
+pkg/researchgate/harness_integration.go
+pkg/researchgate/harness_integration_test.go
 pkg/researchgate/policy.go
 pkg/researchgate/policy_test.go
 pkg/researchgate/provenance.go
@@ -600,6 +606,8 @@ pkg/selfimprove/pipeline_test.go
 pkg/selfimprove/planner.go
 pkg/selfimprove/selfimprove_test.go
 pkg/selfimprove/types.go
+pkg/selfmod/audit_integration.go
+pkg/selfmod/audit_integration_test.go
 pkg/selfmod/capability.go
 pkg/selfmod/decision.go
 pkg/selfmod/errors.go
@@ -719,6 +727,7 @@ pkg/tools/error_recovery.go
 pkg/tools/file.go
 pkg/tools/git.go
 pkg/tools/goals.go
+pkg/tools/harness_integration_test.go
 pkg/tools/harness_tools.go
 pkg/tools/hashline_file.go
 pkg/tools/helpers.go

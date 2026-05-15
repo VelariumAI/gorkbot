@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/velariumai/gorkbot/pkg/execution"
 	"github.com/velariumai/gorkbot/pkg/governance"
+	"github.com/velariumai/gorkbot/pkg/harness"
 	"github.com/velariumai/gorkbot/pkg/persist"
 	"github.com/velariumai/gorkbot/pkg/research"
 	"github.com/velariumai/gorkbot/pkg/researchgate"
@@ -117,6 +118,7 @@ type Registry struct {
 	researchGateway *researchgate.Gateway
 	// researchEgressMode controls enforcement: off|audit|enforce.
 	researchEgressMode string
+	harnessRuntime     *harness.Runtime
 
 	// governor is an optional governance gate for audit/enforcement decisions.
 	governor interface {
@@ -165,6 +167,7 @@ func NewRegistry(permissionMgr *PermissionManager) *Registry {
 		disabledCategories: make(map[ToolCategory]bool),
 		traceSink:          trace.NoopSink{},
 		traceMode:          trace.ModeOff,
+		harnessRuntime:     harness.NewRuntime(harness.ModeOff, nil),
 	}
 }
 
@@ -334,6 +337,16 @@ func (r *Registry) SetResearchGateway(g *researchgate.Gateway, mode string) {
 	defer r.mu.Unlock()
 	r.researchGateway = g
 	r.researchEgressMode = strings.ToLower(strings.TrimSpace(mode))
+}
+
+// SetHarnessRuntime wires optional audit-only harness validation runtime.
+func (r *Registry) SetHarnessRuntime(runtime *harness.Runtime) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if runtime == nil {
+		runtime = harness.NewRuntime(harness.ModeOff, nil)
+	}
+	r.harnessRuntime = runtime
 }
 
 // SetGovernor wires an optional governance decision engine into the registry.
@@ -823,17 +836,20 @@ func (r *Registry) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, 
 	gov := r.governor
 	traceSink := r.traceSink
 	traceMode := r.traceMode
+	harnessRuntime := r.harnessRuntime
 	r.mu.RUnlock()
 	var govDecision governance.GovernanceDecision
 	var hasGovDecision bool
+	var govAuditSummary *harness.AuditSummary
 	if gov != nil {
 		action := buildGovernedAction(normalizedName, normalizedParams)
 		decision := gov.DecideAndApprove(ctx, action)
 		govDecision = decision
 		hasGovDecision = true
+		govAuditSummary = runGovernanceHarnessAudit(harnessRuntime, action, decision, normalizedName, normalizedParams)
 		logGovernanceDecision(decision, normalizedName, normalizedParams)
 		logGovernanceApproval(decision, normalizedName)
-		emitGovernanceTrace(ctx, traceSink, traceMode, action, decision, normalizedName)
+		emitGovernanceTrace(ctx, traceSink, traceMode, action, decision, normalizedName, govAuditSummary)
 		if decision.Mode != governance.GOVERNANCE_AUDIT && !decision.Allowed {
 			msg := fmt.Sprintf("governance blocked tool %q: %s", normalizedName, strings.TrimPrefix(decision.ReasonCode, "REASON_"))
 			return &ToolResult{
@@ -1086,6 +1102,7 @@ func emitGovernanceTrace(
 	action governance.GovernedAction,
 	decision governance.GovernanceDecision,
 	toolName string,
+	auditSummary *harness.AuditSummary,
 ) {
 	if sink == nil || mode == trace.ModeOff {
 		return
@@ -1115,7 +1132,54 @@ func emitGovernanceTrace(
 		"allowed":        fmt.Sprintf("%t", decision.Allowed),
 		"issue_count":    fmt.Sprintf("%d", len(decision.Issues)),
 	})
+	if auditSummary != nil {
+		ev.ValidationRefs = append(ev.ValidationRefs, trace.NewRef("harness_report", auditSummary.ReportID, "", 0))
+		ev.Metadata["harness_mode"] = string(auditSummary.Mode)
+		ev.Metadata["harness_status"] = string(auditSummary.Status)
+		ev.Metadata["harness_failed"] = fmt.Sprintf("%d", auditSummary.FailedCount)
+		ev.Metadata["harness_warn"] = fmt.Sprintf("%d", auditSummary.WarnCount)
+	}
 	_ = trace.Emit(ctx, sink, mode, ev)
+}
+
+func runGovernanceHarnessAudit(
+	runtime *harness.Runtime,
+	action governance.GovernedAction,
+	decision governance.GovernanceDecision,
+	toolName string,
+	params map[string]interface{},
+) *harness.AuditSummary {
+	if runtime == nil || runtime.Mode() == harness.ModeOff {
+		return nil
+	}
+
+	artifact := harness.Artifact{
+		ID:          trace.StableHash("tool-governance-audit", action.ID, toolName, decision.ReasonCode, decision.FinalStatus),
+		Kind:        harness.ArtifactKindToolCall,
+		Name:        "tool_registry.governance_decision",
+		ContentHash: trace.StableHash(action.ID, decision.ActionID, decision.ReasonCode),
+		Refs: []trace.Ref{
+			trace.NewRef("action_id", decision.ActionID, "", 0),
+			trace.NewRef("tool", toolName, "", 0),
+			trace.NewRef("capability", action.Capability, "", 0),
+		},
+		Metadata: map[string]string{
+			"surface":         "tools_registry_governance",
+			"tool_name":       toolName,
+			"governance_mode": string(decision.Mode),
+			"final_status":    decision.FinalStatus,
+			"reason_code":     decision.ReasonCode,
+			"allowed":         fmt.Sprintf("%t", decision.Allowed),
+			"requires_human":  fmt.Sprintf("%t", decision.RequiresHuman),
+			"risk_class":      string(decision.RiskClass),
+			"issue_count":     fmt.Sprintf("%d", len(decision.Issues)),
+			"param_count":     fmt.Sprintf("%d", len(params)),
+		},
+	}
+
+	report, _ := runtime.Validate(context.Background(), artifact)
+	summary := harness.SummarizeReport(runtime.Mode(), report)
+	return &summary
 }
 
 func statusFromGovernanceDecision(decision governance.GovernanceDecision) string {

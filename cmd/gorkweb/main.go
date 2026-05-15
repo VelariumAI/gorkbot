@@ -53,6 +53,7 @@ import (
 	"github.com/velariumai/gorkbot/pkg/commands"
 	"github.com/velariumai/gorkbot/pkg/config"
 	"github.com/velariumai/gorkbot/pkg/discovery"
+	"github.com/velariumai/gorkbot/pkg/harness"
 	"github.com/velariumai/gorkbot/pkg/memory"
 	"github.com/velariumai/gorkbot/pkg/persist"
 	"github.com/velariumai/gorkbot/pkg/process"
@@ -499,10 +500,16 @@ func main() {
 	}
 
 	toolRegistry := tools.NewRegistry(permissionMgr)
+	harnessRuntime := harness.NewRuntime(harness.ParseMode(os.Getenv("GORKBOT_HARNESS_MODE")), nil)
+	if harnessRuntime.Mode() == harness.ModeAudit {
+		harnessRuntime = harness.NewRuntime(harness.ModeAudit, harness.NewRegistry(harness.WithFailClosedUnsupported(false)))
+	}
 	toolRegistry.SetAnalytics(analytics)
 	toolRegistry.SetAIProvider(primary)
 	toolRegistry.SetConsultantProvider(consultant)
 	toolRegistry.SetConfigDir(env.ConfigDir)
+	toolRegistry.SetHarnessRuntime(harnessRuntime)
+	selfmod.SetHarnessRuntime(harnessRuntime)
 	if auditDB != nil {
 		toolRegistry.SetAuditDB(auditDB)
 	}

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/velariumai/gorkbot/pkg/governance"
+	"github.com/velariumai/gorkbot/pkg/harness"
 	"github.com/velariumai/gorkbot/pkg/puteradapter"
 )
 
@@ -43,6 +44,11 @@ func ResolveResearchEgressMode(raw string, mode governance.Mode) (string, error)
 		return "", fmt.Errorf("invalid --research-egress value %q (expected off|audit|enforce)", raw)
 	}
 	return value, nil
+}
+
+// ResolveHarnessMode parses internal harness runtime mode.
+func ResolveHarnessMode(raw string) harness.Mode {
+	return harness.ParseMode(raw)
 }
 
 // BuildPuterConfig builds and validates Puter workspace adapter config from CLI
