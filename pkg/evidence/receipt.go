@@ -93,6 +93,8 @@ func (r Receipt) Validate() error {
 			return fmt.Errorf("%w: record[%d]: %v", ErrInvalidReceipt, i, err)
 		}
 	}
+	// Assessment-only pass receipts are intentional. A pass can be valid with
+	// zero records when the normalized assessment validates.
 	if n.Status == StatusPass && allRecordsIndeterminate(n.Records) {
 		return fmt.Errorf("%w: pass with only skipped/unavailable/inconclusive", ErrInvalidReceipt)
 	}

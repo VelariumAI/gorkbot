@@ -20,6 +20,10 @@ const (
 const (
 	ReasonLowRiskExplicitAbsent     = "low_risk_explicit_absent_policy"
 	ReasonLowRiskNoExplicit         = "low_risk_not_explicit"
+	ReasonLowRiskPolicyBound        = "low_risk_policy_bound"
+	ReasonMediumPolicyAbsent        = "medium_policy_absent"
+	ReasonMediumPolicyAuditOnly     = "medium_policy_audit_only"
+	ReasonMediumPolicyBound         = "medium_policy_bound"
 	ReasonPolicyAuditOnly           = "policy_audit_only"
 	ReasonPolicyAbsentSensitive     = "policy_absent_sensitive"
 	ReasonPolicyInvalidSensitive    = "policy_invalid_sensitive"
@@ -93,11 +97,21 @@ func (a Assessment) Validate() error {
 	if n.ID == "" {
 		return fmt.Errorf("%w: missing id", ErrInvalidAssessment)
 	}
-	if n.PolicyState == PolicyInvalid && n.Risk == RiskSensitive && n.Decision == DecisionAllowLowRisk {
-		return fmt.Errorf("%w: invalid policy cannot allow sensitive", ErrInvalidAssessment)
+	if n.Risk == RiskSensitive && n.Decision == DecisionAllowLowRisk {
+		return fmt.Errorf("%w: sensitive risk cannot allow_low_risk", ErrInvalidAssessment)
 	}
-	if n.Risk == RiskUnknown && n.Decision == DecisionAllowLowRisk {
-		return fmt.Errorf("%w: unknown risk cannot allow", ErrInvalidAssessment)
+	if n.Risk == RiskMedium && n.Decision == DecisionAllowLowRisk {
+		return fmt.Errorf("%w: medium risk cannot allow_low_risk", ErrInvalidAssessment)
+	}
+	if n.Risk == RiskUnknown && isAllowDecision(n.Decision) {
+		return fmt.Errorf("%w: unknown risk cannot use allow-like decisions", ErrInvalidAssessment)
+	}
+	if n.PolicyState == PolicyInvalid && isAllowDecision(n.Decision) {
+		return fmt.Errorf("%w: invalid policy cannot use allow-like decisions", ErrInvalidAssessment)
+	}
+	if n.Risk == RiskSensitive && isAllowDecision(n.Decision) &&
+		(n.Authority == AuthorityNone || n.Authority == AuthorityUnknown) {
+		return fmt.Errorf("%w: sensitive allow-like decision requires authoritative allow", ErrInvalidAssessment)
 	}
 	if n.Decision == DecisionDenyInvalid && n.Status == StatusPass {
 		return fmt.Errorf("%w: deny_invalid cannot be pass", ErrInvalidAssessment)
@@ -143,7 +157,26 @@ func Evaluate(a Assessment) Assessment {
 		}
 		n.Decision = DecisionAllowLowRisk
 		n.Status = StatusPass
-		n.ReasonCode = ReasonSensitivePolicyBound
+		n.ReasonCode = ReasonLowRiskPolicyBound
+		return n
+	}
+
+	if n.Risk == RiskMedium {
+		if IsPolicyAbsent(n.PolicyState) {
+			n.Decision = DecisionAuditOnly
+			n.Status = StatusWarn
+			n.ReasonCode = ReasonMediumPolicyAbsent
+			return n
+		}
+		if n.PolicyState == PolicyAuditOnly {
+			n.Decision = DecisionAuditOnly
+			n.Status = StatusWarn
+			n.ReasonCode = ReasonMediumPolicyAuditOnly
+			return n
+		}
+		n.Decision = DecisionAuditOnly
+		n.Status = StatusWarn
+		n.ReasonCode = ReasonMediumPolicyBound
 		return n
 	}
 
@@ -200,6 +233,10 @@ func Evaluate(a Assessment) Assessment {
 		n.ReasonCode = ReasonPolicyAuditOnly
 	}
 	return n
+}
+
+func isAllowDecision(decision Decision) bool {
+	return decision == DecisionAllowLowRisk || decision == DecisionAuditOnly
 }
 
 func boolString(v bool) string {

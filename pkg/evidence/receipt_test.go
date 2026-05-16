@@ -89,3 +89,22 @@ func TestReceiptMalformedInputNoPanic(t *testing.T) {
 		// Acceptable; assertion is no panic.
 	}
 }
+
+func TestReceiptAssessmentOnlyPassAllowed(t *testing.T) {
+	r := Receipt{
+		Assessment: Assessment{
+			PolicyState:     PolicyMatched,
+			Risk:            RiskLow,
+			Operation:       "help",
+			ExplicitLowRisk: true,
+			Authority:       AuthorityPolicyMatch,
+		},
+		Status:     StatusPass,
+		Summary:    "assessment-only pass",
+		StartedAt:  time.Now().UTC(),
+		FinishedAt: time.Now().UTC(),
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("assessment-only pass should validate: %v", err)
+	}
+}

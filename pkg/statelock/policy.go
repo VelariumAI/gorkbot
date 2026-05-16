@@ -81,13 +81,6 @@ func ClassifyOperationRisk(operation string) Risk {
 		return RiskMedium
 	}
 
-	lowOps := map[string]struct{}{
-		"read_metadata": {}, "read_trace": {}, "list_locks": {}, "replay_compare": {}, "harness_report_read": {},
-	}
-	if _, ok := lowOps[op]; ok {
-		return RiskLow
-	}
-
 	return evidence.ClassifyOperationRisk(op)
 }
 
