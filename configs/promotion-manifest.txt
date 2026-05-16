@@ -1,7 +1,7 @@
 # Auto-generated promotion manifest.
 # Source allowlist: configs/promotion-allowlist.txt
 # Regenerate with: bash scripts/generate_promotion_manifest.sh
-# Generated at (UTC): 2026-05-16T01:16:45Z
+# Generated at (UTC): 2026-05-16T03:08:28Z
 
 .github/workflows/release.yml
 .github/workflows/universal-validator.yml
@@ -539,6 +539,26 @@ pkg/persist/sqlite.go
 pkg/pipeline/engine.go
 pkg/process/manager.go
 pkg/process/manager_test.go
+pkg/profile/approval.go
+pkg/profile/approval_test.go
+pkg/profile/authority.go
+pkg/profile/authority_test.go
+pkg/profile/automation.go
+pkg/profile/automation_test.go
+pkg/profile/capability.go
+pkg/profile/config.go
+pkg/profile/config_test.go
+pkg/profile/doc.go
+pkg/profile/errors.go
+pkg/profile/evaluate.go
+pkg/profile/evaluate_test.go
+pkg/profile/evidence.go
+pkg/profile/mode.go
+pkg/profile/profile.go
+pkg/profile/profile_test.go
+pkg/profile/refs.go
+pkg/profile/refs_test.go
+pkg/profile/util.go
 pkg/providers/auth_resolver.go
 pkg/providers/auth_resolver_test.go
 pkg/providers/cache.go
