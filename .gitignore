@@ -50,6 +50,7 @@ Thumbs.db
 # Log files
 *.log
 logs/
+.local/
 
 # Agent worktrees — local dev only
 .agent-worktrees/
@@ -133,6 +134,10 @@ scripts/*
 !scripts/generate_promotion_manifest.sh
 !scripts/check_tag_version_sync.sh
 !scripts/release_checklist.sh
+!scripts/release_readiness/
+!scripts/release_readiness/*.sh
+!scripts/release_readiness/lib/
+!scripts/release_readiness/lib/*.sh
 
 # Generated & dynamic tools
 pkg/tools/custom/
