@@ -66,9 +66,46 @@ rr_append_unique_line() {
   fi
 }
 
+rr_release_base_ref() {
+  local __out_var="$1"
+  local base_ref=""
+
+  if git show-ref --verify --quiet refs/heads/main 2>/dev/null; then
+    base_ref="main"
+  elif git show-ref --verify --quiet refs/remotes/origin/main 2>/dev/null; then
+    base_ref="origin/main"
+  else
+    return 1
+  fi
+
+  printf -v "${__out_var}" '%s' "${base_ref}"
+}
+
+rr_release_merge_base() {
+  local __out_var="$1"
+  local resolved_base_ref=""
+  local merge_base=""
+
+  rr_release_base_ref resolved_base_ref || return 1
+  merge_base="$(git merge-base "${resolved_base_ref}" HEAD 2>/dev/null)" || return 1
+  printf -v "${__out_var}" '%s' "${merge_base}"
+}
+
+rr_release_branch_range() {
+  local __out_var="$1"
+  local resolved_base_ref=""
+
+  rr_release_base_ref resolved_base_ref || return 1
+  printf -v "${__out_var}" '%s' "${resolved_base_ref}...HEAD"
+}
+
 rr_changed_files() {
+  local branch_range=""
+
   {
-    git diff --name-only main...HEAD 2>/dev/null || true
+    if rr_release_branch_range branch_range; then
+      git diff --name-only "${branch_range}" 2>/dev/null || true
+    fi
     git diff --name-only 2>/dev/null || true
     git diff --cached --name-only 2>/dev/null || true
   } | awk 'NF' | sort -u

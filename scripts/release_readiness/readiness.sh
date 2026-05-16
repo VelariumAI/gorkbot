@@ -84,6 +84,7 @@ test_commands=(
   "go test ./pkg/replay"
   "go test ./pkg/trace"
   "go test ./pkg/sense"
+  "go test ./pkg/governance"
   "go test ./pkg/tools"
   "go test ./pkg/researchgate"
   "go test ./pkg/selfmod"
@@ -152,12 +153,31 @@ scanner_body="$(
 rr_report_list "${REPORT_FILE}" "Private scanner presence" "${scanner_body}"
 record_skip
 
-vector_command="git diff --name-only HEAD~1..HEAD -- pkg/vectorstore pkg/adaptive/mel_store.go pkg/memory/semantic_searcher.go internal/engine/rag_injector.go internal/engine/consultation"
+vector_base_ref=""
+vector_merge_base=""
+vector_range=""
+vector_range_note=""
+if rr_release_base_ref vector_base_ref && rr_release_merge_base vector_merge_base && rr_release_branch_range vector_range; then
+  vector_command="git diff --name-only ${vector_range} -- pkg/vectorstore pkg/adaptive/mel_store.go pkg/memory/semantic_searcher.go internal/engine/rag_injector.go internal/engine/consultation"
+  vector_range_note="$(
+    printf 'protected path branch base ref: %s\n' "${vector_base_ref}"
+    printf 'protected path merge-base: %s\n' "${vector_merge_base}"
+    printf 'protected path branch range: %s\n' "${vector_range}"
+  )"
+else
+  vector_command="resolve protected path branch range (main...HEAD)"
+  vector_range_note="protected path branch range unavailable: expected local main or origin/main"
+fi
 vector_output=""
 vector_status=0
 set +e
-rr_run_shell_capture vector_output "${vector_command}"
-vector_status=$?
+if [[ "${vector_command}" == git\ diff* ]]; then
+  rr_run_shell_capture vector_output "${vector_command}"
+  vector_status=$?
+else
+  vector_output="${vector_range_note}"
+  vector_status=1
+fi
 set -e
 vector_pending="$(
   {
@@ -166,7 +186,8 @@ vector_pending="$(
   } | awk 'NF' | sort -u
 )"
 vector_report_output="$(
-  printf 'HEAD~1..HEAD protected path diff:\n'
+  printf '%s\n' "${vector_range_note}"
+  printf 'protected path diff:\n'
   if [[ -n "${vector_output}" ]]; then
     printf '%s\n' "${vector_output}"
   else
@@ -181,7 +202,7 @@ vector_report_output="$(
 )"
 rr_report_command "${REPORT_FILE}" "Vector / semantic memory preservation" "${vector_command}" "${vector_status}" "${vector_report_output}"
 if [[ "${vector_status}" != "0" ]]; then
-  record_fail "vector preservation diff command failed with exit code ${vector_status}"
+  record_fail "vector preservation branch-range check failed: local main branch reference unavailable or diff command failed"
 elif [[ -n "${vector_output}${vector_pending}" ]]; then
   record_fail "protected vector or semantic memory paths changed"
 else
@@ -255,20 +276,49 @@ neutrality_patterns=(
 )
 
 changed_files="${all_changed_files}"
+neutrality_base_ref=""
+neutrality_merge_base=""
+neutrality_range=""
+neutrality_range_status="unavailable"
+branch_added_public_lines=""
+branch_commit_messages=""
+branch_commit_message_label="branch commit messages scanned: unavailable"
+if rr_release_base_ref neutrality_base_ref && rr_release_merge_base neutrality_merge_base && rr_release_branch_range neutrality_range; then
+  neutrality_range_status="available"
+  branch_added_public_lines="$(
+    git diff --unified=0 "${neutrality_range}" -- 2>/dev/null | awk '
+      /^\+\+\+ b\// { file=substr($0, 7); next }
+      /^\+[^+]/ {
+        line=$0
+        sub(/^\+/, "", line)
+        if (file != "") {
+          print file ":" line
+        }
+      }
+    '
+  )"
+  branch_commit_messages="$(git log --format='%H %s%n%b' "${neutrality_merge_base}..HEAD" 2>/dev/null || true)"
+  branch_commit_message_label="branch commit messages scanned: ${neutrality_merge_base}..HEAD"
+fi
 added_public_lines="$(
   {
-    git diff --cached --unified=0 -- 2>/dev/null || true
-    git diff --unified=0 -- 2>/dev/null || true
-  } | awk '
-    /^\+\+\+ b\// { file=substr($0, 7); next }
-    /^\+[^+]/ {
-      line=$0
-      sub(/^\+/, "", line)
-      if (file != "") {
-        print file ":" line
+    if [[ -n "${branch_added_public_lines}" ]]; then
+      printf '%s\n' "${branch_added_public_lines}"
+    fi
+    {
+      git diff --cached --unified=0 -- 2>/dev/null || true
+      git diff --unified=0 -- 2>/dev/null || true
+    } | awk '
+      /^\+\+\+ b\// { file=substr($0, 7); next }
+      /^\+[^+]/ {
+        line=$0
+        sub(/^\+/, "", line)
+        if (file != "") {
+          print file ":" line
+        }
       }
-    }
-  '
+    '
+  } | awk 'NF'
 )"
 for pattern in "${neutrality_patterns[@]}"; do
   matches="$(printf '%s\n' "${added_public_lines}" | grep -i -F "${pattern}" 2>/dev/null || true)"
@@ -280,10 +330,17 @@ for pattern in "${neutrality_patterns[@]}"; do
   fi
 done
 
-recent_messages="$(git log --format='%s%n%b' -n 5 2>/dev/null || true)"
+recent_messages="$(
+  {
+    if [[ -n "${branch_commit_messages}" ]]; then
+      printf '%s\n' "${branch_commit_messages}"
+    fi
+    git log --format='%s%n%b' -n 5 2>/dev/null || true
+  } | awk 'NF'
+)"
 for pattern in "${neutrality_patterns[@]}"; do
   if printf '%s\n' "${recent_messages}" | grep -i -Fq "${pattern}" 2>/dev/null; then
-    rr_append_unique_line "recent commit message matched restricted neutrality pattern: ${pattern}" NEUTRALITY_FINDINGS_TMP
+    rr_append_unique_line "commit message matched restricted neutrality pattern: ${pattern}" NEUTRALITY_FINDINGS_TMP
   fi
 done
 neutrality_findings="${NEUTRALITY_FINDINGS_TMP:-}"
@@ -295,7 +352,16 @@ neutrality_body="$(
   else
     printf '(none)\n'
   fi
-  printf 'changed lines scanned: staged and unstaged additions\n'
+  printf 'branch range status: %s\n' "${neutrality_range_status}"
+  if [[ "${neutrality_range_status}" == "available" ]]; then
+    printf 'branch range base ref: %s\n' "${neutrality_base_ref}"
+    printf 'branch range merge-base: %s\n' "${neutrality_merge_base}"
+    printf 'branch range diff: %s\n' "${neutrality_range}"
+  else
+    printf 'branch range detail: expected local main or origin/main\n'
+  fi
+  printf 'changed lines scanned: branch-range additions plus staged and unstaged additions\n'
+  printf '%s\n' "${branch_commit_message_label}"
   printf 'recent commit messages scanned: last 5\n'
   printf 'findings:\n'
   if [[ -n "${neutrality_findings}" ]]; then

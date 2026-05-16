@@ -29,6 +29,8 @@ bash -n "${ROOT}/scripts/release_readiness/lib/report.sh"
 grep -Fq "# Gorkbot Release Readiness Report" "${ROOT}/scripts/release_readiness/lib/report.sh"
 grep -Fq "NEEDS_RR_SUITE" "${ROOT}/scripts/release_readiness/readiness.sh"
 grep -Fq "REPORT_ONLY" "${ROOT}/scripts/release_readiness/readiness.sh"
+grep -Fq "go test ./pkg/governance" "${ROOT}/scripts/release_readiness/readiness.sh"
+grep -Fq "main...HEAD" "${ROOT}/scripts/release_readiness/readiness.sh"
 
 set +u
 source "${ROOT}/scripts/release_readiness/lib/common.sh"
@@ -39,6 +41,20 @@ output=""
 rr_run_shell_capture output "printf helper-ok"
 [[ "${output}" == "helper-ok" ]] || {
   echo "[readiness-smoke] shell capture helper did not assign caller variable" >&2
+  exit 1
+}
+
+main_ref=""
+rr_release_base_ref main_ref
+[[ "${main_ref}" == "main" ]] || {
+  echo "[readiness-smoke] expected release base ref to resolve to main" >&2
+  exit 1
+}
+
+main_range=""
+rr_release_branch_range main_range
+[[ "${main_range}" == "main...HEAD" ]] || {
+  echo "[readiness-smoke] expected release branch range main...HEAD" >&2
   exit 1
 }
 
