@@ -38,7 +38,11 @@ func (l Lock) Normalized() Lock {
 	out.Dimension = NormalizeDimension(string(out.Dimension))
 	out.Subject = trace.RedactString(strings.TrimSpace(out.Subject), maxSubjectLen)
 	out.StateHash = trace.RedactString(strings.TrimSpace(out.StateHash), maxStateHashLen)
-	out.Status = normalizeStatus(string(out.Status))
+	if strings.TrimSpace(string(out.Status)) == "" {
+		out.Status = StatusActive
+	} else {
+		out.Status = normalizeStatus(string(out.Status))
+	}
 	out.Source = normalizeSource(string(out.Source))
 	out.PolicyState = normalizePolicyState(string(out.PolicyState))
 	out.EvidenceRefs = normalizeRefs(out.EvidenceRefs)
@@ -49,9 +53,6 @@ func (l Lock) Normalized() Lock {
 	}
 	if !out.ExpiresAt.IsZero() && out.ExpiresAt.Before(out.CreatedAt) {
 		out.ExpiresAt = out.CreatedAt
-	}
-	if out.Status == StatusInvalid {
-		out.Status = StatusActive
 	}
 	if out.ID == "" && out.Subject != "" && out.StateHash != "" {
 		out.ID = "lock_" + trace.StableHash(string(out.Scope), string(out.Dimension), out.Subject, out.StateHash)
@@ -69,6 +70,9 @@ func (l Lock) Validate() error {
 	}
 	if n.Dimension == DimensionUnknown {
 		return fmt.Errorf("%w: unknown dimension", ErrInvalidLock)
+	}
+	if n.Status == StatusInvalid {
+		return fmt.Errorf("%w: invalid status", ErrInvalidLock)
 	}
 	if n.CreatedAt.IsZero() {
 		return fmt.Errorf("%w: missing created_at", ErrInvalidLock)

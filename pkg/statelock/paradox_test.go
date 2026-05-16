@@ -2,6 +2,7 @@ package statelock
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +41,47 @@ func TestParadoxReportGeneration(t *testing.T) {
 	}
 	if result.Paradox.Status != ParadoxPossible && result.Paradox.Status != ParadoxConfirmed {
 		t.Fatalf("unexpected paradox status: %s", result.Paradox.Status)
+	}
+}
+
+func TestParadoxSummaryLanguageByStatus(t *testing.T) {
+	if got := paradoxSummaryForStatus(ParadoxConfirmed); !strings.Contains(got, "no valid path") {
+		t.Fatalf("confirmed summary must include no-valid-path language, got %q", got)
+	}
+	if got := paradoxSummaryForStatus(ParadoxPossible); strings.Contains(got, "no valid path") {
+		t.Fatalf("possible summary must not include no-valid-path language, got %q", got)
+	}
+	if got := paradoxSummaryForStatus(ParadoxInconclusive); strings.Contains(got, "no valid path") {
+		t.Fatalf("inconclusive summary must not include no-valid-path language, got %q", got)
+	}
+}
+
+func TestBuildParadoxReportMetadataIncludesConflictCount(t *testing.T) {
+	proposed := ProposedState{
+		Scope:       ScopeWorkspace,
+		Dimension:   DimensionArtifact,
+		Subject:     "subject-a",
+		StateHash:   "new",
+		PolicyState: PolicyMatched,
+		Risk:        RiskMedium,
+	}
+	conflicts := []Conflict{
+		{
+			ReasonCode: "validation_mismatch",
+			Severity:   SeverityHigh,
+			Dimension:  DimensionArtifact,
+			Subject:    "subject-a",
+		},
+		{
+			ReasonCode: "policy_gap",
+			Severity:   SeverityLow,
+			Dimension:  DimensionArtifact,
+			Subject:    "subject-a",
+		},
+	}
+	report := buildParadoxReport(proposed, conflicts)
+	if got := report.Metadata["conflict_count"]; got != "2" {
+		t.Fatalf("expected conflict_count=2, got %q", got)
 	}
 }
 

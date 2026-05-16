@@ -29,6 +29,45 @@ func TestLockValidation(t *testing.T) {
 	}
 }
 
+func TestLockStatusNormalizationAndValidation(t *testing.T) {
+	base := Lock{
+		ID:          "l-status",
+		Scope:       ScopeWorkspace,
+		Dimension:   DimensionArtifact,
+		Subject:     "artifact:a",
+		StateHash:   "hash1",
+		PolicyState: PolicyMatched,
+		CreatedAt:   time.Now().UTC(),
+	}
+
+	empty := base
+	empty.Status = ""
+	if got := empty.Normalized().Status; got != StatusActive {
+		t.Fatalf("empty status should normalize to active, got %s", got)
+	}
+	if err := empty.Validate(); err != nil {
+		t.Fatalf("empty status lock should validate after default-to-active, got %v", err)
+	}
+
+	garbage := base
+	garbage.Status = Status("garbage")
+	if got := garbage.Normalized().Status; got != StatusInvalid {
+		t.Fatalf("unknown status should normalize to invalid, got %s", got)
+	}
+	if err := garbage.Validate(); err == nil {
+		t.Fatal("unknown status must fail validation")
+	}
+
+	invalid := base
+	invalid.Status = StatusInvalid
+	if got := invalid.Normalized().Status; got != StatusInvalid {
+		t.Fatalf("invalid status should remain invalid, got %s", got)
+	}
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("StatusInvalid must be rejected by Validate")
+	}
+}
+
 func TestLockMetadataBoundAndRedaction(t *testing.T) {
 	lock := Lock{
 		ID:          "l2",

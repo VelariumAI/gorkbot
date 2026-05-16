@@ -83,6 +83,9 @@ func ProposedStateFromTraceTrajectory(traj trace.Trajectory, scope Scope, dimens
 	if stateHash == "" {
 		stateHash = trace.StableHash(norm.TrajectoryID, norm.Status, norm.Outcome)
 	}
+	// Defaults to a low-risk replay_compare posture only. Callers handling
+	// sensitive trace dimensions must override Risk, Dimension, and PolicyState.
+	// This helper is side-effect-free and does not make authority decisions.
 	return ProposedState{
 		Scope:        NormalizeScope(string(scope)),
 		Dimension:    NormalizeDimension(string(dimension)),

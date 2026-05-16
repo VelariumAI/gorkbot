@@ -114,7 +114,7 @@ func buildParadoxReport(proposed ProposedState, conflicts []Conflict) ParadoxRep
 	}
 	report := ParadoxReport{
 		Status:       status,
-		Summary:      "no valid path under current lock/policy constraints",
+		Summary:      paradoxSummaryForStatus(status),
 		Conflicts:    conflicts,
 		Constraints:  constraints,
 		PolicyState:  proposed.PolicyState,
@@ -132,11 +132,27 @@ func buildParadoxReport(proposed ProposedState, conflicts []Conflict) ParadoxRep
 	}
 	norm := report.Normalized()
 	norm.Metadata = normalizeMetadata(map[string]string{
-		"subject":   proposed.Subject,
-		"scope":     string(proposed.Scope),
-		"dimension": string(proposed.Dimension),
+		"subject":        proposed.Subject,
+		"scope":          string(proposed.Scope),
+		"dimension":      string(proposed.Dimension),
+		"conflict_count": strconv.Itoa(len(conflicts)),
 	})
 	return norm
+}
+
+func paradoxSummaryForStatus(status ParadoxStatus) string {
+	switch normalizeParadoxStatus(status) {
+	case ParadoxConfirmed:
+		return "no valid path under current lock/policy constraints"
+	case ParadoxPossible:
+		return "potential conflict with current lock/policy constraints; remediation may apply"
+	case ParadoxInconclusive:
+		return "insufficient data to confirm valid path under current lock/policy constraints"
+	case ParadoxNone:
+		return "no lock/policy paradox detected under current constraints"
+	default:
+		return "invalid paradox report/input"
+	}
 }
 
 func hasCriticalConflict(conflicts []Conflict) bool {
