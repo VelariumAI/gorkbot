@@ -1,7 +1,7 @@
 # Auto-generated promotion manifest.
 # Source allowlist: configs/promotion-allowlist.txt
 # Regenerate with: bash scripts/generate_promotion_manifest.sh
-# Generated at (UTC): 2026-05-15T23:19:47Z
+# Generated at (UTC): 2026-05-16T01:16:45Z
 
 .github/workflows/release.yml
 .github/workflows/universal-validator.yml
@@ -429,6 +429,27 @@ pkg/embeddings/ollama.go
 pkg/env/probe.go
 pkg/env/probe_test.go
 pkg/errors/errors.go
+pkg/evidence/assessment.go
+pkg/evidence/assessment_test.go
+pkg/evidence/authority.go
+pkg/evidence/bounds.go
+pkg/evidence/doc.go
+pkg/evidence/errors.go
+pkg/evidence/kind.go
+pkg/evidence/kind_test.go
+pkg/evidence/policy.go
+pkg/evidence/policy_test.go
+pkg/evidence/receipt.go
+pkg/evidence/receipt_test.go
+pkg/evidence/record.go
+pkg/evidence/record_test.go
+pkg/evidence/refs.go
+pkg/evidence/refs_test.go
+pkg/evidence/report.go
+pkg/evidence/risk.go
+pkg/evidence/risk_test.go
+pkg/evidence/status.go
+pkg/evidence/status_test.go
 pkg/execution/breaker.go
 pkg/execution/breaker_test.go
 pkg/execution/budget.go
