@@ -1,91 +1,68 @@
 package statelock
 
-import "strings"
+import (
+	"strings"
 
-type PolicyState string
+	"github.com/velariumai/gorkbot/pkg/evidence"
+)
 
-type Risk string
-
-type SensitiveOperation string
+type PolicyState = evidence.PolicyState
+type Risk = evidence.Risk
+type SensitiveOperation = evidence.SensitiveOperation
 
 const (
-	PolicyOff           PolicyState = "policy_off"
-	PolicyNotConfigured PolicyState = "policy_not_configured"
-	PolicyUnavailable   PolicyState = "policy_unavailable"
-	PolicyNoMatch       PolicyState = "policy_no_match"
-	PolicyInvalid       PolicyState = "policy_invalid"
-	PolicyMatched       PolicyState = "policy_matched"
-	PolicyEnforced      PolicyState = "policy_enforced"
-	PolicyAuditOnly     PolicyState = "policy_audit_only"
+	PolicyOff           PolicyState = evidence.PolicyOff
+	PolicyNotConfigured PolicyState = evidence.PolicyNotConfigured
+	PolicyUnavailable   PolicyState = evidence.PolicyUnavailable
+	PolicyNoMatch       PolicyState = evidence.PolicyNoMatch
+	PolicyInvalid       PolicyState = evidence.PolicyInvalid
+	PolicyMatched       PolicyState = evidence.PolicyMatched
+	PolicyEnforced      PolicyState = evidence.PolicyEnforced
+	PolicyAuditOnly     PolicyState = evidence.PolicyAuditOnly
 )
 
 const (
-	RiskLow       Risk = "low"
-	RiskMedium    Risk = "medium"
-	RiskSensitive Risk = "sensitive"
-	RiskUnknown   Risk = "unknown"
+	RiskLow       Risk = evidence.RiskLow
+	RiskMedium    Risk = evidence.RiskMedium
+	RiskSensitive Risk = evidence.RiskSensitive
+	RiskUnknown   Risk = evidence.RiskUnknown
 )
 
 const (
-	SensitiveCredentialAccess SensitiveOperation = "credential_access"
-	SensitiveNetworkEgress    SensitiveOperation = "network_egress"
-	SensitivePrivateNetwork   SensitiveOperation = "private_network_access"
-	SensitiveFileMutation     SensitiveOperation = "file_mutation"
-	SensitiveSelfmodPromotion SensitiveOperation = "selfmod_promotion"
-	SensitiveToolInstallation SensitiveOperation = "tool_installation"
-	SensitiveShellExecution   SensitiveOperation = "shell_execution"
-	SensitiveReleasePublish   SensitiveOperation = "release_publish"
-	SensitiveHostBridge       SensitiveOperation = "host_bridge"
-	SensitiveWorkspaceEscape  SensitiveOperation = "workspace_escape"
+	SensitiveCredentialAccess SensitiveOperation = evidence.SensitiveCredentialAccess
+	SensitiveNetworkEgress    SensitiveOperation = evidence.SensitiveNetworkEgress
+	SensitivePrivateNetwork   SensitiveOperation = evidence.SensitivePrivateNetwork
+	SensitiveFileMutation     SensitiveOperation = evidence.SensitiveFileMutation
+	SensitiveSelfmodPromotion SensitiveOperation = evidence.SensitiveSelfmodPromotion
+	SensitiveToolInstallation SensitiveOperation = evidence.SensitiveToolInstallation
+	SensitiveShellExecution   SensitiveOperation = evidence.SensitiveShellExecution
+	SensitiveReleasePublish   SensitiveOperation = evidence.SensitiveReleasePublish
+	SensitiveHostBridge       SensitiveOperation = evidence.SensitiveHostBridge
+	SensitiveWorkspaceEscape  SensitiveOperation = evidence.SensitiveWorkspaceEscape
 )
 
 func normalizePolicyState(raw string) PolicyState {
-	s := PolicyState(strings.ToLower(strings.TrimSpace(raw)))
-	switch s {
-	case PolicyOff, PolicyNotConfigured, PolicyUnavailable, PolicyNoMatch,
-		PolicyInvalid, PolicyMatched, PolicyEnforced, PolicyAuditOnly:
-		return s
-	default:
-		return PolicyInvalid
-	}
+	return evidence.NormalizePolicyState(raw)
 }
 
 func normalizeRisk(raw string) Risk {
-	r := Risk(strings.ToLower(strings.TrimSpace(raw)))
-	switch r {
-	case RiskLow, RiskMedium, RiskSensitive:
-		return r
-	default:
-		return RiskUnknown
-	}
+	return evidence.NormalizeRisk(raw)
 }
 
 func IsPolicyAbsent(state PolicyState) bool {
-	s := normalizePolicyState(string(state))
-	switch s {
-	case PolicyOff, PolicyNotConfigured, PolicyUnavailable, PolicyNoMatch, PolicyInvalid:
-		return true
-	default:
-		return false
-	}
+	return evidence.IsPolicyAbsent(state)
 }
 
 func IsPolicyAuthoritative(state PolicyState) bool {
-	s := normalizePolicyState(string(state))
-	return s == PolicyMatched || s == PolicyEnforced || s == PolicyAuditOnly
+	return evidence.IsPolicyAuthoritative(state)
 }
 
 func AllowsSensitiveOperation(state PolicyState) bool {
-	s := normalizePolicyState(string(state))
-	return s == PolicyMatched || s == PolicyEnforced
+	return evidence.AllowsSensitiveOperation(state)
 }
 
 func RequiresApprovalForSensitive(state PolicyState) bool {
-	s := normalizePolicyState(string(state))
-	if s == PolicyAuditOnly {
-		return true
-	}
-	return IsPolicyAbsent(s)
+	return evidence.RequiresApprovalForSensitive(state)
 }
 
 func ClassifyOperationRisk(operation string) Risk {
@@ -104,29 +81,9 @@ func ClassifyOperationRisk(operation string) Risk {
 		return RiskMedium
 	}
 
-	lowOps := map[string]struct{}{
-		"read_metadata": {}, "read_trace": {}, "list_locks": {}, "replay_compare": {}, "harness_report_read": {},
-	}
-	if _, ok := lowOps[op]; ok {
-		return RiskLow
-	}
-
-	return RiskUnknown
+	return evidence.ClassifyOperationRisk(op)
 }
 
 func isSensitiveOperation(operation string) bool {
-	sensitive := map[string]struct{}{
-		string(SensitiveCredentialAccess): {},
-		string(SensitiveNetworkEgress):    {},
-		string(SensitivePrivateNetwork):   {},
-		string(SensitiveFileMutation):     {},
-		string(SensitiveSelfmodPromotion): {},
-		string(SensitiveToolInstallation): {},
-		string(SensitiveShellExecution):   {},
-		string(SensitiveReleasePublish):   {},
-		string(SensitiveHostBridge):       {},
-		string(SensitiveWorkspaceEscape):  {},
-	}
-	_, ok := sensitive[operation]
-	return ok
+	return evidence.IsSensitiveOperation(operation)
 }
