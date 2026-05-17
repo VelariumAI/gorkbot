@@ -1,7 +1,7 @@
 # Auto-generated promotion manifest.
 # Source allowlist: configs/promotion-allowlist.txt
 # Regenerate with: bash scripts/generate_promotion_manifest.sh
-# Generated at (UTC): 2026-05-16T18:38:06Z
+# Generated at (UTC): 2026-05-16T21:41:07Z
 
 .github/workflows/release.yml
 .github/workflows/universal-validator.yml
@@ -902,5 +902,9 @@ scripts/check_promotion_unmanaged_paths.sh
 scripts/check_release_artifact_matrix.sh
 scripts/check_release_changelog.sh
 scripts/release_checklist.sh
+scripts/release_readiness/lib/common.sh
+scripts/release_readiness/lib/report.sh
+scripts/release_readiness/readiness.sh
+scripts/release_readiness/test_smoke.sh
 scripts/setup_wizard.sh
 scripts/write_launcher.sh
