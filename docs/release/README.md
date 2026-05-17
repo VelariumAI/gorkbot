@@ -5,7 +5,8 @@ runs validation commands, and writes a human-readable markdown report. RR-002
 adds local CLI smoke and config/profile matrix checks for safe operator-facing
 entrypoints. RR-003 adds a fixture-based VAR spine smoke that exercises local
 validation, audit, and replay-style readiness without live providers or release
-mutation.
+mutation. RR-004 adds local fixture smoke for policy absence, state lock
+conflict, paradox report, and operator-facing negative-path clarity.
 
 Run from any directory:
 
@@ -43,6 +44,18 @@ RR-003 reports are written under:
 .local/release-readiness/rr003/
 ```
 
+Run RR-004 directly from any directory:
+
+```bash
+bash scripts/release_readiness/rr004_policy_statelock_smoke.sh
+```
+
+RR-004 reports are written under:
+
+```text
+.local/release-readiness/rr004/
+```
+
 ## What RR-001 Checks
 
 - Current branch, commit, and working tree status
@@ -66,6 +79,8 @@ RR-003 reports are written under:
 - It does not run CLI/TUI interaction smoke tests.
 - It does not claim VAR spine fixture coverage unless the nested RR-003 section
   runs and records its own recommendation.
+- It does not claim policy absence/statelock/paradox smoke coverage unless the
+  nested RR-004 section runs and records its own recommendation.
 - It does not run vector/RAG/engram smoke tests.
 - It does not run Workbench/operator/session smoke tests.
 - It does not claim final release readiness.
@@ -144,10 +159,61 @@ bash scripts/release_readiness/readiness.sh
 ```
 
 If RR-003 passes or is incomplete without blockers, the wrapper still reports
-`NEEDS_RR_SUITE` because RR-004 and later release-readiness layers remain
-deferred. If RR-003 finds a concrete blocker, the wrapper reports `BLOCKED`.
-RR-003 starts the transition from shallow smoke checks toward operator-like
-fixture validation.
+`NEEDS_RR_SUITE` because later release-readiness layers remain deferred. If
+RR-003 finds a concrete blocker, the wrapper reports `BLOCKED`. RR-003 starts
+the transition from shallow smoke checks toward operator-like fixture
+validation.
+
+## RR-004 Policy Absence + Statelock / Paradox Smoke
+
+RR-004 is a local synthetic operator harness for negative-path release-readiness
+signals. It tests the operator-facing invariant: no policy is not permission.
+
+### What RR-004 Checks
+
+- Sensitive policy absence behavior, using a fixture network-egress request with
+  no matching policy.
+- Explicit low-risk policy absence behavior, using a read-only manifest-count
+  style fixture.
+- State lock conflict behavior, using an in-memory lock and a permission-scope
+  widening proposal.
+- Paradox report wording across possible, confirmed, and inconclusive states.
+- Skillruntime/profile linkage, showing that adverse statelock/paradox evidence
+  cannot silently pass a promotion-like fixture.
+- Operator-facing report quality: scenario name, operator story, requested
+  action, policy state, risk class, expected outcome, actual outcome,
+  evidence/ref summary, pass/fail/skip classification, remediation/next-step
+  text, and weak seams.
+- Report generation and runtime output confined to
+  `.local/release-readiness/rr004/`.
+- Tracked-file mutation avoidance.
+
+### What RR-004 Does Not Do
+
+- It does not call live providers.
+- It does not make network calls.
+- It does not execute app tools.
+- It does not open sockets intentionally.
+- It does not create, move, or delete tags.
+- It does not run release workflows.
+- It does not publish releases.
+- It does not upload artifacts.
+- It does not execute automatic remediation.
+- It does not claim runtime enforcement when only fixture/facade behavior ran.
+- It does not provide RR-005 vector/RAG/engram preservation coverage.
+- It does not provide RR-006 TUI/operator/session scripting.
+- It does not provide RR-007 final release report generation.
+- It does not claim final release readiness.
+
+The main wrapper runs RR-004 by default:
+
+```bash
+bash scripts/release_readiness/readiness.sh
+```
+
+If RR-004 passes or is incomplete without blockers, the wrapper still reports
+`NEEDS_RR_SUITE` because RR-005 and later release-readiness layers remain
+deferred. If RR-004 finds a concrete blocker, the wrapper reports `BLOCKED`.
 
 ## Private Scanner Handling
 
@@ -158,7 +224,8 @@ execution remains a separate private preflight for RR-001.
 
 - RR-002 CLI smoke + config matrix: implemented as local report-only smoke.
 - RR-003 VAR spine fixture smoke: implemented as local fixture validation.
-- RR-004 policy absence + statelock/paradox smoke: deferred.
+- RR-004 policy absence + statelock/paradox smoke: implemented as local fixture
+  validation.
 - RR-005 vector/RAG/engram preservation smoke: deferred.
 - RR-006 TUI/operator/session scripted smoke: deferred.
 - RR-007 final release report generator: deferred.
