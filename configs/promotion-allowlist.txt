@@ -13,10 +13,12 @@ scripts/check_release_changelog.sh
 scripts/release_checklist.sh
 scripts/release_readiness/readiness.sh
 scripts/release_readiness/rr002_cli_smoke.sh
+scripts/release_readiness/rr003_var_spine_smoke.sh
 scripts/release_readiness/lib/common.sh
 scripts/release_readiness/lib/report.sh
 scripts/release_readiness/test_smoke.sh
 scripts/release_readiness/test_rr002_smoke.sh
+scripts/release_readiness/test_rr003_smoke.sh
 Makefile
 go.mod
 go.sum
