@@ -12,9 +12,11 @@ scripts/check_release_artifact_matrix.sh
 scripts/check_release_changelog.sh
 scripts/release_checklist.sh
 scripts/release_readiness/readiness.sh
+scripts/release_readiness/rr002_cli_smoke.sh
 scripts/release_readiness/lib/common.sh
 scripts/release_readiness/lib/report.sh
 scripts/release_readiness/test_smoke.sh
+scripts/release_readiness/test_rr002_smoke.sh
 Makefile
 go.mod
 go.sum
