@@ -61,11 +61,14 @@ done
 
 tmp_dir="${ROOT}/.local/release-readiness/rr002-smoke-test"
 mkdir -p "${tmp_dir}"
+tmp_root="${TMPDIR:-/tmp}"
+out_file="$(mktemp "${tmp_root%/}/rr002-smoke.XXXXXX")"
+trap 'rm -f "$out_file"' EXIT
 (
   cd "${tmp_dir}"
-  RR002_SKIP_CLI=1 RR002_SKIP_CONFIG_MATRIX=1 bash "${RR002}" >/tmp/rr002-smoke.out
+  RR002_SKIP_CLI=1 RR002_SKIP_CONFIG_MATRIX=1 bash "${RR002}" >"${out_file}"
 )
-grep -Fq "[rr002] report path:" /tmp/rr002-smoke.out
-grep -Fq "[rr002] final recommendation:" /tmp/rr002-smoke.out
+grep -Fq "[rr002] report path:" "${out_file}"
+grep -Fq "[rr002] final recommendation:" "${out_file}"
 
 echo "[rr002-smoke] OK"
