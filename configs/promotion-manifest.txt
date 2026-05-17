@@ -1,7 +1,7 @@
 # Auto-generated promotion manifest.
 # Source allowlist: configs/promotion-allowlist.txt
 # Regenerate with: bash scripts/generate_promotion_manifest.sh
-# Generated at (UTC): 2026-05-17T04:11:27Z
+# Generated at (UTC): 2026-05-17T05:45:40Z
 
 .github/workflows/release.yml
 .github/workflows/universal-validator.yml
@@ -597,6 +597,7 @@ pkg/python/manager.go
 pkg/registry/registry.go
 pkg/registry/types.go
 pkg/releasecheck/rr003_var_spine_test.go
+pkg/releasecheck/rr004_policy_statelock_test.go
 pkg/replay/case.go
 pkg/replay/case_test.go
 pkg/replay/comparator.go
@@ -909,8 +910,10 @@ scripts/release_readiness/lib/report.sh
 scripts/release_readiness/readiness.sh
 scripts/release_readiness/rr002_cli_smoke.sh
 scripts/release_readiness/rr003_var_spine_smoke.sh
+scripts/release_readiness/rr004_policy_statelock_smoke.sh
 scripts/release_readiness/test_rr002_smoke.sh
 scripts/release_readiness/test_rr003_smoke.sh
+scripts/release_readiness/test_rr004_smoke.sh
 scripts/release_readiness/test_smoke.sh
 scripts/setup_wizard.sh
 scripts/write_launcher.sh

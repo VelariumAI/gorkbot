@@ -110,6 +110,31 @@ run_rr003_command() {
   fi
 }
 
+run_rr004_command() {
+  local title="RR-004 Policy Absence + Statelock / Paradox Smoke"
+  local command_text="bash scripts/release_readiness/rr004_policy_statelock_smoke.sh"
+  local output status recommendation
+
+  set +e
+  rr_run_shell_capture output "${command_text}"
+  status=$?
+  set -e
+  rr_report_command "${REPORT_FILE}" "${title}" "${command_text}" "${status}" "${output}"
+
+  recommendation="$(
+    printf '%s\n' "${output}" |
+      awk -F': ' '/^\[rr004\] final recommendation:/ { value=$2 } END { print value }'
+  )"
+
+  if [[ "${status}" != "0" || "${recommendation}" == "BLOCKED" ]]; then
+    record_fail "RR-004 policy absence + statelock/paradox smoke failed"
+  elif [[ "${recommendation}" == "RR004_PASS" ]]; then
+    record_pass
+  else
+    record_skip
+  fi
+}
+
 rr_report_begin "${REPORT_FILE}"
 
 timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -309,6 +334,7 @@ record_pass
 
 run_rr002_command
 run_rr003_command
+run_rr004_command
 
 neutrality_findings=""
 NEUTRALITY_FINDINGS_TMP=""
@@ -433,7 +459,7 @@ fi
 skipped_body="$(
   printf 'RR-002 CLI smoke + config matrix: handled in RR-002 section\n'
   printf 'RR-003 VAR spine fixture smoke: handled in RR-003 section\n'
-  printf 'RR-004 policy absence + statelock/paradox smoke: skipped\n'
+  printf 'RR-004 policy absence + statelock/paradox smoke: handled in RR-004 section\n'
   printf 'RR-005 vector/RAG/engram preservation smoke: skipped\n'
   printf 'RR-006 TUI/operator/session scripted smoke: skipped\n'
   printf 'RR-007 final release report generator: skipped\n'
