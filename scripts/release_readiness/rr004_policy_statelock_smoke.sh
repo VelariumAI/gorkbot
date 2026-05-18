@@ -12,7 +12,7 @@ cd "${ROOT}"
 
 REPORT_DIR="${RR004_REPORT_DIR:-${ROOT}/.local/release-readiness/rr004}"
 RUN_DIR="${REPORT_DIR}/run"
-mkdir -p "${REPORT_DIR}" "${RUN_DIR}/home" "${RUN_DIR}/gocache" "${RUN_DIR}/gopath" "${RUN_DIR}/tmp"
+mkdir -p "${REPORT_DIR}" "${RUN_DIR}/home" "${RUN_DIR}/gocache" "${RUN_DIR}/tmp"
 REPORT_FILE="${REPORT_DIR}/rr004-policy-statelock-smoke.$(rr_timestamp).md"
 
 TIMEOUT_SECONDS="${RR004_TIMEOUT_SECONDS:-120}"
@@ -67,35 +67,8 @@ rr004_report_check() {
 
 rr004_run_fixture_go_test() {
   local __out_var="$1"
-  local captured status gomodcache
-
-  gomodcache="$(go env GOMODCACHE 2>/dev/null || true)"
-  if [[ -z "${gomodcache}" ]]; then
-    gomodcache="${RUN_DIR}/gopath/pkg/mod"
-  fi
-
-  set +e
-  captured="$(
-    env -i \
-      HOME="${RUN_DIR}/home" \
-      PATH="${PATH}" \
-      GOCACHE="${RUN_DIR}/gocache" \
-      GOPATH="${RUN_DIR}/gopath" \
-      GOMODCACHE="${gomodcache}" \
-      TMPDIR="${RUN_DIR}/tmp" \
-      GOTMPDIR="${RUN_DIR}/tmp" \
-      GOPROXY=off \
-      GOSUMDB=off \
-      GOFLAGS=-mod=readonly \
-      TERM=dumb \
-      timeout "${TIMEOUT_SECONDS}" \
-      go test ./pkg/releasecheck -run TestRR004PolicyStatelockSmoke -count=1 -v 2>&1
-  )"
-  status=$?
-  set -e
-
-  printf -v "${__out_var}" '%s' "${captured}"
-  return "${status}"
+  rr_run_go_capture "${__out_var}" "rr004" "${TIMEOUT_SECONDS}" "${RUN_DIR}" \
+    go test "$(rr_go_test_args)" ./pkg/releasecheck -run TestRR004PolicyStatelockSmoke -count=1 -v
 }
 
 rr004_fixture_lines() {
@@ -126,6 +99,10 @@ preflight_body="$(
   printf 'repo root: %s\n' "${ROOT}"
   printf 'report directory: %s\n' "${REPORT_DIR}"
   printf 'timeout seconds: %s\n' "${TIMEOUT_SECONDS}"
+  printf 'platform profile: %s\n' "$(rr_go_platform_profile)"
+  printf 'go platform: GOOS=%s GOARCH=%s\n' "$(rr_go_platform_value GOOS)" "$(rr_go_platform_value GOARCH)"
+  printf 'go cache mode: %s\n' "$(rr_go_cache_mode)"
+  printf 'go safety: %s GOMEMLIMIT=1024MiB GOTMPDIR=%s\n' "$(rr_go_safety_summary)" "${RUN_DIR}/tmp"
   printf 'working tree before:\n'
   if [[ -n "${status_before}" ]]; then
     printf '%s\n' "${status_before}"
@@ -169,12 +146,14 @@ safety_body="$(
 rr_report_list "${REPORT_FILE}" "Operational safety posture" "${safety_body}"
 rr004_record_pass
 
+rr_print_go_profile "rr004"
+
 if ! command -v timeout >/dev/null 2>&1; then
   rr004_report_check "Timeout availability" "command -v timeout" "1" "BLOCKED" "timeout command is required for bounded RR-004 fixture execution"
   rr004_record_fail "timeout command unavailable"
 fi
 
-fixture_command="go test ./pkg/releasecheck -run TestRR004PolicyStatelockSmoke -count=1 -v"
+fixture_command="go test -p=1 ./pkg/releasecheck -run TestRR004PolicyStatelockSmoke -count=1 -v"
 fixture_output=""
 fixture_status=0
 if [[ "${RR004_SKIP_GO_TEST:-0}" == "1" ]]; then
