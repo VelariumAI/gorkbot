@@ -12,7 +12,7 @@ cd "${ROOT}"
 
 REPORT_DIR="${RR002_REPORT_DIR:-${ROOT}/.local/release-readiness/rr002}"
 RUN_DIR="${REPORT_DIR}/run"
-mkdir -p "${REPORT_DIR}" "${RUN_DIR}/home" "${RUN_DIR}/gocache" "${RUN_DIR}/gopath" "${RUN_DIR}/tmp"
+mkdir -p "${REPORT_DIR}" "${RUN_DIR}/home" "${RUN_DIR}/gocache" "${RUN_DIR}/tmp"
 REPORT_FILE="${REPORT_DIR}/rr002-cli-smoke.$(rr_timestamp).md"
 
 TIMEOUT_SECONDS="${RR002_TIMEOUT_SECONDS:-30}"
@@ -68,35 +68,9 @@ rr002_report_check() {
 
 rr002_run_confined() {
   local __out_var="$1"
-  shift
-  local captured status
-  local gomodcache
-
-  gomodcache="$(go env GOMODCACHE 2>/dev/null || true)"
-  if [[ -z "${gomodcache}" ]]; then
-    gomodcache="${RUN_DIR}/gopath/pkg/mod"
-  fi
-
-  set +e
-  captured="$(
-    env -i \
-      HOME="${RUN_DIR}/home" \
-      PATH="${PATH}" \
-      GOCACHE="${RUN_DIR}/gocache" \
-      GOPATH="${RUN_DIR}/gopath" \
-      GOMODCACHE="${gomodcache}" \
-      TMPDIR="${RUN_DIR}/tmp" \
-      GOTMPDIR="${RUN_DIR}/tmp" \
-      GOPROXY=off \
-      GOSUMDB=off \
-      GOFLAGS=-mod=readonly \
-      TERM=dumb \
-      "$@" 2>&1
-  )"
-  status=$?
-
-  printf -v "${__out_var}" '%s' "${captured}"
-  return "${status}"
+  local timeout_seconds="$2"
+  shift 2
+  rr_run_go_capture "${__out_var}" "rr002" "${timeout_seconds}" "${RUN_DIR}" "$@"
 }
 
 rr002_run_expected_success_with_timeout() {
@@ -108,7 +82,7 @@ rr002_run_expected_success_with_timeout() {
   command_text="$*"
 
   set +e
-  rr002_run_confined output timeout "${timeout_seconds}" "$@"
+  rr002_run_confined output "${timeout_seconds}" "$@"
   status=$?
   set -e
 
@@ -137,7 +111,7 @@ rr002_run_expected_unsupported() {
   command_text="$*"
 
   set +e
-  rr002_run_confined output timeout "${TIMEOUT_SECONDS}" "$@"
+  rr002_run_confined output "${TIMEOUT_SECONDS}" "$@"
   status=$?
   set -e
 
@@ -177,6 +151,10 @@ preflight_body="$(
   printf 'report directory: %s\n' "${REPORT_DIR}"
   printf 'timeout seconds: %s\n' "${TIMEOUT_SECONDS}"
   printf 'build timeout seconds: %s\n' "${BUILD_TIMEOUT_SECONDS}"
+  printf 'platform profile: %s\n' "$(rr_go_platform_profile)"
+  printf 'go platform: GOOS=%s GOARCH=%s\n' "$(rr_go_platform_value GOOS)" "$(rr_go_platform_value GOARCH)"
+  printf 'go cache mode: %s\n' "$(rr_go_cache_mode)"
+  printf 'go safety: %s GOMEMLIMIT=1024MiB GOTMPDIR=%s\n' "$(rr_go_safety_summary)" "${RUN_DIR}/tmp"
   printf 'working tree before:\n'
   if [[ -n "${status_before}" ]]; then
     printf '%s\n' "${status_before}"
@@ -210,10 +188,12 @@ inventory_body="$(
 rr_report_list "${REPORT_FILE}" "Initial inventory findings" "${inventory_body}"
 rr002_record_pass
 
+rr_print_go_profile "rr002"
+
 if [[ "${RR002_SKIP_CLI:-0}" == "1" ]]; then
   rr002_record_static_skip "CLI smoke checks" "go run ./cmd/gorkbot|./cmd/gorkweb help probes" "RR002_SKIP_CLI=1"
 else
-  rr002_run_expected_success_with_timeout "CLI build cache warmup" "${BUILD_TIMEOUT_SECONDS}" "go" "test" "./cmd/gorkbot" "./cmd/gorkweb" "-run" "^$"
+  rr002_run_expected_success_with_timeout "CLI build cache warmup" "${BUILD_TIMEOUT_SECONDS}" "go" "test" "$(rr_go_test_args)" "./cmd/gorkbot" "./cmd/gorkweb" "-run" "^$"
   rr002_run_expected_success "gorkbot help long" "go" "run" "./cmd/gorkbot" "--help"
   rr002_run_expected_success "gorkbot help short" "go" "run" "./cmd/gorkbot" "-h"
   rr002_run_expected_unsupported "gorkbot unsupported version flag" "go" "run" "./cmd/gorkbot" "--version"
@@ -226,9 +206,9 @@ else
 fi
 
 if [[ "${RR002_SKIP_CONFIG_MATRIX:-0}" == "1" ]]; then
-  rr002_record_static_skip "Config/profile matrix" "go test ./pkg/profile" "RR002_SKIP_CONFIG_MATRIX=1"
+  rr002_record_static_skip "Config/profile matrix" "go test -p=1 ./pkg/profile" "RR002_SKIP_CONFIG_MATRIX=1"
 else
-  rr002_run_expected_success "Config/profile matrix" "go" "test" "./pkg/profile"
+  rr002_run_expected_success "Config/profile matrix" "go" "test" "$(rr_go_test_args)" "./pkg/profile"
 fi
 
 status_after="$(git status --short 2>/dev/null || true)"

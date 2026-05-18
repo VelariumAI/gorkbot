@@ -6,12 +6,14 @@ RR004="${ROOT}/scripts/release_readiness/rr004_policy_statelock_smoke.sh"
 READINESS="${ROOT}/scripts/release_readiness/readiness.sh"
 DOCS="${ROOT}/docs/release/README.md"
 GO_FIXTURE="${ROOT}/pkg/releasecheck/rr004_policy_statelock_test.go"
+COMMON="${ROOT}/scripts/release_readiness/lib/common.sh"
 
 required_files=(
   "${RR004}"
   "${READINESS}"
   "${DOCS}"
   "${GO_FIXTURE}"
+  "${COMMON}"
 )
 
 for file in "${required_files[@]}"; do
@@ -34,7 +36,14 @@ grep -Fq ".local/release-readiness/rr004" "${RR004}"
 grep -Fq "RR004_PASS" "${RR004}"
 grep -Fq "RR004_INCOMPLETE" "${RR004}"
 grep -Fq "BLOCKED" "${RR004}"
-grep -Fq "go test ./pkg/releasecheck -run TestRR004PolicyStatelockSmoke -count=1 -v" "${RR004}"
+grep -Fq "go test -p=1 ./pkg/releasecheck -run TestRR004PolicyStatelockSmoke -count=1 -v" "${RR004}"
+grep -Fq "rr_print_go_profile" "${RR004}"
+grep -Fq "rr_go_platform_profile" "${COMMON}"
+grep -Fq "rr_go_test_args" "${COMMON}"
+grep -Fq "rr_go_env_prefix" "${COMMON}"
+grep -Fq "using existing Go toolchain cache; no local module-cache copy" "${COMMON}"
+grep -Fq "GOMAXPROCS=1" "${COMMON}"
+grep -Fq "GOMEMLIMIT=1024MiB" "${COMMON}"
 grep -Fq "no policy is not permission" "${RR004}"
 grep -Fq "RR-004 Policy Absence + Statelock / Paradox Smoke" "${READINESS}"
 grep -Fq "bash scripts/release_readiness/rr004_policy_statelock_smoke.sh" "${READINESS}"
@@ -47,6 +56,16 @@ grep -Fq "statelock_conflict" "${GO_FIXTURE}"
 grep -Fq "paradox_report" "${GO_FIXTURE}"
 grep -Fq "skillruntime_profile_linkage" "${GO_FIXTURE}"
 grep -Fq "no policy is not permission" "${GO_FIXTURE}"
+
+if grep -Fq 'GOPATH="${RUN_DIR}/gopath"' "${RR004}"; then
+  echo "[rr004-smoke] rr004_policy_statelock_smoke.sh still forces a project-local GOPATH" >&2
+  exit 1
+fi
+
+if grep -Fq 'GOMODCACHE=' "${RR004}"; then
+  echo "[rr004-smoke] rr004_policy_statelock_smoke.sh still manages GOMODCACHE directly" >&2
+  exit 1
+fi
 
 forbidden_patterns=(
   "rm -""rf"
@@ -85,6 +104,8 @@ trap 'rm -f "$out_file"' EXIT
   cd "${tmp_dir}"
   RR004_SKIP_GO_TEST=1 bash "${RR004}" >"${out_file}"
 )
+grep -Fq "[rr004] platform profile:" "${out_file}"
+grep -Fq "[rr004] Go safety:" "${out_file}"
 grep -Fq "[rr004] report path:" "${out_file}"
 grep -Fq "[rr004] final recommendation:" "${out_file}"
 grep -Fq "[rr004] checks passed=" "${out_file}"

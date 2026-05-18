@@ -6,12 +6,14 @@ RR003="${ROOT}/scripts/release_readiness/rr003_var_spine_smoke.sh"
 READINESS="${ROOT}/scripts/release_readiness/readiness.sh"
 DOCS="${ROOT}/docs/release/README.md"
 GO_FIXTURE="${ROOT}/pkg/releasecheck/rr003_var_spine_test.go"
+COMMON="${ROOT}/scripts/release_readiness/lib/common.sh"
 
 required_files=(
   "${RR003}"
   "${READINESS}"
   "${DOCS}"
   "${GO_FIXTURE}"
+  "${COMMON}"
 )
 
 for file in "${required_files[@]}"; do
@@ -34,13 +36,30 @@ grep -Fq ".local/release-readiness/rr003" "${RR003}"
 grep -Fq "RR003_PASS" "${RR003}"
 grep -Fq "RR003_INCOMPLETE" "${RR003}"
 grep -Fq "BLOCKED" "${RR003}"
-grep -Fq "go test ./pkg/releasecheck -run TestRR003VARSpineFixture -count=1 -v" "${RR003}"
+grep -Fq "go test -p=1 ./pkg/releasecheck -run TestRR003VARSpineFixture -count=1 -v" "${RR003}"
+grep -Fq "rr_print_go_profile" "${RR003}"
+grep -Fq "rr_go_platform_profile" "${COMMON}"
+grep -Fq "rr_go_test_args" "${COMMON}"
+grep -Fq "rr_go_env_prefix" "${COMMON}"
+grep -Fq "using existing Go toolchain cache; no local module-cache copy" "${COMMON}"
+grep -Fq "GOMAXPROCS=1" "${COMMON}"
+grep -Fq "GOMEMLIMIT=1024MiB" "${COMMON}"
 grep -Fq "RR-003 VAR Spine Fixture Smoke" "${READINESS}"
 grep -Fq "bash scripts/release_readiness/rr003_var_spine_smoke.sh" "${READINESS}"
 grep -Fq "RR-003 VAR Spine Fixture Smoke" "${DOCS}"
 grep -Fq "bash scripts/release_readiness/rr003_var_spine_smoke.sh" "${DOCS}"
 grep -Fq "TestRR003VARSpineFixture" "${GO_FIXTURE}"
 grep -Fq "vector_assert_truth" "${GO_FIXTURE}"
+
+if grep -Fq 'GOPATH="${RUN_DIR}/gopath"' "${RR003}"; then
+  echo "[rr003-smoke] rr003_var_spine_smoke.sh still forces a project-local GOPATH" >&2
+  exit 1
+fi
+
+if grep -Fq 'GOMODCACHE=' "${RR003}"; then
+  echo "[rr003-smoke] rr003_var_spine_smoke.sh still manages GOMODCACHE directly" >&2
+  exit 1
+fi
 
 forbidden_patterns=(
   "rm -""rf"
@@ -77,6 +96,8 @@ trap 'rm -f "$out_file"' EXIT
   cd "${tmp_dir}"
   RR003_SKIP_GO_TEST=1 bash "${RR003}" >"${out_file}"
 )
+grep -Fq "[rr003] platform profile:" "${out_file}"
+grep -Fq "[rr003] Go safety:" "${out_file}"
 grep -Fq "[rr003] report path:" "${out_file}"
 grep -Fq "[rr003] final recommendation:" "${out_file}"
 grep -Fq "[rr003] checks passed=" "${out_file}"
